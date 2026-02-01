@@ -1,0 +1,55 @@
+# .NET
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+*.user
+*.suo
+*.cache
+*.log
+.vs/
+*.DotSettings.user
+
+# NuGet
+packages/
+*.nupkg
+.nuget/
+
+# Node.js
+node_modules/
+.npm/
+npm-debug.log*
+
+# Nuxt
+.nuxt/
+.output/
+dist/
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Environment
+.env
+.env.local
+.env.*.local
+appsettings.Development.json
+appsettings.*.json
+!appsettings.json
+
+# Logs
+logs/
+*.log
+
+# ClickHouse data
+clickhouse_data/

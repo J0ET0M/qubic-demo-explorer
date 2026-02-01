@@ -1,0 +1,6 @@
+@QubicExplorer.Api_HostAddress = http://localhost:5262
+
+GET {{QubicExplorer.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
