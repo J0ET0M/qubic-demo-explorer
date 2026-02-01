@@ -1,7 +1,7 @@
 # Qubic Demo Explorer
 
 > [!IMPORTANT]
-> **Demo Project** — This is a demonstration project showcasing the [Qubic.Net](https://www.nuget.org/packages?q=Qubic) framework and [Qubic Core Bob](https://github.com/qubic/bob) JSON-RPC interface. It is not meant for production use. Use it as a reference for building your own Qubic applications with the Qubic.Net NuGet packages.
+> **Demo Project** — This is a demonstration project showcasing the [Qubic.Net](https://github.com/qubic/Qubic.Net) framework and [Qubic Core Bob](https://github.com/qubic/core-bob) JSON-RPC interface. It is not meant for production use. Use it as a reference for building your own Qubic applications with the Qubic.Net NuGet packages.
 
 > [!TIP]
 > Check the current version here: https://explorer-demo.qubic.tools
@@ -182,7 +182,7 @@ Edit `src/QubicExplorer.Api/appsettings.json` or use environment variables:
 
 ## Qubic.Net Packages Used
 
-This project uses the following [Qubic.Net](https://www.nuget.org/packages?q=Qubic) NuGet packages:
+This project uses the following [Qubic.Net](https://github.com/qubic/Qubic.Net) NuGet packages:
 
 | Package | Description |
 |---------|-------------|
