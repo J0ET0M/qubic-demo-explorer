@@ -64,28 +64,28 @@ ASP.NET Core Web API that provides REST endpoints for querying blockchain data, 
 
 ### Search
 
-| Method | Endpoint                | Description                          |
-|--------|-------------------------|--------------------------------------|
-| GET    | `/api/search?q={query}` | Search by tick, hash, or address     |
+| Method | Endpoint                | Description                      | Example                     |
+|--------|-------------------------|----------------------------------|-----------------------------|
+| GET    | `/api/search?q={query}` | Search by tick, hash, or address | `/api/search?q=42087259`    |
 
 ### Stats
 
-| Method | Endpoint                                              | Description                                      |
-|--------|-------------------------------------------------------|--------------------------------------------------|
-| GET    | `/api/stats`                                          | Get network statistics                           |
-| GET    | `/api/stats/chart/tx-volume?period=day\|week\|month`  | Get TX volume chart                              |
-| GET    | `/api/stats/top-addresses?limit=20&epoch={epoch}`     | Get top addresses by volume                      |
-| GET    | `/api/stats/smart-contract-usage?epoch={epoch}`       | Get smart contract usage stats                   |
-| GET    | `/api/stats/active-addresses?period=epoch\|daily&limit=50` | Get active address trends                   |
-| GET    | `/api/stats/new-vs-returning?limit=50`                | Get new vs returning address trends              |
-| GET    | `/api/stats/exchange-flows?limit=50`                  | Get exchange flow trends                         |
-| GET    | `/api/stats/holder-distribution`                      | Get holder distribution with concentration       |
-| GET    | `/api/stats/holder-distribution/extended?historyLimit=30` | Get extended holder distribution with history|
-| GET    | `/api/stats/holder-distribution/history?limit=30`     | Get holder distribution history                  |
-| GET    | `/api/stats/avg-tx-size?period=epoch\|daily&limit=50` | Get average TX size trends                       |
-| GET    | `/api/stats/network-stats/history?limit=30`           | Get network stats history                        |
-| GET    | `/api/stats/network-stats/extended?historyLimit=30`   | Get extended network stats with history          |
-| POST   | `/api/stats/network-stats/snapshot/{epoch}`           | Save network stats snapshot (admin)              |
+| Method | Endpoint                                                         | Description                                          | Example                                                |
+|--------|------------------------------------------------------------------|------------------------------------------------------|--------------------------------------------------------|
+| GET    | `/api/stats`                                                     | Get network statistics                               |                                                        |
+| GET    | `/api/stats/chart/tx-volume?period={period}`                     | Get TX volume chart (period: day, week, month)       | `/api/stats/chart/tx-volume?period=day`                |
+| GET    | `/api/stats/top-addresses?limit={limit}&epoch={epoch}`           | Get top addresses by volume                          | `/api/stats/top-addresses?limit=20&epoch=150`          |
+| GET    | `/api/stats/smart-contract-usage?epoch={epoch}`                  | Get smart contract usage stats                       | `/api/stats/smart-contract-usage?epoch=150`            |
+| GET    | `/api/stats/active-addresses?period={period}&limit={limit}`      | Get active address trends (period: epoch, daily)     | `/api/stats/active-addresses?period=daily&limit=50`    |
+| GET    | `/api/stats/new-vs-returning?limit={limit}`                      | Get new vs returning address trends                  | `/api/stats/new-vs-returning?limit=50`                 |
+| GET    | `/api/stats/exchange-flows?limit={limit}`                        | Get exchange flow trends                             | `/api/stats/exchange-flows?limit=50`                   |
+| GET    | `/api/stats/holder-distribution`                                 | Get holder distribution with concentration           |                                                        |
+| GET    | `/api/stats/holder-distribution/extended?historyLimit={limit}`   | Get extended holder distribution with history        | `/api/stats/holder-distribution/extended?historyLimit=30` |
+| GET    | `/api/stats/holder-distribution/history?limit={limit}`           | Get holder distribution history                      | `/api/stats/holder-distribution/history?limit=30`      |
+| GET    | `/api/stats/avg-tx-size?period={period}&limit={limit}`           | Get average TX size trends (period: epoch, daily)    | `/api/stats/avg-tx-size?period=epoch&limit=50`         |
+| GET    | `/api/stats/network-stats/history?limit={limit}`                 | Get network stats history                            | `/api/stats/network-stats/history?limit=30`            |
+| GET    | `/api/stats/network-stats/extended?historyLimit={limit}`         | Get extended network stats with history              | `/api/stats/network-stats/extended?historyLimit=30`    |
+| POST   | `/api/stats/network-stats/snapshot/{epoch}`                      | Save network stats snapshot (admin)                  | `/api/stats/network-stats/snapshot/150`                |
 
 ### Labels
 
@@ -100,21 +100,21 @@ ASP.NET Core Web API that provides REST endpoints for querying blockchain data, 
 
 ### Miner Flow
 
-| Method | Endpoint                                                  | Description                                                       |
-|--------|-----------------------------------------------------------|-------------------------------------------------------------------|
-| GET    | `/api/miner-flow/stats?limit=30`                          | Get miner flow statistics history                                 |
-| GET    | `/api/miner-flow/computors/{epoch}`                       | Get computor list for an epoch                                    |
-| GET    | `/api/miner-flow/visualization/{emissionEpoch}?maxDepth=10`| Get Sankey flow visualization data for an emission epoch         |
-| GET    | `/api/miner-flow/hops/{epoch}`                            | Get raw flow hops (filterable by tickStart, tickEnd, maxDepth, limit) |
-| GET    | `/api/miner-flow/validate/{emissionEpoch}`                | Validate flow conservation for an emission epoch                  |
-| GET    | `/api/miner-flow/emissions/{epoch}`                       | Get emission summary for an epoch                                 |
-| GET    | `/api/miner-flow/emissions/{epoch}/details`               | Get detailed emissions for all computors in an epoch              |
-| GET    | `/api/miner-flow/emissions/{epoch}/address/{address}`     | Get emission for a specific computor address                      |
-| POST   | `/api/miner-flow/analyze/{currentEpoch}`                  | Trigger flow analysis for a tick window (admin)                   |
-| POST   | `/api/miner-flow/analyze-emission/{emissionEpoch}`        | Trigger full emission flow analysis (admin)                       |
-| POST   | `/api/miner-flow/import-computors/{epoch}`                | Import computors from RPC (admin)                                 |
-| POST   | `/api/miner-flow/emissions/{epoch}/capture`               | Capture emissions for an epoch (admin)                            |
-| POST   | `/api/miner-flow/recalculate-emissions`                   | Recalculate all miner flow stats emissions (admin)                |
+| Method | Endpoint                                                            | Description                                                       | Example                                              |
+|--------|---------------------------------------------------------------------|-------------------------------------------------------------------|------------------------------------------------------|
+| GET    | `/api/miner-flow/stats?limit={limit}`                               | Get miner flow statistics history                                 | `/api/miner-flow/stats?limit=30`                     |
+| GET    | `/api/miner-flow/computors/{epoch}`                                 | Get computor list for an epoch                                    | `/api/miner-flow/computors/150`                      |
+| GET    | `/api/miner-flow/visualization/{emissionEpoch}?maxDepth={maxDepth}` | Get Sankey flow visualization data for an emission epoch          | `/api/miner-flow/visualization/150?maxDepth=10`      |
+| GET    | `/api/miner-flow/hops/{epoch}`                                      | Get raw flow hops (filterable by tickStart, tickEnd, maxDepth, limit) | `/api/miner-flow/hops/150`                       |
+| GET    | `/api/miner-flow/validate/{emissionEpoch}`                          | Validate flow conservation for an emission epoch                  | `/api/miner-flow/validate/150`                       |
+| GET    | `/api/miner-flow/emissions/{epoch}`                                 | Get emission summary for an epoch                                 | `/api/miner-flow/emissions/150`                      |
+| GET    | `/api/miner-flow/emissions/{epoch}/details`                         | Get detailed emissions for all computors in an epoch              | `/api/miner-flow/emissions/150/details`              |
+| GET    | `/api/miner-flow/emissions/{epoch}/address/{address}`               | Get emission for a specific computor address                      | `/api/miner-flow/emissions/150/address/ABCD...`      |
+| POST   | `/api/miner-flow/analyze/{currentEpoch}`                            | Trigger flow analysis for a tick window (admin)                   | `/api/miner-flow/analyze/150`                        |
+| POST   | `/api/miner-flow/analyze-emission/{emissionEpoch}`                  | Trigger full emission flow analysis (admin)                       | `/api/miner-flow/analyze-emission/150`               |
+| POST   | `/api/miner-flow/import-computors/{epoch}`                          | Import computors from RPC (admin)                                 | `/api/miner-flow/import-computors/150`               |
+| POST   | `/api/miner-flow/emissions/{epoch}/capture`                         | Capture emissions for an epoch (admin)                            | `/api/miner-flow/emissions/150/capture`              |
+| POST   | `/api/miner-flow/recalculate-emissions`                             | Recalculate all miner flow stats emissions (admin)                |                                                      |
 
 ### Spectrum
 
