@@ -7,6 +7,7 @@ public class Log
     public uint LogId { get; set; }
     public byte LogType { get; set; }
     public string? TxHash { get; set; }
+    public ushort InputType { get; set; }
     public string? SourceAddress { get; set; }
     public string? DestAddress { get; set; }
     public ulong Amount { get; set; }

@@ -64,6 +64,7 @@ public static class ClickHouseSchema
             log_id UInt32,
             log_type UInt8,
             tx_hash String,
+            input_type UInt16,
             source_address String,
             dest_address String,
             amount UInt64,
@@ -74,6 +75,9 @@ public static class ClickHouseSchema
         ) ENGINE = ReplacingMergeTree(created_at)
         ORDER BY (tick_number, log_id)
         """,
+
+        // Migration: add input_type column to existing logs table
+        $"ALTER TABLE {DatabaseName}.logs ADD COLUMN IF NOT EXISTS input_type UInt16 DEFAULT 0 AFTER tx_hash",
 
         // Log indexes
         $"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_source source_address TYPE bloom_filter GRANULARITY 4",

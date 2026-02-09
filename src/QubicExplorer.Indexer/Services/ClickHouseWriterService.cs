@@ -141,8 +141,18 @@ public class ClickHouseWriterService : IDisposable
             // Add logs to batch
             if (data.Logs != null)
             {
+                // Build lookup for parent transaction InputType
+                var txInputTypes = data.Transactions?
+                    .ToDictionary(tx => tx.Hash, tx => tx.InputType)
+                    ?? new Dictionary<string, ushort>();
+
                 foreach (var log in data.Logs)
                 {
+                    // Look up InputType from parent transaction
+                    var inputType = log.TxHash != null && txInputTypes.TryGetValue(log.TxHash, out var it)
+                        ? it
+                        : (ushort)0;
+
                     _logBatch.Add(new Log
                     {
                         TickNumber = data.Tick,
@@ -150,6 +160,7 @@ public class ClickHouseWriterService : IDisposable
                         LogId = log.LogId,
                         LogType = log.LogType,
                         TxHash = log.TxHash,
+                        InputType = inputType,
                         // Use helper methods that handle dynamic body based on log type
                         SourceAddress = log.GetSourceAddress(),
                         DestAddress = log.GetDestAddress(),
@@ -313,6 +324,7 @@ public class ClickHouseWriterService : IDisposable
                 log.LogId,
                 log.LogType,
                 log.TxHash ?? string.Empty,
+                log.InputType,
                 log.SourceAddress ?? string.Empty,
                 log.DestAddress ?? string.Empty,
                 log.Amount,
