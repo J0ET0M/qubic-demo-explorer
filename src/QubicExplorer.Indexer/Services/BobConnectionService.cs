@@ -20,6 +20,7 @@ public class BobConnectionService : IDisposable
     private BobWebSocketClient? _bobClient;
     private bool _disposed;
     private long _lastProcessedTick;
+    private CancellationTokenSource? _disconnectCts;
 
     public ChannelReader<TickStreamData> TickReader => _tickChannel.Reader;
 
@@ -41,9 +42,11 @@ public class BobConnectionService : IDisposable
     {
         _lastProcessedTick = startTick;
 
+        var effectiveNodes = _bobOptions.GetEffectiveNodes();
+
         var options = new BobWebSocketOptions
         {
-            Nodes = _bobOptions.Nodes.ToArray(),
+            Nodes = effectiveNodes.ToArray(),
             ReconnectDelay = TimeSpan.FromMilliseconds(_bobOptions.ReconnectDelayMs),
             MaxReconnectDelay = TimeSpan.FromMilliseconds(_bobOptions.MaxReconnectDelayMs),
             OnConnectionEvent = e =>
@@ -55,6 +58,8 @@ public class BobConnectionService : IDisposable
                         break;
                     case BobConnectionEventType.Disconnected:
                         _logger.LogWarning("Disconnected from Bob node: {Url} - {Message}", e.NodeUrl, e.Message);
+                        // Cancel the subscription iterator so we can resubscribe
+                        _disconnectCts?.Cancel();
                         break;
                     case BobConnectionEventType.Reconnecting:
                         _logger.LogInformation("Reconnecting to Bob: {Message}", e.Message);
@@ -68,12 +73,17 @@ public class BobConnectionService : IDisposable
 
         _bobClient = new BobWebSocketClient(options);
 
-        _logger.LogInformation("Connecting to Bob nodes: {Nodes}", string.Join(", ", _bobOptions.Nodes));
+        _logger.LogInformation("Connecting to Bob nodes: {Nodes}", string.Join(", ", effectiveNodes));
         await _bobClient.ConnectAsync(cancellationToken);
         _logger.LogInformation("Connected to Bob node: {ActiveNode}", _bobClient.ActiveNodeUrl);
 
         while (!cancellationToken.IsCancellationRequested)
         {
+            // Create a new CTS for this subscription attempt - cancelled on disconnect
+            _disconnectCts?.Dispose();
+            _disconnectCts = new CancellationTokenSource();
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disconnectCts.Token);
+
             try
             {
                 // On reconnect, resume from last processed tick + 1 (not the original startTick)
@@ -92,7 +102,7 @@ public class BobConnectionService : IDisposable
 
                 _logger.LogInformation("Subscribed to tickStream: {SubscriptionId}", subscription.ServerSubscriptionId);
 
-                await foreach (var notification in subscription.WithCancellation(cancellationToken))
+                await foreach (var notification in subscription.WithCancellation(linkedCts.Token))
                 {
                     var tickData = MapToTickStreamData(notification);
                     await _tickChannel.Writer.WriteAsync(tickData, cancellationToken);
@@ -114,12 +124,30 @@ public class BobConnectionService : IDisposable
                 _logger.LogInformation("Connection cancelled");
                 break;
             }
+            catch (OperationCanceledException) when (_disconnectCts.IsCancellationRequested)
+            {
+                // Disconnected - wait for reconnection then resubscribe
+                _logger.LogInformation("Subscription interrupted by disconnect, waiting for reconnection...");
+                await WaitForReconnectionAsync(cancellationToken);
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "TickStream error, resubscribing in 5s...");
                 await Task.Delay(5000, cancellationToken);
             }
         }
+    }
+
+    /// <summary>
+    /// Waits briefly for the BobWebSocketClient to reconnect after a disconnect.
+    /// The client handles reconnection internally; we just need to give it time
+    /// before attempting to resubscribe.
+    /// </summary>
+    private async Task WaitForReconnectionAsync(CancellationToken cancellationToken)
+    {
+        // Give the client time to reconnect before resubscribing
+        // The actual reconnection is handled by BobWebSocketClient internally
+        await Task.Delay(_bobOptions.ReconnectDelayMs, cancellationToken);
     }
 
     /// <summary>
@@ -171,6 +199,8 @@ public class BobConnectionService : IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        _disconnectCts?.Cancel();
+        _disconnectCts?.Dispose();
         _bobClient?.Dispose();
         _tickChannel.Writer.Complete();
     }

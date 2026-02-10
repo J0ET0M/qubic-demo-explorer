@@ -36,6 +36,9 @@ services:
       - Indexer__StartFromLatest=false
       - Indexer__BatchSize=1000
       - Indexer__FlushIntervalMs=1000
+      # Optional: Seq logging (uncomment to enable)
+      # - Seq__ServerUrl=http://seq:5341
+      # - Seq__ApiKey=
     restart: unless-stopped
 
   api:
@@ -54,6 +57,9 @@ services:
       - ClickHouse__Port=8123
       - ClickHouse__Database=qubic
       - Bob__Nodes__0=https://bob02.qubic.li
+      # Optional: Seq logging (uncomment to enable)
+      # - Seq__ServerUrl=http://seq:5341
+      # - Seq__ApiKey=
     restart: unless-stopped
 
   frontend:
