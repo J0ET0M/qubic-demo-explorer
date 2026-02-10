@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS qubic.logs (
     log_id UInt32,
     log_type UInt8,
     tx_hash String,
+    input_type UInt16,
     source_address String,
     dest_address String,
     amount UInt64,

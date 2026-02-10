@@ -234,7 +234,14 @@ public class ClickHouseWriterService : IDisposable
                 using var bulkCopy = new ClickHouseBulkCopy(_connection)
                 {
                     DestinationTableName = "logs",
-                    BatchSize = _logBatch.Count
+                    BatchSize = _logBatch.Count,
+                    // Explicit column names to handle schema migrations where column order may differ
+                    ColumnNames = new[]
+                    {
+                        "tick_number", "epoch", "log_id", "log_type", "tx_hash", "input_type",
+                        "source_address", "dest_address", "amount", "asset_name", "raw_data",
+                        "timestamp", "created_at"
+                    }
                 };
 
                 await bulkCopy.InitAsync();
