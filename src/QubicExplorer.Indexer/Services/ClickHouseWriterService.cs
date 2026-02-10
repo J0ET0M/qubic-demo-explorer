@@ -200,71 +200,89 @@ public class ClickHouseWriterService : IDisposable
         var logCount = _logBatch.Count;
         var lastTick = _tickBatch.LastOrDefault()?.TickNumber ?? 0;
 
-        try
+        const int maxRetries = 3;
+
+        for (var attempt = 1; attempt <= maxRetries; attempt++)
         {
-            // Insert ticks
-            if (_tickBatch.Count > 0)
+            try
             {
-                using var bulkCopy = new ClickHouseBulkCopy(_connection)
+                // Insert ticks
+                if (_tickBatch.Count > 0)
                 {
-                    DestinationTableName = "ticks",
-                    BatchSize = _tickBatch.Count
-                };
-
-                await bulkCopy.InitAsync();
-                await bulkCopy.WriteToServerAsync(CreateTickDataReader(_tickBatch), cancellationToken);
-            }
-
-            // Insert transactions
-            if (_transactionBatch.Count > 0)
-            {
-                using var bulkCopy = new ClickHouseBulkCopy(_connection)
-                {
-                    DestinationTableName = "transactions",
-                    BatchSize = _transactionBatch.Count
-                };
-
-                await bulkCopy.InitAsync();
-                await bulkCopy.WriteToServerAsync(CreateTransactionDataReader(_transactionBatch), cancellationToken);
-            }
-
-            // Insert logs
-            if (_logBatch.Count > 0)
-            {
-                using var bulkCopy = new ClickHouseBulkCopy(_connection)
-                {
-                    DestinationTableName = "logs",
-                    BatchSize = _logBatch.Count,
-                    // Explicit column names to handle schema migrations where column order may differ
-                    ColumnNames = new[]
+                    using var bulkCopy = new ClickHouseBulkCopy(_connection)
                     {
-                        "tick_number", "epoch", "log_id", "log_type", "tx_hash", "input_type",
-                        "source_address", "dest_address", "amount", "asset_name", "raw_data",
-                        "timestamp", "created_at"
-                    }
-                };
+                        DestinationTableName = "ticks",
+                        BatchSize = _tickBatch.Count
+                    };
 
-                await bulkCopy.InitAsync();
-                await bulkCopy.WriteToServerAsync(CreateLogDataReader(_logBatch), cancellationToken);
+                    await bulkCopy.InitAsync();
+                    await bulkCopy.WriteToServerAsync(CreateTickDataReader(_tickBatch), cancellationToken);
+                }
+
+                // Insert transactions
+                if (_transactionBatch.Count > 0)
+                {
+                    using var bulkCopy = new ClickHouseBulkCopy(_connection)
+                    {
+                        DestinationTableName = "transactions",
+                        BatchSize = _transactionBatch.Count
+                    };
+
+                    await bulkCopy.InitAsync();
+                    await bulkCopy.WriteToServerAsync(CreateTransactionDataReader(_transactionBatch), cancellationToken);
+                }
+
+                // Insert logs
+                if (_logBatch.Count > 0)
+                {
+                    using var bulkCopy = new ClickHouseBulkCopy(_connection)
+                    {
+                        DestinationTableName = "logs",
+                        BatchSize = _logBatch.Count,
+                        // Explicit column names to handle schema migrations where column order may differ
+                        ColumnNames = new[]
+                        {
+                            "tick_number", "epoch", "log_id", "log_type", "tx_hash", "input_type",
+                            "source_address", "dest_address", "amount", "asset_name", "raw_data",
+                            "timestamp", "created_at"
+                        }
+                    };
+
+                    await bulkCopy.InitAsync();
+                    await bulkCopy.WriteToServerAsync(CreateLogDataReader(_logBatch), cancellationToken);
+                }
+
+                // Update last indexed tick
+                await UpdateLastTickAsync(lastTick, cancellationToken);
+
+                _logger.LogDebug(
+                    "Flushed batch: {TickCount} ticks, {TxCount} transactions, {LogCount} logs (last tick: {LastTick})",
+                    tickCount, txCount, logCount, lastTick);
+
+                // Clear batches
+                _tickBatch.Clear();
+                _transactionBatch.Clear();
+                _logBatch.Clear();
+                _lastFlush = DateTime.UtcNow;
+
+                return; // Success - exit the retry loop
             }
-
-            // Update last indexed tick
-            await UpdateLastTickAsync(lastTick, cancellationToken);
-
-            _logger.LogDebug(
-                "Flushed batch: {TickCount} ticks, {TxCount} transactions, {LogCount} logs (last tick: {LastTick})",
-                tickCount, txCount, logCount, lastTick);
-
-            // Clear batches
-            _tickBatch.Clear();
-            _transactionBatch.Clear();
-            _logBatch.Clear();
-            _lastFlush = DateTime.UtcNow;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to flush batches");
-            throw;
+            catch (Exception ex) when (attempt < maxRetries)
+            {
+                var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt)); // Exponential backoff: 2s, 4s, 8s
+                _logger.LogWarning(ex,
+                    "Failed to flush batches (attempt {Attempt}/{MaxRetries}), retrying in {Delay}s...",
+                    attempt, maxRetries, delay.TotalSeconds);
+                await Task.Delay(delay, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogCritical(ex,
+                    "CRITICAL: Failed to flush batches after {MaxRetries} attempts. " +
+                    "Batch contained {TickCount} ticks, {TxCount} transactions, {LogCount} logs (last tick: {LastTick})",
+                    maxRetries, tickCount, txCount, logCount, lastTick);
+                throw;
+            }
         }
     }
 
