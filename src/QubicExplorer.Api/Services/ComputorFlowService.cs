@@ -722,9 +722,10 @@ public class ComputorFlowService
     /// </summary>
     public async Task<MinerFlowSummaryDto> GetMinerFlowHistoryAsync(
         int limit = 30,
+        DateTime? from = null, DateTime? to = null,
         CancellationToken ct = default)
     {
-        var history = await _queryService.GetMinerFlowStatsHistoryAsync(limit, ct);
+        var history = await _queryService.GetMinerFlowStatsHistoryAsync(limit, from, to, ct);
 
         var latest = history.FirstOrDefault();
 

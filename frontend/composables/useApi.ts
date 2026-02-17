@@ -231,22 +231,42 @@ export const useApi = () => {
     fetchApi<AvgTxSizeTrendDto[]>(`/api/stats/avg-tx-size?period=${period}&limit=${limit}`)
 
   // Extended holder distribution with history
-  const getHolderDistributionExtended = (historyLimit = 30) =>
-    fetchApi<HolderDistributionExtendedDto>(`/api/stats/holder-distribution/extended?historyLimit=${historyLimit}`)
+  const getHolderDistributionExtended = (historyLimit = 500, from?: string, to?: string) => {
+    const params = new URLSearchParams({ historyLimit: String(historyLimit) })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return fetchApi<HolderDistributionExtendedDto>(`/api/stats/holder-distribution/extended?${params}`)
+  }
 
-  const getHolderDistributionHistory = (limit = 30) =>
-    fetchApi<HolderDistributionHistoryDto[]>(`/api/stats/holder-distribution/history?limit=${limit}`)
+  const getHolderDistributionHistory = (limit = 500, from?: string, to?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return fetchApi<HolderDistributionHistoryDto[]>(`/api/stats/holder-distribution/history?${params}`)
+  }
 
   // Network stats history
-  const getNetworkStatsHistory = (limit = 30) =>
-    fetchApi<NetworkStatsHistoryDto[]>(`/api/stats/network-stats/history?limit=${limit}`)
+  const getNetworkStatsHistory = (limit = 500, from?: string, to?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return fetchApi<NetworkStatsHistoryDto[]>(`/api/stats/network-stats/history?${params}`)
+  }
 
-  const getNetworkStatsExtended = (historyLimit = 30) =>
-    fetchApi<NetworkStatsExtendedDto>(`/api/stats/network-stats/extended?historyLimit=${historyLimit}`)
+  const getNetworkStatsExtended = (historyLimit = 500, from?: string, to?: string) => {
+    const params = new URLSearchParams({ historyLimit: String(historyLimit) })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return fetchApi<NetworkStatsExtendedDto>(`/api/stats/network-stats/extended?${params}`)
+  }
 
   // Miner/Computor Flow
-  const getMinerFlowStats = (limit = 30) =>
-    fetchApi<MinerFlowSummaryDto>(`/api/miner-flow/stats?limit=${limit}`)
+  const getMinerFlowStats = (limit = 500, from?: string, to?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return fetchApi<MinerFlowSummaryDto>(`/api/miner-flow/stats?${params}`)
+  }
 
   const getComputors = (epoch: number) =>
     fetchApi<ComputorListDto>(`/api/miner-flow/computors/${epoch}`)

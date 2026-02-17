@@ -9,11 +9,25 @@ const { data: exchangeFlows, pending: exchangeFlowsLoading } = await useAsyncDat
   () => api.getExchangeFlows(30)
 )
 
-// Network stats history (4-hour snapshots) for exchange flow history
-const { data: networkStatsHistory, pending: networkStatsHistoryLoading } = await useAsyncData(
-  'exchange-network-stats-history',
-  () => api.getNetworkStatsHistory(30)
-)
+// Network stats history (4-hour snapshots) for exchange flow history - reactive to time range
+const { timeRange } = useTimeRange()
+const networkStatsHistory = ref<Awaited<ReturnType<typeof api.getNetworkStatsHistory>>>([])
+const networkStatsHistoryLoading = ref(true)
+
+const fetchNetworkStatsHistory = async () => {
+  networkStatsHistoryLoading.value = true
+  try {
+    const { from, to } = timeRange.value
+    networkStatsHistory.value = await api.getNetworkStatsHistory(500, from ?? undefined, to ?? undefined)
+  } catch (e) {
+    console.error('Failed to fetch network stats history', e)
+  } finally {
+    networkStatsHistoryLoading.value = false
+  }
+}
+
+watch(() => timeRange.value, fetchNetworkStatsHistory, { deep: true })
+await fetchNetworkStatsHistory()
 
 // Exchange flow chart data (per epoch)
 const exchangeFlowChartLabels = computed(() => {

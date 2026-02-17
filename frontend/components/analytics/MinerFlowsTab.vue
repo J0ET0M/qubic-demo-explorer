@@ -4,11 +4,25 @@ import type { MinerFlowStatsDto, EmissionDetailsDto } from '~/composables/useApi
 
 const api = useApi()
 
-// Miner flow stats
-const { data: minerFlowSummary, pending: minerFlowLoading } = await useAsyncData(
-  'miner-flow-stats',
-  () => api.getMinerFlowStats(30)
-)
+// Miner flow stats - reactive to time range
+const { timeRange } = useTimeRange()
+const minerFlowSummary = ref<Awaited<ReturnType<typeof api.getMinerFlowStats>> | null>(null)
+const minerFlowLoading = ref(true)
+
+const fetchMinerFlowStats = async () => {
+  minerFlowLoading.value = true
+  try {
+    const { from, to } = timeRange.value
+    minerFlowSummary.value = await api.getMinerFlowStats(500, from ?? undefined, to ?? undefined)
+  } catch (e) {
+    console.error('Failed to fetch miner flow stats', e)
+  } finally {
+    minerFlowLoading.value = false
+  }
+}
+
+watch(() => timeRange.value, fetchMinerFlowStats, { deep: true })
+await fetchMinerFlowStats()
 
 // Emissions - fetch for the emission epoch (previous epoch from latest flow stats)
 const selectedEmissionEpoch = ref<number | null>(null)

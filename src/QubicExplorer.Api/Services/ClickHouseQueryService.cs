@@ -1815,13 +1815,13 @@ public class ClickHouseQueryService : IDisposable
     /// Get extended holder distribution with concentration metrics and history
     /// </summary>
     public async Task<HolderDistributionExtendedDto> GetHolderDistributionExtendedAsync(
-        int historyLimit = 30, CancellationToken ct = default)
+        int historyLimit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         // Get current distribution with concentration
         var current = await GetHolderDistributionWithConcentrationAsync(ct);
 
         // Get historical data
-        var history = await GetHolderDistributionHistoryAsync(historyLimit, ct);
+        var history = await GetHolderDistributionHistoryAsync(historyLimit, from, to, ct);
 
         return new HolderDistributionExtendedDto(current, history);
     }
@@ -1963,9 +1963,16 @@ public class ClickHouseQueryService : IDisposable
     /// Get historical holder distribution data
     /// </summary>
     public async Task<List<HolderDistributionHistoryDto>> GetHolderDistributionHistoryAsync(
-        int limit = 30, CancellationToken ct = default)
+        int limit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
+        var conditions = new List<string>();
+        if (from.HasValue)
+            conditions.Add($"snapshot_at >= '{from.Value:yyyy-MM-dd HH:mm:ss}'");
+        if (to.HasValue)
+            conditions.Add($"snapshot_at <= '{to.Value:yyyy-MM-dd HH:mm:ss}'");
+        var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+
         cmd.CommandText = $@"
             SELECT
                 epoch,
@@ -1978,6 +1985,7 @@ public class ClickHouseQueryService : IDisposable
                 top10_balance, top50_balance, top100_balance,
                 data_source
             FROM holder_distribution_history
+            {whereClause}
             ORDER BY snapshot_at DESC
             LIMIT {limit}";
 
@@ -2116,9 +2124,16 @@ public class ClickHouseQueryService : IDisposable
     /// Get historical network stats
     /// </summary>
     public async Task<List<NetworkStatsHistoryDto>> GetNetworkStatsHistoryAsync(
-        int limit = 30, CancellationToken ct = default)
+        int limit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
+        var conditions = new List<string>();
+        if (from.HasValue)
+            conditions.Add($"snapshot_at >= '{from.Value:yyyy-MM-dd HH:mm:ss}'");
+        if (to.HasValue)
+            conditions.Add($"snapshot_at <= '{to.Value:yyyy-MM-dd HH:mm:ss}'");
+        var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+
         cmd.CommandText = $@"
             SELECT
                 epoch, snapshot_at, tick_start, tick_end,
@@ -2131,6 +2146,7 @@ public class ClickHouseQueryService : IDisposable
                 avg_tx_size, median_tx_size,
                 new_users_100m_plus, new_users_1b_plus, new_users_10b_plus
             FROM network_stats_history
+            {whereClause}
             ORDER BY snapshot_at DESC
             LIMIT {limit}";
 
@@ -2175,9 +2191,9 @@ public class ClickHouseQueryService : IDisposable
     /// Get extended network stats with current and historical data
     /// </summary>
     public async Task<NetworkStatsExtendedDto> GetNetworkStatsExtendedAsync(
-        int historyLimit = 30, CancellationToken ct = default)
+        int historyLimit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
-        var history = await GetNetworkStatsHistoryAsync(historyLimit, ct);
+        var history = await GetNetworkStatsHistoryAsync(historyLimit, from, to, ct);
         var current = history.Count > 0 ? history[^1] : null;
         return new NetworkStatsExtendedDto(current, history);
     }
@@ -3413,9 +3429,16 @@ public class ClickHouseQueryService : IDisposable
     /// <summary>
     /// Gets miner flow stats history.
     /// </summary>
-    public async Task<List<MinerFlowStatsDto>> GetMinerFlowStatsHistoryAsync(int limit, CancellationToken ct = default)
+    public async Task<List<MinerFlowStatsDto>> GetMinerFlowStatsHistoryAsync(int limit, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
+        var conditions = new List<string>();
+        if (from.HasValue)
+            conditions.Add($"snapshot_at >= '{from.Value:yyyy-MM-dd HH:mm:ss}'");
+        if (to.HasValue)
+            conditions.Add($"snapshot_at <= '{to.Value:yyyy-MM-dd HH:mm:ss}'");
+        var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+
         cmd.CommandText = $@"
             SELECT
                 epoch, snapshot_at, tick_start, tick_end, emission_epoch,
@@ -3424,6 +3447,7 @@ public class ClickHouseQueryService : IDisposable
                 flow_to_exchange_total, flow_to_exchange_count, flow_to_other, miner_net_position,
                 hop_1_volume, hop_2_volume, hop_3_volume, hop_4_plus_volume
             FROM miner_flow_stats
+            {whereClause}
             ORDER BY snapshot_at DESC
             LIMIT {limit}";
 

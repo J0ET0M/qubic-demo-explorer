@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { BarChart3 } from 'lucide-vue-next'
+import type { TimeRangePreset } from '~/composables/useTimeRange'
 
 // Current active tab - persisted in URL
 const route = useRoute()
@@ -7,9 +8,25 @@ const router = useRouter()
 
 const activeTab = ref((route.query.tab as string) || 'overview')
 
-// Update URL when tab changes
+// Time range - shared across snapshot tabs
+const { timeRange, setPreset } = useTimeRange()
+
+// Initialize time range from URL if present
+const initialRange = route.query.range as string
+if (initialRange && ['24h', '7d', '30d', '90d', 'all'].includes(initialRange)) {
+  setPreset(initialRange as TimeRangePreset)
+}
+
+// Tabs that use 4-hour snapshot data
+const snapshotTabs = ['network', 'holders', 'exchanges', 'miner-flows']
+
+// Update URL when tab or range changes
 watch(activeTab, (newTab) => {
   router.replace({ query: { ...route.query, tab: newTab } })
+})
+
+watch(() => timeRange.value.preset, (preset) => {
+  router.replace({ query: { ...route.query, range: preset } })
 })
 
 // Tab components loaded lazily
@@ -31,6 +48,9 @@ const TopAddressesTab = defineAsyncComponent(() => import('~/components/analytic
 
     <!-- Tab Navigation -->
     <AnalyticsTabs v-model="activeTab" />
+
+    <!-- Time Range Selector - only for tabs with 4-hour snapshot data -->
+    <AnalyticsTimeRangeSelector v-if="snapshotTabs.includes(activeTab)" />
 
     <!-- Tab Content with Suspense for async loading -->
     <Suspense>

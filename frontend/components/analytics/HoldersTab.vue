@@ -9,11 +9,25 @@ const { data: holderDistribution, pending: holderDistributionLoading } = await u
   () => api.getHolderDistribution()
 )
 
-// Holder distribution history (periodic snapshots)
-const { data: holderDistributionHistory, pending: holderDistributionHistoryLoading } = await useAsyncData(
-  'holders-distribution-history',
-  () => api.getHolderDistributionHistory(30)
-)
+// Holder distribution history (periodic snapshots) - reactive to time range
+const { timeRange } = useTimeRange()
+const holderDistributionHistory = ref<Awaited<ReturnType<typeof api.getHolderDistributionHistory>>>([])
+const holderDistributionHistoryLoading = ref(true)
+
+const fetchHolderHistory = async () => {
+  holderDistributionHistoryLoading.value = true
+  try {
+    const { from, to } = timeRange.value
+    holderDistributionHistory.value = await api.getHolderDistributionHistory(500, from ?? undefined, to ?? undefined)
+  } catch (e) {
+    console.error('Failed to fetch holder distribution history', e)
+  } finally {
+    holderDistributionHistoryLoading.value = false
+  }
+}
+
+watch(() => timeRange.value, fetchHolderHistory, { deep: true })
+await fetchHolderHistory()
 
 // Holder distribution chart data
 const holderDistributionChartLabels = computed(() => {

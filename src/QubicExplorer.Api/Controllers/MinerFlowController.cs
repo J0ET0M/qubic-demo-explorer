@@ -49,12 +49,14 @@ public class MinerFlowController : ControllerBase
     [HttpGet("stats")]
     public async Task<IActionResult> GetMinerFlowStats(
         [FromQuery] int limit = 30,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
         CancellationToken ct = default)
     {
         if (limit < 1) limit = 1;
-        if (limit > 100) limit = 100;
+        if (limit > 500) limit = 500;
 
-        var result = await _flowService.GetMinerFlowHistoryAsync(limit, ct);
+        var result = await _flowService.GetMinerFlowHistoryAsync(limit, from, to, ct);
         return Ok(result);
     }
 
@@ -101,7 +103,7 @@ public class MinerFlowController : ControllerBase
         // If no tick range provided, get the latest window for this epoch
         if (tickStart == 0 || tickEnd == 0)
         {
-            var latestStats = await _queryService.GetMinerFlowStatsHistoryAsync(1, ct);
+            var latestStats = await _queryService.GetMinerFlowStatsHistoryAsync(1, ct: ct);
             var epochStats = latestStats.FirstOrDefault(s => s.Epoch == epoch);
             if (epochStats != null)
             {

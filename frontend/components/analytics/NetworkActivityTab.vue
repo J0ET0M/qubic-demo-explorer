@@ -21,11 +21,25 @@ const { data: avgTxSize, pending: avgTxSizeLoading } = await useAsyncData(
   () => api.getAvgTxSizeTrends('epoch', 30)
 )
 
-// Network stats history (periodic snapshots)
-const { data: networkStatsHistory, pending: networkStatsHistoryLoading } = await useAsyncData(
-  'network-stats-history',
-  () => api.getNetworkStatsHistory(30)
-)
+// Network stats history (periodic snapshots) - reactive to time range
+const { timeRange } = useTimeRange()
+const networkStatsHistory = ref<Awaited<ReturnType<typeof api.getNetworkStatsHistory>>>([])
+const networkStatsHistoryLoading = ref(true)
+
+const fetchNetworkStatsHistory = async () => {
+  networkStatsHistoryLoading.value = true
+  try {
+    const { from, to } = timeRange.value
+    networkStatsHistory.value = await api.getNetworkStatsHistory(500, from ?? undefined, to ?? undefined)
+  } catch (e) {
+    console.error('Failed to fetch network stats history', e)
+  } finally {
+    networkStatsHistoryLoading.value = false
+  }
+}
+
+watch(() => timeRange.value, fetchNetworkStatsHistory, { deep: true })
+await fetchNetworkStatsHistory()
 
 // Active addresses chart data
 const activeAddressChartLabels = computed(() => {

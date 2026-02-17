@@ -109,24 +109,28 @@ public class StatsController : ControllerBase
     [HttpGet("holder-distribution/extended")]
     public async Task<IActionResult> GetHolderDistributionExtended(
         [FromQuery] int historyLimit = 30,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
         CancellationToken ct = default)
     {
         if (historyLimit < 1) historyLimit = 1;
-        if (historyLimit > 100) historyLimit = 100;
+        if (historyLimit > 500) historyLimit = 500;
 
-        var result = await _queryService.GetHolderDistributionExtendedAsync(historyLimit, ct);
+        var result = await _queryService.GetHolderDistributionExtendedAsync(historyLimit, from, to, ct);
         return Ok(result);
     }
 
     [HttpGet("holder-distribution/history")]
     public async Task<IActionResult> GetHolderDistributionHistory(
         [FromQuery] int limit = 30,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
         CancellationToken ct = default)
     {
         if (limit < 1) limit = 1;
-        if (limit > 100) limit = 100;
+        if (limit > 500) limit = 500;
 
-        var result = await _queryService.GetHolderDistributionHistoryAsync(limit, ct);
+        var result = await _queryService.GetHolderDistributionHistoryAsync(limit, from, to, ct);
         return Ok(result);
     }
 
@@ -155,24 +159,28 @@ public class StatsController : ControllerBase
     [HttpGet("network-stats/history")]
     public async Task<IActionResult> GetNetworkStatsHistory(
         [FromQuery] int limit = 30,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
         CancellationToken ct = default)
     {
         if (limit < 1) limit = 1;
-        if (limit > 100) limit = 100;
+        if (limit > 500) limit = 500;
 
-        var result = await _queryService.GetNetworkStatsHistoryAsync(limit, ct);
+        var result = await _queryService.GetNetworkStatsHistoryAsync(limit, from, to, ct);
         return Ok(result);
     }
 
     [HttpGet("network-stats/extended")]
     public async Task<IActionResult> GetNetworkStatsExtended(
         [FromQuery] int historyLimit = 30,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
         CancellationToken ct = default)
     {
         if (historyLimit < 1) historyLimit = 1;
-        if (historyLimit > 100) historyLimit = 100;
+        if (historyLimit > 500) historyLimit = 500;
 
-        var result = await _queryService.GetNetworkStatsExtendedAsync(historyLimit, ct);
+        var result = await _queryService.GetNetworkStatsExtendedAsync(historyLimit, from, to, ct);
         return Ok(result);
     }
 
