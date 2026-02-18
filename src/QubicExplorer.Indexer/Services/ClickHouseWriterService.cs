@@ -112,7 +112,7 @@ public class ClickHouseWriterService : IDisposable
         await _batchLock.WaitAsync(cancellationToken);
         try
         {
-            var timestamp = DateTime.TryParse(data.Timestamp, out var ts) ? ts : DateTime.UtcNow;
+            var timestamp = ParseTimestamp(data.Timestamp);
 
             // Derive epoch from tick data or from first log if tick-level epoch is 0
             var epoch = data.Epoch;
@@ -187,7 +187,7 @@ public class ClickHouseWriterService : IDisposable
                         Amount = log.GetAmount(),
                         AssetName = log.GetAssetName(),
                         RawData = log.GetRawBodyJson(),
-                        Timestamp = DateTime.TryParse(log.Timestamp, out var logTs) ? logTs : timestamp,
+                        Timestamp = !string.IsNullOrEmpty(log.Timestamp) ? ParseTimestamp(log.Timestamp) : timestamp,
                         CreatedAt = DateTime.UtcNow
                     });
                 }
@@ -307,6 +307,39 @@ public class ClickHouseWriterService : IDisposable
                 throw;
             }
         }
+    }
+
+    private static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// Parses a timestamp string from Bob, handling:
+    /// - ISO 8601 strings ("2026-02-18T10:30:45.123Z")
+    /// - Unix epoch in seconds ("1739856000")
+    /// - Unix epoch in milliseconds ("1739856000000")
+    /// Falls back to DateTime.UtcNow if unparseable.
+    /// </summary>
+    private static DateTime ParseTimestamp(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw))
+            return DateTime.UtcNow;
+
+        // Try ISO 8601 first (most common)
+        if (DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                out var iso))
+            return iso;
+
+        // Try numeric (Unix epoch in seconds or milliseconds)
+        if (long.TryParse(raw, out var numeric))
+        {
+            // Heuristic: values > 1e12 are milliseconds, otherwise seconds
+            if (numeric > 1_000_000_000_000)
+                return UnixEpoch.AddMilliseconds(numeric);
+            else
+                return UnixEpoch.AddSeconds(numeric);
+        }
+
+        return DateTime.UtcNow;
     }
 
     private async Task UpdateLastTickAsync(ulong tick, CancellationToken cancellationToken)
