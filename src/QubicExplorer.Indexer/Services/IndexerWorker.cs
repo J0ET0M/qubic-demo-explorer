@@ -74,6 +74,11 @@ public class IndexerWorker : BackgroundService
                 _logger.LogInformation("Resuming from last indexed tick: {LastTick}", lastTick.Value);
                 return lastTick.Value + 1;
             }
+
+            _logger.LogWarning(
+                "ResumeFromLastTick is enabled but no last tick found in database. " +
+                "Falling back to StartTick={StartTick}. This will re-index from the beginning!",
+                _options.StartTick);
         }
 
         _logger.LogInformation("Starting from configured tick: {StartTick}", _options.StartTick);

@@ -75,6 +75,7 @@ public class ClickHouseWriterService : IDisposable
     {
         if (_connection == null) throw new InvalidOperationException("Not initialized");
 
+        // Primary: check indexer_state for last_tick
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = "SELECT value FROM indexer_state FINAL WHERE key = 'last_tick'";
 
@@ -82,6 +83,25 @@ public class ClickHouseWriterService : IDisposable
         if (result != null && result != DBNull.Value)
         {
             return long.Parse(result.ToString()!);
+        }
+
+        // Fallback: if indexer_state has no entry, check actual ticks table
+        // This prevents re-indexing from tick 0 after a crash before first flush
+        await using var fallbackCmd = _connection.CreateCommand();
+        fallbackCmd.CommandText = "SELECT max(tick_number) FROM ticks";
+
+        var fallbackResult = await fallbackCmd.ExecuteScalarAsync(cancellationToken);
+        if (fallbackResult != null && fallbackResult != DBNull.Value)
+        {
+            var maxTick = Convert.ToInt64(fallbackResult);
+            if (maxTick > 0)
+            {
+                _logger.LogWarning(
+                    "indexer_state had no last_tick entry, but ticks table has data up to tick {MaxTick}. " +
+                    "Using ticks table as fallback to avoid re-indexing from scratch.",
+                    maxTick);
+                return maxTick;
+            }
         }
 
         return null;
@@ -252,8 +272,11 @@ public class ClickHouseWriterService : IDisposable
                     await bulkCopy.WriteToServerAsync(CreateLogDataReader(_logBatch), cancellationToken);
                 }
 
-                // Update last indexed tick
-                await UpdateLastTickAsync(lastTick, cancellationToken);
+                // Update last indexed tick (only if we actually have tick data)
+                if (lastTick > 0)
+                {
+                    await UpdateLastTickAsync(lastTick, cancellationToken);
+                }
 
                 _logger.LogDebug(
                     "Flushed batch: {TickCount} ticks, {TxCount} transactions, {LogCount} logs (last tick: {LastTick})",
