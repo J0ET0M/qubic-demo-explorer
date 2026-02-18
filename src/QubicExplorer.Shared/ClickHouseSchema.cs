@@ -19,35 +19,37 @@ public static class ClickHouseSchema
         // Ticks table
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.ticks (
-            tick_number UInt64,
-            epoch UInt32,
-            timestamp DateTime64(3),
-            tx_count UInt32,
-            tx_count_filtered UInt32,
-            log_count UInt32,
-            log_count_filtered UInt32,
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            timestamp DateTime64(3) CODEC(Delta, LZ4),
+            tx_count UInt32 CODEC(LZ4),
+            tx_count_filtered UInt32 CODEC(LZ4),
+            log_count UInt32 CODEC(LZ4),
+            log_count_filtered UInt32 CODEC(LZ4),
             created_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
         ORDER BY tick_number
         """,
 
         // Transactions table
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.transactions (
-            hash String,
-            tick_number UInt64,
-            epoch UInt32,
-            from_address String,
-            to_address String,
-            amount UInt64,
-            input_type UInt16,
-            input_data String,
-            executed UInt8,
-            log_id_from Int32,
-            log_id_length UInt16,
-            timestamp DateTime64(3),
+            hash String CODEC(LZ4HC),
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            from_address String CODEC(LZ4HC),
+            to_address String CODEC(LZ4HC),
+            amount UInt64 CODEC(Gorilla, LZ4),
+            input_type UInt16 CODEC(LZ4),
+            input_data String CODEC(LZ4HC),
+            executed UInt8 CODEC(LZ4),
+            log_id_from Int32 CODEC(LZ4),
+            log_id_length UInt16 CODEC(LZ4),
+            timestamp DateTime64(3) CODEC(Delta, LZ4),
             created_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
         ORDER BY (tick_number, hash)
         """,
 
@@ -59,20 +61,21 @@ public static class ClickHouseSchema
         // Logs table
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.logs (
-            tick_number UInt64,
-            epoch UInt32,
-            log_id UInt32,
-            log_type UInt8,
-            tx_hash String,
-            input_type UInt16,
-            source_address String,
-            dest_address String,
-            amount UInt64,
-            asset_name String,
-            raw_data String,
-            timestamp DateTime64(3),
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            log_id UInt32 CODEC(DoubleDelta, LZ4),
+            log_type UInt8 CODEC(LZ4),
+            tx_hash String CODEC(LZ4HC),
+            input_type UInt16 CODEC(LZ4),
+            source_address String CODEC(LZ4HC),
+            dest_address String CODEC(LZ4HC),
+            amount UInt64 CODEC(Gorilla, LZ4),
+            asset_name String CODEC(LZ4HC),
+            raw_data String CODEC(LZ4HC),
+            timestamp DateTime64(3) CODEC(Delta, LZ4),
             created_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
         ORDER BY (tick_number, log_id)
         """,
 
@@ -333,18 +336,19 @@ public static class ClickHouseSchema
         // Balance snapshots
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.balance_snapshots (
-            address String,
-            epoch UInt32,
-            tick_number UInt64,
-            balance Int64,
-            incoming_amount UInt64,
-            outgoing_amount UInt64,
-            incoming_transfer_count UInt32,
-            outgoing_transfer_count UInt32,
-            latest_incoming_tick UInt32,
-            latest_outgoing_tick UInt32,
+            address String CODEC(LZ4HC),
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            balance Int64 CODEC(Gorilla, LZ4),
+            incoming_amount UInt64 CODEC(Gorilla, LZ4),
+            outgoing_amount UInt64 CODEC(Gorilla, LZ4),
+            incoming_transfer_count UInt32 CODEC(LZ4),
+            outgoing_transfer_count UInt32 CODEC(LZ4),
+            latest_incoming_tick UInt32 CODEC(LZ4),
+            latest_outgoing_tick UInt32 CODEC(LZ4),
             imported_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(imported_at)
+        PARTITION BY epoch
         ORDER BY (epoch, address)
         """,
 
@@ -462,21 +466,22 @@ public static class ClickHouseSchema
         // Flow hops
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.flow_hops (
-            epoch UInt32,
-            emission_epoch UInt32,
-            tick_number UInt64,
-            timestamp DateTime64(3),
-            tx_hash String,
-            source_address String,
-            dest_address String,
-            amount UInt64,
-            origin_address String,
-            origin_type String,
-            hop_level UInt8,
-            dest_type String DEFAULT '',
-            dest_label String DEFAULT '',
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            emission_epoch UInt32 CODEC(DoubleDelta, LZ4),
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            timestamp DateTime64(3) CODEC(Delta, LZ4),
+            tx_hash String CODEC(LZ4HC),
+            source_address String CODEC(LZ4HC),
+            dest_address String CODEC(LZ4HC),
+            amount UInt64 CODEC(Gorilla, LZ4),
+            origin_address String CODEC(LZ4HC),
+            origin_type String CODEC(LZ4),
+            hop_level UInt8 CODEC(LZ4),
+            dest_type String DEFAULT '' CODEC(LZ4),
+            dest_label String DEFAULT '' CODEC(LZ4),
             created_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY emission_epoch
         ORDER BY (emission_epoch, origin_address, hop_level, tick_number, tx_hash, dest_address)
         """,
 
@@ -559,13 +564,13 @@ public static class ClickHouseSchema
         ORDER BY epoch
         """,
 
-        // Flow tracking state
+        // Flow tracking state (TTL: completed entries expire after 90 days)
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.flow_tracking_state (
             emission_epoch UInt32,
-            address String,
-            origin_address String,
-            address_type String,
+            address String CODEC(LZ4HC),
+            origin_address String CODEC(LZ4HC),
+            address_type String CODEC(LZ4),
             received_amount Decimal(38, 0),
             sent_amount Decimal(38, 0),
             pending_amount Decimal(38, 0),
@@ -577,8 +582,228 @@ public static class ClickHouseSchema
             updated_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(updated_at)
         ORDER BY (emission_epoch, address, origin_address)
+        TTL updated_at + INTERVAL 90 DAY WHERE is_complete = 1
         """,
 
         $"ALTER TABLE {DatabaseName}.flow_tracking_state ADD INDEX IF NOT EXISTS idx_fts_pending (emission_epoch, is_complete) TYPE set(2) GRANULARITY 4",
     ];
+
+    /// <summary>
+    /// Tables that need migration to add PARTITION BY epoch and codecs.
+    /// Each entry: (table_name, create_new_table_ddl).
+    /// The migration process for each table:
+    ///   1. CREATE TABLE {table}_new ... (with partitioning + codecs)
+    ///   2. INSERT INTO {table}_new SELECT * FROM {table}
+    ///   3. RENAME TABLE {table} TO {table}_old, {table}_new TO {table}
+    ///   4. DROP TABLE {table}_old (after verification)
+    /// </summary>
+    public static IReadOnlyList<(string TableName, string CreateNewTableDdl)> GetPartitionMigrations() =>
+    [
+        ("ticks", $"""
+            CREATE TABLE IF NOT EXISTS {DatabaseName}.ticks_new (
+                tick_number UInt64 CODEC(DoubleDelta, LZ4),
+                epoch UInt32 CODEC(DoubleDelta, LZ4),
+                timestamp DateTime64(3) CODEC(Delta, LZ4),
+                tx_count UInt32 CODEC(LZ4),
+                tx_count_filtered UInt32 CODEC(LZ4),
+                log_count UInt32 CODEC(LZ4),
+                log_count_filtered UInt32 CODEC(LZ4),
+                created_at DateTime64(3) DEFAULT now64(3)
+            ) ENGINE = ReplacingMergeTree(created_at)
+            PARTITION BY epoch
+            ORDER BY tick_number
+            """),
+
+        ("transactions", $"""
+            CREATE TABLE IF NOT EXISTS {DatabaseName}.transactions_new (
+                hash String CODEC(LZ4HC),
+                tick_number UInt64 CODEC(DoubleDelta, LZ4),
+                epoch UInt32 CODEC(DoubleDelta, LZ4),
+                from_address String CODEC(LZ4HC),
+                to_address String CODEC(LZ4HC),
+                amount UInt64 CODEC(Gorilla, LZ4),
+                input_type UInt16 CODEC(LZ4),
+                input_data String CODEC(LZ4HC),
+                executed UInt8 CODEC(LZ4),
+                log_id_from Int32 CODEC(LZ4),
+                log_id_length UInt16 CODEC(LZ4),
+                timestamp DateTime64(3) CODEC(Delta, LZ4),
+                created_at DateTime64(3) DEFAULT now64(3)
+            ) ENGINE = ReplacingMergeTree(created_at)
+            PARTITION BY epoch
+            ORDER BY (tick_number, hash)
+            """),
+
+        ("logs", $"""
+            CREATE TABLE IF NOT EXISTS {DatabaseName}.logs_new (
+                tick_number UInt64 CODEC(DoubleDelta, LZ4),
+                epoch UInt32 CODEC(DoubleDelta, LZ4),
+                log_id UInt32 CODEC(DoubleDelta, LZ4),
+                log_type UInt8 CODEC(LZ4),
+                tx_hash String CODEC(LZ4HC),
+                input_type UInt16 CODEC(LZ4),
+                source_address String CODEC(LZ4HC),
+                dest_address String CODEC(LZ4HC),
+                amount UInt64 CODEC(Gorilla, LZ4),
+                asset_name String CODEC(LZ4HC),
+                raw_data String CODEC(LZ4HC),
+                timestamp DateTime64(3) CODEC(Delta, LZ4),
+                created_at DateTime64(3) DEFAULT now64(3)
+            ) ENGINE = ReplacingMergeTree(created_at)
+            PARTITION BY epoch
+            ORDER BY (tick_number, log_id)
+            """),
+
+        ("balance_snapshots", $"""
+            CREATE TABLE IF NOT EXISTS {DatabaseName}.balance_snapshots_new (
+                address String CODEC(LZ4HC),
+                epoch UInt32 CODEC(DoubleDelta, LZ4),
+                tick_number UInt64 CODEC(DoubleDelta, LZ4),
+                balance Int64 CODEC(Gorilla, LZ4),
+                incoming_amount UInt64 CODEC(Gorilla, LZ4),
+                outgoing_amount UInt64 CODEC(Gorilla, LZ4),
+                incoming_transfer_count UInt32 CODEC(LZ4),
+                outgoing_transfer_count UInt32 CODEC(LZ4),
+                latest_incoming_tick UInt32 CODEC(LZ4),
+                latest_outgoing_tick UInt32 CODEC(LZ4),
+                imported_at DateTime64(3) DEFAULT now64(3)
+            ) ENGINE = ReplacingMergeTree(imported_at)
+            PARTITION BY epoch
+            ORDER BY (epoch, address)
+            """),
+
+        ("flow_hops", $"""
+            CREATE TABLE IF NOT EXISTS {DatabaseName}.flow_hops_new (
+                epoch UInt32 CODEC(DoubleDelta, LZ4),
+                emission_epoch UInt32 CODEC(DoubleDelta, LZ4),
+                tick_number UInt64 CODEC(DoubleDelta, LZ4),
+                timestamp DateTime64(3) CODEC(Delta, LZ4),
+                tx_hash String CODEC(LZ4HC),
+                source_address String CODEC(LZ4HC),
+                dest_address String CODEC(LZ4HC),
+                amount UInt64 CODEC(Gorilla, LZ4),
+                origin_address String CODEC(LZ4HC),
+                origin_type String CODEC(LZ4),
+                hop_level UInt8 CODEC(LZ4),
+                dest_type String DEFAULT '' CODEC(LZ4),
+                dest_label String DEFAULT '' CODEC(LZ4),
+                created_at DateTime64(3) DEFAULT now64(3)
+            ) ENGINE = ReplacingMergeTree(created_at)
+            PARTITION BY emission_epoch
+            ORDER BY (emission_epoch, origin_address, hop_level, tick_number, tx_hash, dest_address)
+            """),
+
+        ("flow_tracking_state", $"""
+            CREATE TABLE IF NOT EXISTS {DatabaseName}.flow_tracking_state_new (
+                emission_epoch UInt32,
+                address String CODEC(LZ4HC),
+                origin_address String CODEC(LZ4HC),
+                address_type String CODEC(LZ4),
+                received_amount Decimal(38, 0),
+                sent_amount Decimal(38, 0),
+                pending_amount Decimal(38, 0),
+                hop_level UInt8,
+                last_tick UInt64,
+                is_terminal UInt8 DEFAULT 0,
+                is_complete UInt8 DEFAULT 0,
+                created_at DateTime64(3) DEFAULT now64(3),
+                updated_at DateTime64(3) DEFAULT now64(3)
+            ) ENGINE = ReplacingMergeTree(updated_at)
+            ORDER BY (emission_epoch, address, origin_address)
+            TTL updated_at + INTERVAL 90 DAY WHERE is_complete = 1
+            """),
+    ];
+
+    /// <summary>
+    /// Generates the full migration SQL script for an existing database.
+    /// This migrates tables to use PARTITION BY, codecs, and TTL.
+    /// IMPORTANT: Run during a maintenance window - the INSERT SELECTs can take time on large tables.
+    /// The materialized views that feed into transactions/logs must be recreated to target the new tables.
+    /// </summary>
+    public static string GenerateMigrationScript()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("-- =============================================================");
+        sb.AppendLine("-- Storage Optimization Migration Script");
+        sb.AppendLine("-- Adds: PARTITION BY epoch, column codecs, TTL");
+        sb.AppendLine("-- =============================================================");
+        sb.AppendLine("-- IMPORTANT: Run during a maintenance window.");
+        sb.AppendLine("-- Stop the indexer before running to avoid writes to old tables.");
+        sb.AppendLine("-- The INSERT SELECTs may take time depending on data volume.");
+        sb.AppendLine("-- =============================================================");
+        sb.AppendLine();
+
+        // Step 1: Drop materialized views that reference the tables being migrated
+        sb.AppendLine("-- Step 1: Drop materialized views (they reference old tables)");
+        var mvsToRecreate = new[]
+        {
+            "daily_tx_volume", "hourly_activity", "epoch_tx_stats",
+            "epoch_sender_stats", "epoch_receiver_stats",
+            "mv_address_first_seen_from", "mv_address_first_seen_to",
+            "daily_log_stats", "epoch_transfer_stats", "epoch_transfer_by_type",
+            "epoch_tick_stats", "epoch_tx_size_stats", "daily_tx_size_stats"
+        };
+        foreach (var mv in mvsToRecreate)
+        {
+            sb.AppendLine($"DROP VIEW IF EXISTS {DatabaseName}.{mv};");
+        }
+        sb.AppendLine();
+
+        // Step 2: Create new tables and migrate data
+        sb.AppendLine("-- Step 2: Create new tables with partitioning + codecs, migrate data");
+        foreach (var (tableName, createDdl) in GetPartitionMigrations())
+        {
+            sb.AppendLine($"-- Migrate: {tableName}");
+            sb.AppendLine($"{createDdl.TrimEnd()};");
+            sb.AppendLine($"INSERT INTO {DatabaseName}.{tableName}_new SELECT * FROM {DatabaseName}.{tableName};");
+            sb.AppendLine();
+        }
+
+        // Step 3: Atomic rename
+        sb.AppendLine("-- Step 3: Atomic rename (old -> _old, new -> active)");
+        foreach (var (tableName, _) in GetPartitionMigrations())
+        {
+            sb.AppendLine($"RENAME TABLE {DatabaseName}.{tableName} TO {DatabaseName}.{tableName}_old, {DatabaseName}.{tableName}_new TO {DatabaseName}.{tableName};");
+        }
+        sb.AppendLine();
+
+        // Step 4: Re-add indexes on renamed tables
+        sb.AppendLine("-- Step 4: Re-add secondary indexes");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_from from_address TYPE bloom_filter GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_to to_address TYPE bloom_filter GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_hash hash TYPE bloom_filter GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_source source_address TYPE bloom_filter GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_dest dest_address TYPE bloom_filter GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_type log_type TYPE set(20) GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_tx_hash tx_hash TYPE bloom_filter GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.balance_snapshots ADD INDEX IF NOT EXISTS idx_address address TYPE bloom_filter GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_emission_epoch emission_epoch TYPE minmax GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_origin origin_address TYPE bloom_filter GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_dest dest_address TYPE bloom_filter GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_origin_type origin_type TYPE set(10) GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_dest_type dest_type TYPE set(10) GRANULARITY 4;");
+        sb.AppendLine($"ALTER TABLE {DatabaseName}.flow_tracking_state ADD INDEX IF NOT EXISTS idx_fts_pending (emission_epoch, is_complete) TYPE set(2) GRANULARITY 4;");
+        sb.AppendLine();
+
+        // Step 5: Recreate materialized views (from GetSchemaStatements, they use CREATE ... IF NOT EXISTS)
+        sb.AppendLine("-- Step 5: Recreate materialized views");
+        sb.AppendLine("-- Run the application's schema initialization (GetSchemaStatements) to recreate MVs.");
+        sb.AppendLine("-- Or restart the application - it will recreate them on startup.");
+        sb.AppendLine();
+
+        // Step 6: Verify and drop old tables
+        sb.AppendLine("-- Step 6: After verifying everything works, drop old tables");
+        foreach (var (tableName, _) in GetPartitionMigrations())
+        {
+            sb.AppendLine($"-- DROP TABLE IF EXISTS {DatabaseName}.{tableName}_old;");
+        }
+        sb.AppendLine();
+
+        // Also add TTL to existing flow_tracking_state (if already migrated via rename)
+        sb.AppendLine("-- TTL is applied via the new table definition above.");
+        sb.AppendLine("-- For existing tables not migrated, apply TTL with:");
+        sb.AppendLine($"-- ALTER TABLE {DatabaseName}.flow_tracking_state MODIFY TTL updated_at + INTERVAL 90 DAY WHERE is_complete = 1;");
+
+        return sb.ToString();
+    }
 }
