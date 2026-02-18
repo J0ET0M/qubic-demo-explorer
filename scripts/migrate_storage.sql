@@ -1,6 +1,6 @@
 -- =============================================================
 -- Storage Optimization Migration Script
--- Adds: PARTITION BY epoch, column codecs (LZ4HC/DoubleDelta/Gorilla), TTL
+-- Adds: PARTITION BY epoch, column codecs (LZ4HC/DoubleDelta/T64), TTL
 -- =============================================================
 -- IMPORTANT: Run during a maintenance window.
 -- Stop the indexer before running to avoid writes to old tables.
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS qubic.transactions_new (
     epoch UInt32 CODEC(DoubleDelta, LZ4),
     from_address String CODEC(LZ4HC),
     to_address String CODEC(LZ4HC),
-    amount UInt64 CODEC(Gorilla, LZ4),
+    amount UInt64 CODEC(T64, LZ4),
     input_type UInt16 CODEC(LZ4),
     input_data String CODEC(LZ4HC),
     executed UInt8 CODEC(LZ4),
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS qubic.logs_new (
     input_type UInt16 CODEC(LZ4),
     source_address String CODEC(LZ4HC),
     dest_address String CODEC(LZ4HC),
-    amount UInt64 CODEC(Gorilla, LZ4),
+    amount UInt64 CODEC(T64, LZ4),
     asset_name String CODEC(LZ4HC),
     raw_data String CODEC(LZ4HC),
     timestamp DateTime64(3) CODEC(Delta, LZ4),
@@ -88,9 +88,9 @@ CREATE TABLE IF NOT EXISTS qubic.balance_snapshots_new (
     address String CODEC(LZ4HC),
     epoch UInt32 CODEC(DoubleDelta, LZ4),
     tick_number UInt64 CODEC(DoubleDelta, LZ4),
-    balance Int64 CODEC(Gorilla, LZ4),
-    incoming_amount UInt64 CODEC(Gorilla, LZ4),
-    outgoing_amount UInt64 CODEC(Gorilla, LZ4),
+    balance Int64 CODEC(T64, LZ4),
+    incoming_amount UInt64 CODEC(T64, LZ4),
+    outgoing_amount UInt64 CODEC(T64, LZ4),
     incoming_transfer_count UInt32 CODEC(LZ4),
     outgoing_transfer_count UInt32 CODEC(LZ4),
     latest_incoming_tick UInt32 CODEC(LZ4),
@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS qubic.flow_hops_new (
     tx_hash String CODEC(LZ4HC),
     source_address String CODEC(LZ4HC),
     dest_address String CODEC(LZ4HC),
-    amount UInt64 CODEC(Gorilla, LZ4),
+    amount UInt64 CODEC(T64, LZ4),
     origin_address String CODEC(LZ4HC),
     origin_type String CODEC(LZ4),
     hop_level UInt8 CODEC(LZ4),
