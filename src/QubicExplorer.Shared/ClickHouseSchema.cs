@@ -582,7 +582,7 @@ public static class ClickHouseSchema
             updated_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(updated_at)
         ORDER BY (emission_epoch, address, origin_address)
-        TTL updated_at + INTERVAL 90 DAY WHERE is_complete = 1
+        TTL toDateTime(updated_at) + INTERVAL 90 DAY WHERE is_complete = 1
         """,
 
         $"ALTER TABLE {DatabaseName}.flow_tracking_state ADD INDEX IF NOT EXISTS idx_fts_pending (emission_epoch, is_complete) TYPE set(2) GRANULARITY 4",
@@ -710,7 +710,7 @@ public static class ClickHouseSchema
                 updated_at DateTime64(3) DEFAULT now64(3)
             ) ENGINE = ReplacingMergeTree(updated_at)
             ORDER BY (emission_epoch, address, origin_address)
-            TTL updated_at + INTERVAL 90 DAY WHERE is_complete = 1
+            TTL toDateTime(updated_at) + INTERVAL 90 DAY WHERE is_complete = 1
             """),
     ];
 
@@ -802,7 +802,7 @@ public static class ClickHouseSchema
         // Also add TTL to existing flow_tracking_state (if already migrated via rename)
         sb.AppendLine("-- TTL is applied via the new table definition above.");
         sb.AppendLine("-- For existing tables not migrated, apply TTL with:");
-        sb.AppendLine($"-- ALTER TABLE {DatabaseName}.flow_tracking_state MODIFY TTL updated_at + INTERVAL 90 DAY WHERE is_complete = 1;");
+        sb.AppendLine($"-- ALTER TABLE {DatabaseName}.flow_tracking_state MODIFY TTL toDateTime(updated_at) + INTERVAL 90 DAY WHERE is_complete = 1;");
 
         return sb.ToString();
     }

@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS qubic.flow_tracking_state_new (
     updated_at DateTime64(3) DEFAULT now64(3)
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (emission_epoch, address, origin_address)
-TTL updated_at + INTERVAL 90 DAY WHERE is_complete = 1;
+TTL toDateTime(updated_at) + INTERVAL 90 DAY WHERE is_complete = 1;
 
 INSERT INTO qubic.flow_tracking_state_new SELECT * FROM qubic.flow_tracking_state;
 
