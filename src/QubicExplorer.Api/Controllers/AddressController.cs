@@ -61,12 +61,13 @@ public class AddressController : ControllerBase
         [FromQuery] byte? type = null,
         [FromQuery] string? direction = null,
         [FromQuery] ulong? minAmount = null,
+        [FromQuery] uint? epoch = null,
         CancellationToken ct = default)
     {
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetTransfersAsync(page, limit, address, type, direction, minAmount, null, ct);
+        var result = await _queryService.GetTransfersAsync(page, limit, address, type, direction, minAmount, null, epoch, ct);
         return Ok(result);
     }
 

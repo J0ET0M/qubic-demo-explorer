@@ -75,11 +75,14 @@ const txFilterOptions = computed(() => {
   return opts
 })
 
-const { data: transactions, pending: txLoading } = await useAsyncData(
+// Track which tabs have been loaded
+const loadedTabs = ref<Set<string>>(new Set([activeTab.value]))
+
+const { data: transactions, pending: txLoading, execute: fetchTransactions } = await useAsyncData(
   () => `address-tx-${address}-${page.value}-${minAmount.value}-${txExecuted.value}`,
   () => api.getAddressTransactions(address, page.value, limit,
     Object.keys(txFilterOptions.value).length > 0 ? txFilterOptions.value : undefined),
-  { watch: [page, minAmount, txExecuted] }
+  { lazy: activeTab.value !== 'transactions', watch: [page, minAmount, txExecuted] }
 )
 
 // Transfer filters
@@ -91,29 +94,39 @@ const transferFilterOptions = computed(() => {
   return opts
 })
 
-const { data: transfers, pending: transfersLoading } = await useAsyncData(
+const { data: transfers, pending: transfersLoading, execute: fetchTransfers } = await useAsyncData(
   () => `address-transfers-${address}-${page.value}-${direction.value}-${transferType.value}-${minAmount.value}`,
   () => api.getAddressTransfers(address, page.value, limit,
     Object.keys(transferFilterOptions.value).length > 0 ? transferFilterOptions.value : undefined),
-  { watch: [page, direction, transferType, minAmount] }
+  { lazy: activeTab.value !== 'transfers', watch: [page, direction, transferType, minAmount] }
 )
 
 // Rewards pagination (separate from tx/transfers)
 const rewardsPage = ref(1)
 
 // Fetch rewards only for smart contract addresses
-const { data: rewards, pending: rewardsLoading } = await useAsyncData(
+const { data: rewards, pending: rewardsLoading, execute: fetchRewards } = await useAsyncData(
   () => `address-rewards-${address}-${rewardsPage.value}`,
   () => api.getAddressRewards(address, rewardsPage.value, limit),
-  { lazy: true, watch: [rewardsPage] }
+  { lazy: activeTab.value !== 'rewards', watch: [rewardsPage] }
 )
 
 // Fetch flow data (top counterparties)
-const { data: flowData, pending: flowLoading } = await useAsyncData(
+const { data: flowData, pending: flowLoading, execute: fetchFlow } = await useAsyncData(
   `address-flow-${address}`,
   () => api.getAddressFlow(address, 10),
-  { lazy: true }
+  { lazy: activeTab.value !== 'flow' }
 )
+
+// Lazy-load tab data on first visit
+watch(activeTab, (tab) => {
+  if (loadedTabs.value.has(tab)) return
+  loadedTabs.value.add(tab)
+  if (tab === 'transactions') fetchTransactions()
+  else if (tab === 'transfers') fetchTransfers()
+  else if (tab === 'rewards') fetchRewards()
+  else if (tab === 'flow') fetchFlow()
+})
 
 // Format volume for display
 const formatVolume = (volume: number) => {

@@ -440,10 +440,14 @@ public class ClickHouseQueryService : IDisposable
     public async Task<PaginatedResponse<TransferDto>> GetTransfersAsync(
         int page, int limit, string? address = null, byte? logType = null,
         string? direction = null, ulong? minAmount = null, List<byte>? logTypes = null,
-        CancellationToken ct = default)
+        uint? epoch = null, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
         var conditions = new List<string>();
+
+        // Epoch filter (enables partition pruning)
+        if (epoch.HasValue)
+            conditions.Add($"epoch = {epoch.Value}");
 
         if (!string.IsNullOrEmpty(address))
         {

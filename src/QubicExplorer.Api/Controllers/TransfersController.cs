@@ -24,6 +24,7 @@ public class TransfersController : ControllerBase
     /// <param name="types">Filter by multiple log types, comma-separated (e.g., "0,1,2")</param>
     /// <param name="direction">Filter direction: "in" (receiver), "out" (sender), or both if not specified</param>
     /// <param name="minAmount">Minimum amount filter (useful to exclude zero/dust transfers)</param>
+    /// <param name="epoch">Filter by epoch (enables partition pruning for faster queries)</param>
     [HttpGet]
     public async Task<IActionResult> GetTransfers(
         [FromQuery] int page = 1,
@@ -33,6 +34,7 @@ public class TransfersController : ControllerBase
         [FromQuery] string? types = null,
         [FromQuery] string? direction = null,
         [FromQuery] ulong? minAmount = null,
+        [FromQuery] uint? epoch = null,
         CancellationToken ct = default)
     {
         if (page < 1) page = 1;
@@ -49,7 +51,7 @@ public class TransfersController : ControllerBase
                 .ToList();
         }
 
-        var result = await _queryService.GetTransfersAsync(page, limit, address, type, direction, minAmount, logTypes, ct);
+        var result = await _queryService.GetTransfersAsync(page, limit, address, type, direction, minAmount, logTypes, epoch, ct);
         return Ok(result);
     }
 }
