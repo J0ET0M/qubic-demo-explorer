@@ -21,8 +21,6 @@ public class BobConnectionService : IDisposable
     private bool _disposed;
     private long _lastProcessedTick;
     private CancellationTokenSource? _disconnectCts;
-    private bool _loggedSampleNotification;
-
     public ChannelReader<TickStreamData> TickReader => _tickChannel.Reader;
 
     public BobConnectionService(
@@ -105,29 +103,6 @@ public class BobConnectionService : IDisposable
 
                 await foreach (var notification in subscription.WithCancellation(linkedCts.Token))
                 {
-                    // Debug: log first non-empty tick notification to diagnose data issues
-                    if (!_loggedSampleNotification && notification.TxCountTotal > 0)
-                    {
-                        _loggedSampleNotification = true;
-                        _logger.LogWarning(
-                            "SAMPLE non-empty tick {Tick}: TxCountTotal={TxTotal}, TxCountFiltered={TxFiltered}, " +
-                            "LogCountTotal={LogTotal}, LogCountFiltered={LogFiltered}, " +
-                            "Transactions={TxState} (count={TxCount}), Logs={LogState} (count={LogCount})",
-                            notification.Tick, notification.TxCountTotal, notification.TxCountFiltered,
-                            notification.LogCountTotal, notification.LogCountFiltered,
-                            notification.Transactions == null ? "null" : "present", notification.Transactions?.Count ?? 0,
-                            notification.Logs == null ? "null" : "present", notification.Logs?.Count ?? 0);
-
-                        // Log first transaction details if available
-                        if (notification.Transactions is { Count: > 0 })
-                        {
-                            var tx = notification.Transactions[0];
-                            _logger.LogWarning(
-                                "SAMPLE tx[0]: Hash={Hash}, From={From}, To={To}, Amount={Amount}, Executed={Executed}",
-                                tx.Hash, tx.From, tx.To, tx.Amount, tx.Executed);
-                        }
-                    }
-
                     var tickData = MapToTickStreamData(notification);
                     await _tickChannel.Writer.WriteAsync(tickData, cancellationToken);
 
@@ -177,24 +152,8 @@ public class BobConnectionService : IDisposable
     /// <summary>
     /// Maps a Qubic.Bob TickStreamNotification to the explorer's TickStreamData model.
     /// </summary>
-    private TickStreamData MapToTickStreamData(TickStreamNotification notification)
+    private static TickStreamData MapToTickStreamData(TickStreamNotification notification)
     {
-        // Debug: detect when Bob reports transactions/logs but we have none deserialized
-        if (notification.TxCountTotal > 0 && (notification.Transactions == null || notification.Transactions.Count == 0))
-        {
-            _logger.LogWarning(
-                "Tick {Tick}: Bob reports TxCountTotal={TxCount} but Transactions is {State}",
-                notification.Tick, notification.TxCountTotal,
-                notification.Transactions == null ? "null" : "empty");
-        }
-        if (notification.LogCountTotal > 0 && (notification.Logs == null || notification.Logs.Count == 0))
-        {
-            _logger.LogWarning(
-                "Tick {Tick}: Bob reports LogCountTotal={LogCount} but Logs is {State}",
-                notification.Tick, notification.LogCountTotal,
-                notification.Logs == null ? "null" : "empty");
-        }
-
         return new TickStreamData
         {
             Epoch = notification.Epoch,
