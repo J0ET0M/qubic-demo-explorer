@@ -2913,7 +2913,7 @@ public class ClickHouseQueryService : IDisposable
     public async Task<(ulong TickNumber, DateTime Timestamp)?> GetFirstTickAsync(CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT tick_number, timestamp FROM ticks ORDER BY tick_number ASC LIMIT 1";
+        cmd.CommandText = "SELECT tick_number, timestamp FROM ticks WHERE tick_number > 0 ORDER BY tick_number ASC LIMIT 1";
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
             return null;
