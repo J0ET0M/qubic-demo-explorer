@@ -221,6 +221,9 @@ public class EpochTransitionService : BackgroundService
             await queryService.UpsertEpochMetaAsync(updatedMeta, ct);
             _logger.LogInformation("Marked epoch {Epoch} as complete in epoch_meta", epoch);
 
+            // Compute and store final epoch stats (immutable after this)
+            await queryService.ComputeAndStoreEpochStatsAsync(epoch, ct);
+
             // Capture emissions for this epoch
             await CaptureEmissionsAsync(epoch, epochMeta.EndTick, queryService, ct);
         }

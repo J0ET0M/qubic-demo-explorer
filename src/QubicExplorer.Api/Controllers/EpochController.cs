@@ -256,6 +256,41 @@ public class EpochController : ControllerBase
             totalEmission
         });
     }
+    /// <summary>
+    /// Backfills stored epoch stats for all completed epochs that don't have them yet.
+    /// Run once after deploying the stat columns migration.
+    /// </summary>
+    [HttpPost("backfill-stats")]
+    [AdminApiKey]
+    public async Task<IActionResult> BackfillEpochStats(CancellationToken ct = default)
+    {
+        _logger.LogInformation("Backfill epoch stats triggered");
+
+        var allMeta = await _queryService.GetAllEpochMetaAsync(500, ct);
+        var toBackfill = allMeta.Where(m => m.IsComplete && m.TickCount == 0).ToList();
+
+        if (toBackfill.Count == 0)
+        {
+            return Ok(new { success = true, message = "All complete epochs already have stored stats", backfilled = 0 });
+        }
+
+        var backfilled = 0;
+        foreach (var meta in toBackfill.OrderBy(m => m.Epoch))
+        {
+            await _queryService.ComputeAndStoreEpochStatsAsync(meta.Epoch, ct);
+            backfilled++;
+        }
+
+        _logger.LogInformation("Backfilled stats for {Count} epochs", backfilled);
+
+        return Ok(new
+        {
+            success = true,
+            message = $"Backfilled stats for {backfilled} epochs",
+            backfilled,
+            epochs = toBackfill.Select(m => m.Epoch).OrderBy(e => e).ToList()
+        });
+    }
 }
 
 public record EpochMetaRequest(

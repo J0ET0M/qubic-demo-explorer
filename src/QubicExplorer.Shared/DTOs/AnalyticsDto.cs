@@ -251,7 +251,13 @@ public record EpochMetaDto(
     ulong EndTickStartLogId,
     ulong EndTickEndLogId,
     bool IsComplete,
-    DateTime UpdatedAt
+    DateTime UpdatedAt,
+    ulong TickCount = 0,
+    ulong TxCount = 0,
+    decimal TotalVolume = 0,
+    ulong ActiveAddresses = 0,
+    ulong TransferCount = 0,
+    decimal QuTransferred = 0
 );
 
 // =====================================================

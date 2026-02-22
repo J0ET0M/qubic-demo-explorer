@@ -734,18 +734,21 @@ public class ClickHouseQueryService : IDisposable
         await using var cmd = _connection.CreateCommand();
         // Use epoch_meta for authoritative tick boundaries (initial_tick, end_tick)
         // For incomplete epochs (is_complete=0 or end_tick=0), fall back to last tick from ticks table
+        // For completed epochs with stored stats, use them directly.
+        // For the current (incomplete) epoch, fall back to materialized views.
         cmd.CommandText = $@"
             SELECT
                 em.epoch,
-                COALESCE(ts.tick_count, 0) as tick_count,
-                COALESCE(tx.tx_count, 0) as tx_count,
-                COALESCE(tx.total_volume, 0) as total_volume,
-                COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0) as active_addresses,
+                if(em.is_complete = 1 AND em.tick_count > 0, em.tick_count, COALESCE(ts.tick_count, 0)) as tick_count,
+                if(em.is_complete = 1 AND em.tx_count > 0, em.tx_count, COALESCE(tx.tx_count, 0)) as tx_count,
+                if(em.is_complete = 1 AND em.total_volume > 0, em.total_volume, COALESCE(tx.total_volume, 0)) as total_volume,
+                if(em.is_complete = 1 AND em.active_addresses > 0, em.active_addresses,
+                   COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0)) as active_addresses,
                 COALESCE(ts.start_time, em.updated_at) as start_time,
                 COALESCE(ts.end_time, em.updated_at) as end_time,
                 em.initial_tick as first_tick,
                 if(em.is_complete = 1 AND em.end_tick > 0, em.end_tick, COALESCE(ts.last_tick, em.initial_tick)) as last_tick
-            FROM epoch_meta em
+            FROM epoch_meta FINAL em
             LEFT JOIN (
                 SELECT
                     epoch,
@@ -792,25 +795,26 @@ public class ClickHouseQueryService : IDisposable
     public async Task<EpochStatsDto?> GetEpochStatsAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        // Use epoch_meta for authoritative tick boundaries (initial_tick, end_tick)
-        // For incomplete epochs (is_complete=0 or end_tick=0), fall back to last tick from ticks table
+        // For completed epochs with stored stats, use them directly.
+        // For the current (incomplete) epoch, fall back to materialized views.
         cmd.CommandText = $@"
             SELECT
                 em.epoch,
-                COALESCE(ts.tick_count, 0) as tick_count,
+                if(em.is_complete = 1 AND em.tick_count > 0, em.tick_count, COALESCE(ts.tick_count, 0)) as tick_count,
                 em.initial_tick as first_tick,
                 if(em.is_complete = 1 AND em.end_tick > 0, em.end_tick, COALESCE(ts.last_tick, em.initial_tick)) as last_tick,
                 COALESCE(ts.start_time, em.updated_at) as start_time,
                 COALESCE(ts.end_time, em.updated_at) as end_time,
-                COALESCE(tx.tx_count, 0) as tx_count,
-                COALESCE(tx.total_volume, 0) as total_volume,
+                if(em.is_complete = 1 AND em.tx_count > 0, em.tx_count, COALESCE(tx.tx_count, 0)) as tx_count,
+                if(em.is_complete = 1 AND em.total_volume > 0, em.total_volume, COALESCE(tx.total_volume, 0)) as total_volume,
                 COALESCE(tx.unique_senders, 0) as unique_senders,
                 COALESCE(tx.unique_receivers, 0) as unique_receivers,
-                COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0) as active_addresses,
-                COALESCE(tr.transfer_count, 0) as transfer_count,
-                COALESCE(tr.qu_transferred, 0) as qu_transferred,
+                if(em.is_complete = 1 AND em.active_addresses > 0, em.active_addresses,
+                   COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0)) as active_addresses,
+                if(em.is_complete = 1 AND em.transfer_count > 0, em.transfer_count, COALESCE(tr.transfer_count, 0)) as transfer_count,
+                if(em.is_complete = 1 AND em.qu_transferred > 0, em.qu_transferred, COALESCE(tr.qu_transferred, 0)) as qu_transferred,
                 COALESCE(asset.asset_transfer_count, 0) as asset_transfer_count
-            FROM epoch_meta em
+            FROM epoch_meta FINAL em
             LEFT JOIN (
                 SELECT
                     epoch,
@@ -2278,8 +2282,9 @@ public class ClickHouseQueryService : IDisposable
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
-                   is_complete, updated_at
-            FROM epoch_meta
+                   is_complete, updated_at,
+                   tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
+            FROM epoch_meta FINAL
             WHERE epoch = {epoch}";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -2293,7 +2298,13 @@ public class ClickHouseQueryService : IDisposable
             reader.GetFieldValue<ulong>(3),
             reader.GetFieldValue<ulong>(4),
             reader.GetFieldValue<byte>(5) == 1,
-            reader.GetDateTime(6)
+            reader.GetDateTime(6),
+            TickCount: reader.GetFieldValue<ulong>(7),
+            TxCount: reader.GetFieldValue<ulong>(8),
+            TotalVolume: ToBigDecimal(reader.GetValue(9)),
+            ActiveAddresses: reader.GetFieldValue<ulong>(10),
+            TransferCount: reader.GetFieldValue<ulong>(11),
+            QuTransferred: ToBigDecimal(reader.GetValue(12))
         );
     }
 
@@ -2305,8 +2316,9 @@ public class ClickHouseQueryService : IDisposable
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
-                   is_complete, updated_at
-            FROM epoch_meta
+                   is_complete, updated_at,
+                   tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
+            FROM epoch_meta FINAL
             ORDER BY epoch DESC
             LIMIT {limit}";
 
@@ -2321,7 +2333,13 @@ public class ClickHouseQueryService : IDisposable
                 reader.GetFieldValue<ulong>(3),
                 reader.GetFieldValue<ulong>(4),
                 reader.GetFieldValue<byte>(5) == 1,
-                reader.GetDateTime(6)
+                reader.GetDateTime(6),
+                TickCount: reader.GetFieldValue<ulong>(7),
+                TxCount: reader.GetFieldValue<ulong>(8),
+                TotalVolume: ToBigDecimal(reader.GetValue(9)),
+                ActiveAddresses: reader.GetFieldValue<ulong>(10),
+                TransferCount: reader.GetFieldValue<ulong>(11),
+                QuTransferred: ToBigDecimal(reader.GetValue(12))
             ));
         }
 
@@ -2336,11 +2354,14 @@ public class ClickHouseQueryService : IDisposable
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
             INSERT INTO epoch_meta
-            (epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id, is_complete)
+            (epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id, is_complete,
+             tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred)
             VALUES
             ({epochMeta.Epoch}, {epochMeta.InitialTick}, {epochMeta.EndTick},
              {epochMeta.EndTickStartLogId}, {epochMeta.EndTickEndLogId},
-             {(epochMeta.IsComplete ? 1 : 0)})";
+             {(epochMeta.IsComplete ? 1 : 0)},
+             {epochMeta.TickCount}, {epochMeta.TxCount}, {epochMeta.TotalVolume},
+             {epochMeta.ActiveAddresses}, {epochMeta.TransferCount}, {epochMeta.QuTransferred})";
 
         await cmd.ExecuteNonQueryAsync(ct);
         _logger.LogInformation("Upserted epoch metadata for epoch {Epoch} (initial_tick={InitialTick}, end_tick={EndTick}, complete={IsComplete})",
@@ -2355,8 +2376,9 @@ public class ClickHouseQueryService : IDisposable
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
-                   is_complete, updated_at
-            FROM epoch_meta
+                   is_complete, updated_at,
+                   tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
+            FROM epoch_meta FINAL
             WHERE is_complete = 1
             ORDER BY epoch DESC
             LIMIT 1";
@@ -2372,8 +2394,87 @@ public class ClickHouseQueryService : IDisposable
             reader.GetFieldValue<ulong>(3),
             reader.GetFieldValue<ulong>(4),
             reader.GetFieldValue<byte>(5) == 1,
-            reader.GetDateTime(6)
+            reader.GetDateTime(6),
+            TickCount: reader.GetFieldValue<ulong>(7),
+            TxCount: reader.GetFieldValue<ulong>(8),
+            TotalVolume: ToBigDecimal(reader.GetValue(9)),
+            ActiveAddresses: reader.GetFieldValue<ulong>(10),
+            TransferCount: reader.GetFieldValue<ulong>(11),
+            QuTransferred: ToBigDecimal(reader.GetValue(12))
         );
+    }
+
+    /// <summary>
+    /// Computes epoch stats from materialized views and stores them in epoch_meta.
+    /// Called once when an epoch is marked complete — stats are immutable after that.
+    /// </summary>
+    public async Task ComputeAndStoreEpochStatsAsync(uint epoch, CancellationToken ct = default)
+    {
+        // Get existing epoch_meta
+        var meta = await GetEpochMetaAsync(epoch, ct);
+        if (meta == null)
+        {
+            _logger.LogWarning("Cannot compute stats for epoch {Epoch}: no epoch_meta found", epoch);
+            return;
+        }
+
+        // Query all stats from MVs in one go
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT
+                COALESCE(ts.tick_count, 0),
+                COALESCE(tx.tx_count, 0),
+                COALESCE(tx.total_volume, 0),
+                COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0),
+                COALESCE(tr.transfer_count, 0),
+                COALESCE(tr.qu_transferred, 0)
+            FROM (SELECT 1 as _join) d
+            LEFT JOIN (
+                SELECT
+                    countMerge(tick_count_state) as tick_count
+                FROM epoch_tick_stats
+                WHERE epoch = {epoch}
+            ) ts ON 1=1
+            LEFT JOIN (
+                SELECT
+                    sum(tx_count) as tx_count,
+                    sum(total_volume) as total_volume,
+                    uniqMerge(unique_senders_state) as unique_senders,
+                    uniqMerge(unique_receivers_state) as unique_receivers
+                FROM epoch_tx_stats FINAL
+                WHERE epoch = {epoch}
+            ) tx ON 1=1
+            LEFT JOIN (
+                SELECT
+                    sum(transfer_count) as transfer_count,
+                    sum(qu_transferred) as qu_transferred
+                FROM epoch_transfer_stats FINAL
+                WHERE epoch = {epoch}
+            ) tr ON 1=1";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            _logger.LogWarning("No stats data found for epoch {Epoch}", epoch);
+            return;
+        }
+
+        var updatedMeta = meta with
+        {
+            TickCount = Convert.ToUInt64(reader.GetValue(0)),
+            TxCount = Convert.ToUInt64(reader.GetValue(1)),
+            TotalVolume = ToBigDecimal(reader.GetValue(2)),
+            ActiveAddresses = Convert.ToUInt64(reader.GetValue(3)),
+            TransferCount = Convert.ToUInt64(reader.GetValue(4)),
+            QuTransferred = ToBigDecimal(reader.GetValue(5)),
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        await UpsertEpochMetaAsync(updatedMeta, ct);
+        _logger.LogInformation(
+            "Stored epoch {Epoch} stats: ticks={TickCount}, txs={TxCount}, volume={Volume}, addresses={Addresses}, transfers={Transfers}",
+            epoch, updatedMeta.TickCount, updatedMeta.TxCount, updatedMeta.TotalVolume,
+            updatedMeta.ActiveAddresses, updatedMeta.TransferCount);
     }
 
     // =====================================================

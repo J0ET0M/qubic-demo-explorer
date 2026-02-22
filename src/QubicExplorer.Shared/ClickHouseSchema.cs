@@ -404,10 +404,24 @@ public static class ClickHouseSchema
             end_tick_start_log_id UInt64,
             end_tick_end_log_id UInt64,
             is_complete UInt8 DEFAULT 0,
+            tick_count UInt64 DEFAULT 0,
+            tx_count UInt64 DEFAULT 0,
+            total_volume UInt128 DEFAULT 0,
+            active_addresses UInt64 DEFAULT 0,
+            transfer_count UInt64 DEFAULT 0,
+            qu_transferred UInt128 DEFAULT 0,
             updated_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(updated_at)
         ORDER BY epoch
         """,
+
+        // Migration: add stat columns to existing epoch_meta table
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS tick_count UInt64 DEFAULT 0 AFTER is_complete",
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS tx_count UInt64 DEFAULT 0 AFTER tick_count",
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS total_volume UInt128 DEFAULT 0 AFTER tx_count",
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS active_addresses UInt64 DEFAULT 0 AFTER total_volume",
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS transfer_count UInt64 DEFAULT 0 AFTER active_addresses",
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS qu_transferred UInt128 DEFAULT 0 AFTER transfer_count",
 
         // Network stats history
         $"""
