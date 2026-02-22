@@ -13,10 +13,12 @@ namespace QubicExplorer.Api.Controllers;
 public class MinerFlowController : ControllerBase
 {
     private readonly ClickHouseQueryService _queryService;
+    private readonly AnalyticsCacheService _cache;
 
-    public MinerFlowController(ClickHouseQueryService queryService)
+    public MinerFlowController(ClickHouseQueryService queryService, AnalyticsCacheService cache)
     {
         _queryService = queryService;
+        _cache = cache;
     }
 
     /// <summary>
@@ -25,7 +27,10 @@ public class MinerFlowController : ControllerBase
     [HttpGet("computors/{epoch}")]
     public async Task<IActionResult> GetComputors(uint epoch, CancellationToken ct = default)
     {
-        var result = await _queryService.GetComputorsAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"miner:computors:{epoch}",
+            AnalyticsCacheService.ComputorsTtl,
+            () => _queryService.GetComputorsAsync(epoch, ct));
         if (result == null)
         {
             return NotFound(new { error = $"Computors not available for epoch {epoch}" });
@@ -47,22 +52,29 @@ public class MinerFlowController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 500) limit = 500;
 
-        var history = await _queryService.GetMinerFlowStatsHistoryAsync(limit, from, to, ct);
-        var latest = history.FirstOrDefault();
+        var result = await _cache.GetOrSetAsync(
+            $"miner:stats:{limit}:{from?.Ticks ?? 0}:{to?.Ticks ?? 0}",
+            AnalyticsCacheService.MinerFlowStatsTtl,
+            async () =>
+            {
+                var history = await _queryService.GetMinerFlowStatsHistoryAsync(limit, from, to, ct);
+                var latest = history.FirstOrDefault();
 
-        var uniqueEmissionEpochs = history.Select(s => s.EmissionEpoch).Distinct().ToList();
-        var totalEmission = await _queryService.GetTotalEmissionsForEpochsAsync(uniqueEmissionEpochs, ct);
+                var uniqueEmissionEpochs = history.Select(s => s.EmissionEpoch).Distinct().ToList();
+                var totalEmission = await _queryService.GetTotalEmissionsForEpochsAsync(uniqueEmissionEpochs, ct);
 
-        var totalToExchange = history.Sum(s => s.FlowToExchangeTotal);
-        var avgPercent = totalEmission > 0 ? (totalToExchange / totalEmission) * 100 : 0;
+                var totalToExchange = history.Sum(s => s.FlowToExchangeTotal);
+                var avgPercent = totalEmission > 0 ? (totalToExchange / totalEmission) * 100 : 0;
 
-        return Ok(new MinerFlowSummaryDto(
-            Latest: latest,
-            History: history,
-            TotalEmissionTracked: totalEmission,
-            TotalFlowToExchange: totalToExchange,
-            AverageExchangeFlowPercent: avgPercent
-        ));
+                return new MinerFlowSummaryDto(
+                    Latest: latest,
+                    History: history,
+                    TotalEmissionTracked: totalEmission,
+                    TotalFlowToExchange: totalToExchange,
+                    AverageExchangeFlowPercent: avgPercent
+                );
+            });
+        return Ok(result);
     }
 
     /// <summary>
@@ -79,13 +91,21 @@ public class MinerFlowController : ControllerBase
         if (maxDepth < 1) maxDepth = 1;
         if (maxDepth > 10) maxDepth = 10;
 
-        var hops = await _queryService.GetFlowHopsByEmissionEpochAsync(emissionEpoch, maxDepth, ct);
-        if (hops.Count == 0)
-        {
-            return NotFound(new { error = $"No flow visualization data available for emission epoch {emissionEpoch}" });
-        }
+        var result = await _cache.GetOrSetAsync(
+            $"miner:viz:{emissionEpoch}:{maxDepth}",
+            AnalyticsCacheService.MinerFlowVisualizationTtl,
+            async () =>
+            {
+                var hops = await _queryService.GetFlowHopsByEmissionEpochAsync(emissionEpoch, maxDepth, ct);
+                if (hops.Count == 0)
+                    return (FlowVisualizationDto?)null;
 
-        var result = BuildFlowVisualization(emissionEpoch, hops);
+                return BuildFlowVisualization(emissionEpoch, hops);
+            });
+
+        if (result == null)
+            return NotFound(new { error = $"No flow visualization data available for emission epoch {emissionEpoch}" });
+
         return Ok(result);
     }
 
@@ -121,7 +141,11 @@ public class MinerFlowController : ControllerBase
             }
         }
 
-        var hops = await _queryService.GetFlowHopsAsync(epoch, tickStart, tickEnd, maxDepth, ct);
+        var hops = await _cache.GetOrSetAsync(
+            $"miner:hops:{epoch}:{tickStart}:{tickEnd}:{maxDepth}",
+            AnalyticsCacheService.MinerFlowStatsTtl,
+            () => _queryService.GetFlowHopsAsync(epoch, tickStart, tickEnd, maxDepth, ct));
+
         return Ok(new
         {
             epoch,
@@ -143,7 +167,10 @@ public class MinerFlowController : ControllerBase
     [HttpGet("emissions/{epoch}")]
     public async Task<IActionResult> GetEmissions(uint epoch, CancellationToken ct = default)
     {
-        var summary = await _queryService.GetEmissionSummaryAsync(epoch, ct);
+        var summary = await _cache.GetOrSetAsync(
+            $"miner:emissions:{epoch}",
+            AnalyticsCacheService.EmissionsTtl,
+            () => _queryService.GetEmissionSummaryAsync(epoch, ct));
         if (summary == null)
         {
             return NotFound(new { error = $"No emission data available for epoch {epoch}" });
@@ -157,13 +184,20 @@ public class MinerFlowController : ControllerBase
     [HttpGet("emissions/{epoch}/details")]
     public async Task<IActionResult> GetEmissionDetails(uint epoch, CancellationToken ct = default)
     {
-        var summary = await _queryService.GetEmissionSummaryAsync(epoch, ct);
+        var summary = await _cache.GetOrSetAsync(
+            $"miner:emissions:{epoch}",
+            AnalyticsCacheService.EmissionsTtl,
+            () => _queryService.GetEmissionSummaryAsync(epoch, ct));
         if (summary == null)
         {
             return NotFound(new { error = $"No emission data available for epoch {epoch}" });
         }
 
-        var emissions = await _queryService.GetEmissionsForEpochAsync(epoch, ct);
+        var emissions = await _cache.GetOrSetAsync(
+            $"miner:emission-details:{epoch}",
+            AnalyticsCacheService.EmissionsTtl,
+            () => _queryService.GetEmissionsForEpochAsync(epoch, ct));
+
         return Ok(new
         {
             epoch,

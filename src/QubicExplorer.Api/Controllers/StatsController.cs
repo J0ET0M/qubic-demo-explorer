@@ -8,16 +8,21 @@ namespace QubicExplorer.Api.Controllers;
 public class StatsController : ControllerBase
 {
     private readonly ClickHouseQueryService _queryService;
+    private readonly AnalyticsCacheService _cache;
 
-    public StatsController(ClickHouseQueryService queryService)
+    public StatsController(ClickHouseQueryService queryService, AnalyticsCacheService cache)
     {
         _queryService = queryService;
+        _cache = cache;
     }
 
     [HttpGet]
     public async Task<IActionResult> GetStats(CancellationToken ct = default)
     {
-        var result = await _queryService.GetNetworkStatsAsync(ct);
+        var result = await _cache.GetOrSetAsync(
+            "stats:network",
+            AnalyticsCacheService.NetworkStatsTtl,
+            () => _queryService.GetNetworkStatsAsync(ct));
         return Ok(result);
     }
 
@@ -29,7 +34,10 @@ public class StatsController : ControllerBase
         if (period != "day" && period != "week" && period != "month")
             period = "day";
 
-        var result = await _queryService.GetTxVolumeChartAsync(period, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:tx-volume:{period}",
+            AnalyticsCacheService.TxVolumeChartTtl,
+            () => _queryService.GetTxVolumeChartAsync(period, ct));
         return Ok(result);
     }
 
@@ -42,7 +50,10 @@ public class StatsController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 100) limit = 100;
 
-        var result = await _queryService.GetTopAddressesByVolumeAsync(limit, epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:top-addresses:{limit}:{epoch ?? 0}",
+            AnalyticsCacheService.TopAddressesTtl,
+            () => _queryService.GetTopAddressesByVolumeAsync(limit, epoch, ct));
         return Ok(result);
     }
 
@@ -51,7 +62,10 @@ public class StatsController : ControllerBase
         [FromQuery] uint? epoch = null,
         CancellationToken ct = default)
     {
-        var result = await _queryService.GetSmartContractUsageAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:sc-usage:{epoch ?? 0}",
+            AnalyticsCacheService.SmartContractUsageTtl,
+            () => _queryService.GetSmartContractUsageAsync(epoch, ct));
         return Ok(result);
     }
 
@@ -70,7 +84,10 @@ public class StatsController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 100) limit = 100;
 
-        var result = await _queryService.GetActiveAddressTrendsAsync(period, limit, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:active-addresses:{period}:{limit}",
+            AnalyticsCacheService.ActiveAddressTtl,
+            () => _queryService.GetActiveAddressTrendsAsync(period, limit, ct));
         return Ok(result);
     }
 
@@ -82,7 +99,10 @@ public class StatsController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 100) limit = 100;
 
-        var result = await _queryService.GetNewVsReturningAddressesAsync(limit, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:new-vs-returning:{limit}",
+            AnalyticsCacheService.NewVsReturningTtl,
+            () => _queryService.GetNewVsReturningAddressesAsync(limit, ct));
         return Ok(result);
     }
 
@@ -94,14 +114,20 @@ public class StatsController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 100) limit = 100;
 
-        var result = await _queryService.GetExchangeFlowsAsync(limit, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:exchange-flows:{limit}",
+            AnalyticsCacheService.ExchangeFlowsTtl,
+            () => _queryService.GetExchangeFlowsAsync(limit, ct));
         return Ok(result);
     }
 
     [HttpGet("holder-distribution")]
     public async Task<IActionResult> GetHolderDistribution(CancellationToken ct = default)
     {
-        var result = await _queryService.GetHolderDistributionWithConcentrationAsync(ct);
+        var result = await _cache.GetOrSetAsync(
+            "stats:holder-distribution",
+            AnalyticsCacheService.HolderDistributionTtl,
+            () => _queryService.GetHolderDistributionWithConcentrationAsync(ct));
         return Ok(result);
     }
 
@@ -115,7 +141,10 @@ public class StatsController : ControllerBase
         if (historyLimit < 1) historyLimit = 1;
         if (historyLimit > 500) historyLimit = 500;
 
-        var result = await _queryService.GetHolderDistributionExtendedAsync(historyLimit, from, to, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:holder-dist-ext:{historyLimit}:{from?.Ticks ?? 0}:{to?.Ticks ?? 0}",
+            AnalyticsCacheService.SnapshotExtendedTtl,
+            () => _queryService.GetHolderDistributionExtendedAsync(historyLimit, from, to, ct));
         return Ok(result);
     }
 
@@ -129,7 +158,10 @@ public class StatsController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 500) limit = 500;
 
-        var result = await _queryService.GetHolderDistributionHistoryAsync(limit, from, to, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:holder-dist-hist:{limit}:{from?.Ticks ?? 0}:{to?.Ticks ?? 0}",
+            AnalyticsCacheService.SnapshotHistoryTtl,
+            () => _queryService.GetHolderDistributionHistoryAsync(limit, from, to, ct));
         return Ok(result);
     }
 
@@ -147,7 +179,10 @@ public class StatsController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 100) limit = 100;
 
-        var result = await _queryService.GetAvgTxSizeTrendsAsync(period, limit, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:avg-tx-size:{period}:{limit}",
+            AnalyticsCacheService.AvgTxSizeTtl,
+            () => _queryService.GetAvgTxSizeTrendsAsync(period, limit, ct));
         return Ok(result);
     }
 
@@ -165,7 +200,10 @@ public class StatsController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 500) limit = 500;
 
-        var result = await _queryService.GetNetworkStatsHistoryAsync(limit, from, to, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:net-hist:{limit}:{from?.Ticks ?? 0}:{to?.Ticks ?? 0}",
+            AnalyticsCacheService.SnapshotHistoryTtl,
+            () => _queryService.GetNetworkStatsHistoryAsync(limit, from, to, ct));
         return Ok(result);
     }
 
@@ -179,7 +217,10 @@ public class StatsController : ControllerBase
         if (historyLimit < 1) historyLimit = 1;
         if (historyLimit > 500) historyLimit = 500;
 
-        var result = await _queryService.GetNetworkStatsExtendedAsync(historyLimit, from, to, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:net-ext:{historyLimit}:{from?.Ticks ?? 0}:{to?.Ticks ?? 0}",
+            AnalyticsCacheService.SnapshotExtendedTtl,
+            () => _queryService.GetNetworkStatsExtendedAsync(historyLimit, from, to, ct));
         return Ok(result);
     }
 
@@ -197,7 +238,10 @@ public class StatsController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 500) limit = 500;
 
-        var result = await _queryService.GetBurnStatsHistoryAsync(limit, from, to, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:burn-hist:{limit}:{from?.Ticks ?? 0}:{to?.Ticks ?? 0}",
+            AnalyticsCacheService.SnapshotHistoryTtl,
+            () => _queryService.GetBurnStatsHistoryAsync(limit, from, to, ct));
         return Ok(result);
     }
 
@@ -211,7 +255,10 @@ public class StatsController : ControllerBase
         if (historyLimit < 1) historyLimit = 1;
         if (historyLimit > 500) historyLimit = 500;
 
-        var result = await _queryService.GetBurnStatsExtendedAsync(historyLimit, from, to, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:burn-ext:{historyLimit}:{from?.Ticks ?? 0}:{to?.Ticks ?? 0}",
+            AnalyticsCacheService.SnapshotExtendedTtl,
+            () => _queryService.GetBurnStatsExtendedAsync(historyLimit, from, to, ct));
         return Ok(result);
     }
 }

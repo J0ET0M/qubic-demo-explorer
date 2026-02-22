@@ -15,18 +15,15 @@ public class ClickHouseQueryService : IDisposable
     private readonly ClickHouseConnection _connection;
     private readonly ILogger<ClickHouseQueryService> _logger;
     private readonly AddressLabelService _labelService;
-    private readonly AnalyticsCacheService _cacheService;
     private bool _disposed;
 
     public ClickHouseQueryService(
         IOptions<ClickHouseOptions> options,
         ILogger<ClickHouseQueryService> logger,
-        AddressLabelService labelService,
-        AnalyticsCacheService cacheService)
+        AddressLabelService labelService)
     {
         _logger = logger;
         _labelService = labelService;
-        _cacheService = cacheService;
         _connection = new ClickHouseConnection(options.Value.ConnectionString);
         _connection.Open();
     }
@@ -564,14 +561,6 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<NetworkStatsDto> GetNetworkStatsAsync(CancellationToken ct = default)
     {
-        // Check cache first
-        var cached = _cacheService.GetNetworkStats();
-        if (cached != null)
-        {
-            _logger.LogDebug("Returning cached network stats");
-            return cached;
-        }
-
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
             SELECT
@@ -584,7 +573,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
         {
-            var result = new NetworkStatsDto(
+            return new NetworkStatsDto(
                 reader.IsDBNull(0) ? 0 : reader.GetFieldValue<ulong>(0),
                 reader.IsDBNull(1) ? 0 : reader.GetFieldValue<uint>(1),
                 reader.IsDBNull(2) ? 0 : reader.GetFieldValue<ulong>(2),
@@ -592,9 +581,6 @@ public class ClickHouseQueryService : IDisposable
                 reader.IsDBNull(4) ? 0 : reader.GetFieldValue<ulong>(4),
                 DateTime.UtcNow
             );
-
-            _cacheService.SetNetworkStats(result);
-            return result;
         }
 
         return new NetworkStatsDto(0, 0, 0, 0, 0, DateTime.UtcNow);
@@ -1296,14 +1282,6 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<SmartContractUsageDto>> GetSmartContractUsageAsync(
         uint? epoch = null, CancellationToken ct = default)
     {
-        // Check cache first
-        var cached = _cacheService.GetSmartContractUsage(epoch);
-        if (cached != null)
-        {
-            _logger.LogDebug("Returning cached smart contract usage (epoch={Epoch})", epoch);
-            return cached;
-        }
-
         var epochFilter = epoch.HasValue ? $"AND epoch = {epoch.Value}" : "";
 
         await using var cmd = _connection.CreateCommand();
@@ -1340,7 +1318,6 @@ public class ClickHouseQueryService : IDisposable
             }
         }
 
-        _cacheService.SetSmartContractUsage(epoch, items);
         return items;
     }
 
@@ -1354,14 +1331,6 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<ActiveAddressTrendDto>> GetActiveAddressTrendsAsync(
         string period = "epoch", int limit = 50, CancellationToken ct = default)
     {
-        // Check cache first
-        var cached = _cacheService.GetActiveAddressTrends(period, limit);
-        if (cached != null)
-        {
-            _logger.LogDebug("Returning cached active address trends ({Period}, {Limit})", period, limit);
-            return cached;
-        }
-
         await using var cmd = _connection.CreateCommand();
 
         if (period == "daily")
@@ -1422,7 +1391,6 @@ public class ClickHouseQueryService : IDisposable
         // Reverse to get chronological order
         items.Reverse();
 
-        _cacheService.SetActiveAddressTrends(period, limit, items);
         return items;
     }
 
@@ -1432,14 +1400,6 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<NewVsReturningDto>> GetNewVsReturningAddressesAsync(
         int limit = 50, CancellationToken ct = default)
     {
-        // Check cache first
-        var cached = _cacheService.GetNewVsReturning(limit);
-        if (cached != null)
-        {
-            _logger.LogDebug("Returning cached new vs returning addresses ({Limit})", limit);
-            return cached;
-        }
-
         // First, get the first epoch each address appeared in
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
@@ -1489,7 +1449,6 @@ public class ClickHouseQueryService : IDisposable
 
         items.Reverse();
 
-        _cacheService.SetNewVsReturning(limit, items);
         return items;
     }
 
@@ -1499,14 +1458,6 @@ public class ClickHouseQueryService : IDisposable
     public async Task<ExchangeFlowDto> GetExchangeFlowsAsync(
         int limit = 50, CancellationToken ct = default)
     {
-        // Check cache first
-        var cached = _cacheService.GetExchangeFlows(limit);
-        if (cached != null)
-        {
-            _logger.LogDebug("Returning cached exchange flows ({Limit})", limit);
-            return cached;
-        }
-
         // Get all exchange addresses from label service
         await _labelService.EnsureFreshDataAsync();
         var exchangeAddresses = _labelService.GetAddressesByType(AddressType.Exchange);
@@ -1574,7 +1525,6 @@ public class ClickHouseQueryService : IDisposable
         items.Reverse();
         var result = new ExchangeFlowDto(items, totalInflow, totalOutflow);
 
-        _cacheService.SetExchangeFlows(limit, result);
         return result;
     }
 
@@ -1585,14 +1535,6 @@ public class ClickHouseQueryService : IDisposable
     /// </summary>
     public async Task<HolderDistributionDto> GetHolderDistributionAsync(CancellationToken ct = default)
     {
-        // Check cache first
-        var cached = _cacheService.GetHolderDistribution();
-        if (cached != null)
-        {
-            _logger.LogDebug("Returning cached holder distribution");
-            return cached;
-        }
-
         // Check if we have spectrum snapshots available
         var hasSnapshots = await HasBalanceSnapshotsAsync(ct);
 
@@ -1721,7 +1663,6 @@ public class ClickHouseQueryService : IDisposable
                 totalBalance
             );
 
-            _cacheService.SetHolderDistribution(result);
             return result;
         }
 
@@ -1745,14 +1686,6 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<AvgTxSizeTrendDto>> GetAvgTxSizeTrendsAsync(
         string period = "epoch", int limit = 50, CancellationToken ct = default)
     {
-        // Check cache first
-        var cached = _cacheService.GetAvgTxSizeTrends(period, limit);
-        if (cached != null)
-        {
-            _logger.LogDebug("Returning cached avg tx size trends ({Period}, {Limit})", period, limit);
-            return cached;
-        }
-
         await using var cmd = _connection.CreateCommand();
 
         if (period == "daily")
@@ -1816,7 +1749,6 @@ public class ClickHouseQueryService : IDisposable
 
         items.Reverse();
 
-        _cacheService.SetAvgTxSizeTrends(period, limit, items);
         return items;
     }
 
