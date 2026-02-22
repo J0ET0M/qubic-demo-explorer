@@ -224,8 +224,10 @@ public class AnalyticsSnapshotService : BackgroundService
                     return false;
                 }
                 tickStart = nextTick.Value.TickNumber;
-                var startTimestamp = (DateTime?)nextTick.Value.Timestamp;
-                windowStartTime = startTimestamp.Value;
+                // Use last snapshot's end tick timestamp as window start
+                // (epoch boundary ticks can have incorrect timestamps)
+                var lastTickTimestamp = await queryService.GetTickTimestampAsync(lastTickEnd, ct);
+                windowStartTime = lastTickTimestamp ?? nextTick.Value.Timestamp;
             }
 
             // Calculate the window end time (start + 4 hours)
@@ -314,8 +316,10 @@ public class AnalyticsSnapshotService : BackgroundService
                     return false;
                 }
                 tickStart = nextTick.Value.TickNumber;
-                var startTimestamp = (DateTime?)nextTick.Value.Timestamp;
-                windowStartTime = startTimestamp.Value;
+                // Use last snapshot's end tick timestamp as window start
+                // (epoch boundary ticks can have incorrect timestamps)
+                var lastTickTimestamp = await queryService.GetTickTimestampAsync(lastTickEnd, ct);
+                windowStartTime = lastTickTimestamp ?? nextTick.Value.Timestamp;
             }
 
             // Calculate the window end time (start + 4 hours)
@@ -421,8 +425,10 @@ public class AnalyticsSnapshotService : BackgroundService
                     return false;
                 }
                 tickStart = nextTick.Value.TickNumber;
-                var startTimestamp = (DateTime?)nextTick.Value.Timestamp;
-                windowStartTime = startTimestamp.Value;
+                // Use last snapshot's end tick timestamp as window start
+                // (epoch boundary ticks can have incorrect timestamps)
+                var lastTickTimestamp = await queryService.GetTickTimestampAsync(lastTickEnd, ct);
+                windowStartTime = lastTickTimestamp ?? nextTick.Value.Timestamp;
             }
 
             // Calculate the window end time (start + 4 hours)
@@ -519,8 +525,11 @@ public class AnalyticsSnapshotService : BackgroundService
                     return false;
                 }
                 tickStart = nextTick.Value.TickNumber;
-                windowStartTime = nextTick.Value.Timestamp;
-                _logger.LogInformation("Burn stats: continuing from tick {Tick} at {Time}", tickStart, windowStartTime);
+                // Use last snapshot's end tick timestamp as window start
+                // (epoch boundary ticks can have incorrect timestamps)
+                var lastTickTimestamp = await queryService.GetTickTimestampAsync(lastTickEnd, ct);
+                windowStartTime = lastTickTimestamp ?? nextTick.Value.Timestamp;
+                _logger.LogInformation("Burn stats: continuing from tick {Tick}, window start {Time}", tickStart, windowStartTime);
             }
 
             var windowEndTime = windowStartTime.AddHours(4);
