@@ -167,7 +167,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var inputType = reader.GetFieldValue<ushort>(6);
+            var rowInputType = reader.GetFieldValue<ushort>(6);
             items.Add(new TransactionDto(
                 reader.GetString(0),
                 reader.GetFieldValue<ulong>(1),
@@ -175,8 +175,8 @@ public class ClickHouseQueryService : IDisposable
                 reader.GetString(3),
                 reader.GetString(4),
                 reader.GetFieldValue<ulong>(5),
-                inputType,
-                CoreTransactionInputTypes.IsKnownType(inputType) ? CoreTransactionInputTypes.GetDisplayName(inputType) : null,
+                rowInputType,
+                CoreTransactionInputTypes.IsKnownType(rowInputType) ? CoreTransactionInputTypes.GetDisplayName(rowInputType) : null,
                 reader.GetFieldValue<byte>(7) == 1,
                 reader.GetDateTime(8)
             ));
@@ -258,7 +258,7 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<PaginatedResponse<TransactionDto>> GetTransactionsAsync(
         int page, int limit, string? address = null, string? direction = null,
-        ulong? minAmount = null, bool? executed = null, CancellationToken ct = default)
+        ulong? minAmount = null, bool? executed = null, int? inputType = null, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
         var conditions = new List<string>();
@@ -278,6 +278,9 @@ public class ClickHouseQueryService : IDisposable
 
         if (executed.HasValue)
             conditions.Add($"executed = {(executed.Value ? 1 : 0)}");
+
+        if (inputType.HasValue)
+            conditions.Add($"input_type = {inputType.Value}");
 
         var whereClause = conditions.Count > 0
             ? "WHERE " + string.Join(" AND ", conditions)
@@ -299,7 +302,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var inputType = reader.GetFieldValue<ushort>(6);
+            var rowInputType = reader.GetFieldValue<ushort>(6);
             items.Add(new TransactionDto(
                 reader.GetString(0),
                 reader.GetFieldValue<ulong>(1),
@@ -307,8 +310,8 @@ public class ClickHouseQueryService : IDisposable
                 reader.GetString(3),
                 reader.GetString(4),
                 reader.GetFieldValue<ulong>(5),
-                inputType,
-                CoreTransactionInputTypes.IsKnownType(inputType) ? CoreTransactionInputTypes.GetDisplayName(inputType) : null,
+                rowInputType,
+                CoreTransactionInputTypes.IsKnownType(rowInputType) ? CoreTransactionInputTypes.GetDisplayName(rowInputType) : null,
                 reader.GetFieldValue<byte>(7) == 1,
                 reader.GetDateTime(8)
             ));

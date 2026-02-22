@@ -49,7 +49,7 @@ public class AddressController : ControllerBase
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetTransactionsAsync(page, limit, address, direction, minAmount, executed, ct);
+        var result = await _queryService.GetTransactionsAsync(page, limit, address, direction, minAmount, executed, ct: ct);
         return Ok(result);
     }
 

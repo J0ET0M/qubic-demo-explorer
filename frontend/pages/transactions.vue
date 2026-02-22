@@ -14,7 +14,25 @@ const executed = ref<boolean | undefined>(
   route.query.executed === 'true' ? true :
   route.query.executed === 'false' ? false : undefined
 )
+const inputType = ref<number | undefined>(
+  route.query.inputType !== undefined ? Number(route.query.inputType) : undefined
+)
 const limit = 20
+
+const inputTypeOptions = [
+  { value: undefined, label: 'All' },
+  { value: 0, label: 'Transfer' },
+  { value: 1, label: 'Vote Counter' },
+  { value: 2, label: 'Mining Solution' },
+  { value: 3, label: 'File Header' },
+  { value: 4, label: 'File Fragment' },
+  { value: 5, label: 'File Trailer' },
+  { value: 6, label: 'Oracle Reply Commit' },
+  { value: 7, label: 'Oracle Reply Reveal' },
+  { value: 8, label: 'Mining Share Counter' },
+  { value: 9, label: 'Execution Fee Report' },
+  { value: 10, label: 'Oracle User Query' },
+] as const
 
 // UI state for filter panel
 const showFilters = ref(false)
@@ -22,7 +40,7 @@ const minAmountInput = ref(minAmount.value?.toString() || '')
 
 // Check if any filters are active
 const hasActiveFilters = computed(() =>
-  address.value !== '' || minAmount.value !== undefined || executed.value !== undefined
+  address.value !== '' || minAmount.value !== undefined || executed.value !== undefined || inputType.value !== undefined
 )
 
 // Build filter options for API
@@ -32,18 +50,20 @@ const filterOptions = computed(() => {
     direction?: 'from' | 'to'
     minAmount?: number
     executed?: boolean
+    inputType?: number
   } = {}
   if (address.value) opts.address = address.value
   if (direction.value === 'from' || direction.value === 'to') opts.direction = direction.value
   if (minAmount.value !== undefined) opts.minAmount = minAmount.value
   if (executed.value !== undefined) opts.executed = executed.value
+  if (inputType.value !== undefined) opts.inputType = inputType.value
   return opts
 })
 
 const { data, pending, refresh } = await useAsyncData(
-  () => `transactions-${page.value}-${address.value}-${direction.value}-${minAmount.value}-${executed.value}`,
+  () => `transactions-${page.value}-${address.value}-${direction.value}-${minAmount.value}-${executed.value}-${inputType.value}`,
   () => api.getTransactions(page.value, limit, Object.keys(filterOptions.value).length > 0 ? filterOptions.value : undefined),
-  { watch: [page, address, direction, minAmount, executed] }
+  { watch: [page, address, direction, minAmount, executed, inputType] }
 )
 
 // Update URL when filters change
@@ -54,10 +74,11 @@ const updateUrl = () => {
   if (direction.value) query.direction = direction.value
   if (minAmount.value !== undefined) query.minAmount = minAmount.value
   if (executed.value !== undefined) query.executed = String(executed.value)
+  if (inputType.value !== undefined) query.inputType = inputType.value
   router.push({ query })
 }
 
-watch([page, address, direction, minAmount, executed], updateUrl)
+watch([page, address, direction, minAmount, executed, inputType], updateUrl)
 
 const updatePage = async (newPage: number) => {
   page.value = newPage
@@ -75,6 +96,7 @@ const clearFilters = () => {
   minAmountInput.value = ''
   minAmount.value = undefined
   executed.value = undefined
+  inputType.value = undefined
   page.value = 1
 }
 
@@ -135,6 +157,15 @@ const toggleExecutedFilter = (value: boolean | undefined) => {
                 <X class="h-3 w-3" />
               </button>
             </span>
+            <span
+              v-if="inputType !== undefined"
+              class="badge badge-warning flex items-center gap-1"
+            >
+              {{ inputTypeOptions.find(o => o.value === inputType)?.label || `Type ${inputType}` }}
+              <button @click="inputType = undefined; page = 1" class="hover:text-white">
+                <X class="h-3 w-3" />
+              </button>
+            </span>
           </div>
         </div>
 
@@ -149,7 +180,7 @@ const toggleExecutedFilter = (value: boolean | undefined) => {
 
       <!-- Expanded filter panel -->
       <div v-if="showFilters" class="mt-4 pt-4 border-t border-border">
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
           <div>
             <label class="block text-sm font-medium mb-1">Address</label>
             <input
@@ -183,6 +214,14 @@ const toggleExecutedFilter = (value: boolean | undefined) => {
               <option :value="undefined">All</option>
               <option :value="true">Executed only</option>
               <option :value="false">Failed only</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Input Type</label>
+            <select v-model="inputType" class="input w-full" @change="page = 1">
+              <option v-for="opt in inputTypeOptions" :key="String(opt.value)" :value="opt.value">
+                {{ opt.label }}{{ opt.value !== undefined ? ` (${opt.value})` : '' }}
+              </option>
             </select>
           </div>
           <div class="flex items-end">
