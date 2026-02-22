@@ -734,7 +734,7 @@ public class ClickHouseQueryService : IDisposable
                 COALESCE(ts.end_time, em.updated_at) as end_time,
                 em.initial_tick as first_tick,
                 if(em.is_complete = 1 AND em.end_tick > 0, em.end_tick, COALESCE(ts.last_tick, em.initial_tick)) as last_tick
-            FROM epoch_meta FINAL AS em
+            FROM epoch_meta AS em FINAL
             LEFT JOIN (
                 SELECT
                     epoch,
@@ -800,7 +800,7 @@ public class ClickHouseQueryService : IDisposable
                 if(em.is_complete = 1 AND em.transfer_count > 0, em.transfer_count, COALESCE(tr.transfer_count, 0)) as transfer_count,
                 if(em.is_complete = 1 AND em.qu_transferred > 0, em.qu_transferred, COALESCE(tr.qu_transferred, 0)) as qu_transferred,
                 COALESCE(asset.asset_transfer_count, 0) as asset_transfer_count
-            FROM epoch_meta FINAL AS em
+            FROM epoch_meta AS em FINAL
             LEFT JOIN (
                 SELECT
                     epoch,
