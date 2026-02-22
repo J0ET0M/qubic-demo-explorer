@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Qubic.Core;
 
 namespace QubicExplorer.Shared.Constants;
 

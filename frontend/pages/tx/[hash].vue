@@ -299,6 +299,10 @@ const copyToClipboard = async (text: string) => {
             <span class="detail-label">Input Type</span>
             <span class="detail-value">
               <template v-if="regularTx.inputType === 0">Transfer</template>
+              <template v-else-if="regularTx.inputTypeName">
+                <span class="badge badge-warning mr-2">{{ regularTx.inputTypeName }}</span>
+                <span class="text-foreground-muted text-sm">(Type {{ regularTx.inputType }})</span>
+              </template>
               <template v-else>
                 <span class="badge badge-info mr-2">{{ procedureName || `Procedure #${regularTx.inputType}` }}</span>
                 <span class="text-foreground-muted text-sm">(ID: {{ regularTx.inputType }})</span>
@@ -308,8 +312,20 @@ const copyToClipboard = async (text: string) => {
         </div>
       </div>
 
-      <!-- Decoded Input Data Card -->
-      <div class="card" v-if="regularTx.inputType > 0 && regularTx.inputData">
+      <!-- Core System Transaction Input Data -->
+      <div class="card" v-if="regularTx.parsedInput">
+        <h2 class="section-title mb-4">
+          <Code class="h-5 w-5 text-accent" />
+          Input Data
+        </h2>
+        <CoreInputDataViewer
+          :parsed="regularTx.parsedInput"
+          :raw-hex="regularTx.inputData"
+        />
+      </div>
+
+      <!-- Smart Contract Input Data -->
+      <div class="card" v-else-if="regularTx.inputType > 0 && regularTx.inputData">
         <h2 class="section-title mb-4">
           <Code class="h-5 w-5 text-accent" />
           Input Data

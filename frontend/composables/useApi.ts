@@ -391,6 +391,7 @@ interface TransactionDto {
   toAddress: string
   amount: number
   inputType: number
+  inputTypeName?: string
   executed: boolean
   timestamp: string
 }
@@ -398,7 +399,47 @@ interface TransactionDto {
 interface TransactionDetailDto extends TransactionDto {
   epoch: number
   inputData?: string
+  parsedInput?: ParsedInputData
   logs: LogDto[]
+}
+
+// Parsed input data for core/system transactions sent to the burn address
+interface ParsedInputData {
+  typeName: string
+  // VoteCounter / CustomMiningShareCounter
+  votes?: number[]
+  scores?: number[]
+  dataLock?: string
+  totalVotes?: number
+  totalScore?: number
+  nonZeroCount?: number
+  // MiningSolution
+  miningSeed?: string
+  nonce?: string
+  // FileHeader / FileTrailer
+  fileSize?: number
+  numberOfFragments?: number
+  fileFormat?: string
+  lastFileFragmentTransactionDigest?: string
+  // FileFragment
+  fragmentIndex?: number
+  prevFileFragmentTransactionDigest?: string
+  payloadSize?: number
+  // OracleReplyCommit
+  items?: Array<{ queryId: number; replyDigest: string; replyKnowledgeProof: string }>
+  // OracleReplyReveal
+  queryId?: number
+  replyDataHex?: string
+  replyDataSize?: number
+  // ExecutionFeeReport
+  phaseNumber?: number
+  numEntries?: number
+  entries?: Array<{ contractIndex: number; executionFee: number }>
+  // OracleUserQuery
+  oracleInterfaceIndex?: number
+  timeoutMilliseconds?: number
+  queryDataHex?: string
+  queryDataSize?: number
 }
 
 interface SpecialTransactionDto {
@@ -944,4 +985,5 @@ export type {
   EmissionSummaryDto,
   EmissionDetailsDto,
   ComputorEmissionResponseDto,
+  ParsedInputData,
 }

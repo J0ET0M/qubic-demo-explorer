@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Text;
 using ClickHouse.Client.ADO;
 using Microsoft.Extensions.Options;
+using Qubic.Core;
 using QubicExplorer.Shared.Configuration;
 using QubicExplorer.Shared.Constants;
 using QubicExplorer.Shared.DTOs;
