@@ -1,3 +1,4 @@
+using QubicExplorer.Shared.Constants;
 using QubicExplorer.Shared.DTOs;
 
 namespace QubicExplorer.Api.Services;
@@ -11,8 +12,7 @@ namespace QubicExplorer.Api.Services;
 /// </summary>
 public class EpochTransitionService : BackgroundService
 {
-    // END_EPOCH custom message identifier: #define CUSTOM_MESSAGE_OP_END_EPOCH 4850183582582591045ULL
-    private const ulong END_EPOCH_OP_CODE = 4850183582582591045UL;
+    private const ulong END_EPOCH_OP_CODE = LogTypes.CustomMessageOpEndEpoch;
 
     private readonly IServiceProvider _serviceProvider;
     private readonly BobProxyService _bobProxy;

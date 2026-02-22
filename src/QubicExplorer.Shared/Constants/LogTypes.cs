@@ -80,11 +80,14 @@ public static class LogTypes
     public const byte AssetOwnershipManagingContractChange = 11;
     public const byte AssetPossessionManagingContractChange = 12;
     public const byte ContractReserveDeduction = 13;
+    public const byte OracleQueryStatusChange = 14;
     public const byte CustomMessage = 255;
 
-    // CustomMessage operation codes for reward distribution
+    // CustomMessage operation codes
     public const ulong CustomMessageOpStartDistributeRewards = 6217575821008262227; // STA_DDIV
     public const ulong CustomMessageOpEndDistributeRewards = 6217575821008457285;   // END_DDIV
+    public const ulong CustomMessageOpStartEpoch = 4850183582582395987;             // STA_EPOC
+    public const ulong CustomMessageOpEndEpoch = 4850183582582591045;               // END_EPOC
 
     // Number of computors (for reward per share calculation)
     public const int NumberOfComputors = 676;
@@ -105,6 +108,7 @@ public static class LogTypes
         AssetOwnershipManagingContractChange => "ASSET_OWNERSHIP_MANAGING_CONTRACT_CHANGE",
         AssetPossessionManagingContractChange => "ASSET_POSSESSION_MANAGING_CONTRACT_CHANGE",
         ContractReserveDeduction => "CONTRACT_RESERVE_DEDUCTION",
+        OracleQueryStatusChange => "ORACLE_QUERY_STATUS_CHANGE",
         CustomMessage => "CUSTOM_MESSAGE",
         _ => $"UNKNOWN_{logType}"
     };
