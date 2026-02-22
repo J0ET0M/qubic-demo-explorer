@@ -45,6 +45,25 @@ public class AdminController : ControllerBase
         return Ok(new { success = true, epoch, tickStart, tickEnd });
     }
 
+    /// <summary>
+    /// Recalculates avg_tx_size, median_tx_size, and exchange flow columns
+    /// for all network_stats_history snapshots (excludes zero-amount transfers).
+    /// </summary>
+    [HttpPost("network-stats/recalculate")]
+    public async Task<IActionResult> RecalculateNetworkStats(CancellationToken ct = default)
+    {
+        _logger.LogInformation("Manual recalculation of network stats triggered");
+
+        var updatedCount = await _queryService.RecalculateNetworkStatsAsync(ct);
+
+        return Ok(new
+        {
+            success = true,
+            message = $"Recalculated {updatedCount} snapshots with corrected avg/median tx size and exchange flows",
+            snapshotsUpdated = updatedCount
+        });
+    }
+
     // =====================================================
     // MINER FLOW ADMIN
     // =====================================================

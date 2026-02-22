@@ -1507,7 +1507,7 @@ public class ClickHouseQueryService : IDisposable
                     sum(amount) as inflow_volume,
                     count() as inflow_count
                 FROM logs
-                WHERE log_type = 0 AND dest_address IN ('{addressList}')
+                WHERE log_type = 0 AND amount > 0 AND dest_address IN ('{addressList}')
                 GROUP BY epoch
             ),
             outflows AS (
@@ -1516,7 +1516,7 @@ public class ClickHouseQueryService : IDisposable
                     sum(amount) as outflow_volume,
                     count() as outflow_count
                 FROM logs
-                WHERE log_type = 0 AND source_address IN ('{addressList}')
+                WHERE log_type = 0 AND amount > 0 AND source_address IN ('{addressList}')
                 GROUP BY epoch
             )
             SELECT
@@ -1728,7 +1728,7 @@ public class ClickHouseQueryService : IDisposable
                     avg(amount) as avg_tx_size,
                     median(amount) as median_tx_size
                 FROM logs
-                WHERE log_type = 0
+                WHERE log_type = 0 AND amount > 0
                 GROUP BY date
                 ORDER BY date DESC
                 LIMIT {limit}";
@@ -1743,7 +1743,7 @@ public class ClickHouseQueryService : IDisposable
                     avg(amount) as avg_tx_size,
                     median(amount) as median_tx_size
                 FROM logs
-                WHERE log_type = 0
+                WHERE log_type = 0 AND amount > 0
                 GROUP BY epoch
                 ORDER BY epoch DESC
                 LIMIT {limit}";

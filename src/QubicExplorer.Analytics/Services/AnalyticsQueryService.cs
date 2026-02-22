@@ -511,7 +511,7 @@ public class AnalyticsQueryService : IDisposable
                 avg(amount) as avg_size,
                 median(amount) as median_size
             FROM logs FINAL
-            WHERE {logFilter} AND log_type = 0";
+            WHERE {logFilter} AND log_type = 0 AND amount > 0";
 
         double avgTxSize = 0;
         double medianTxSize = 0;
@@ -1004,7 +1004,7 @@ public class AnalyticsQueryService : IDisposable
                 sumIf(amount, source_address IN ('{addressList}')) as outflow_volume,
                 countIf(source_address IN ('{addressList}')) as outflow_count
             FROM logs
-            WHERE log_type = 0 AND epoch = {epoch}";
+            WHERE log_type = 0 AND amount > 0 AND epoch = {epoch}";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
@@ -1042,7 +1042,7 @@ public class AnalyticsQueryService : IDisposable
                 sumIf(amount, source_address IN ('{addressList}')) as outflow_volume,
                 countIf(source_address IN ('{addressList}')) as outflow_count
             FROM logs
-            WHERE log_type = 0 AND tick_number >= {tickStart} AND tick_number <= {tickEnd}";
+            WHERE log_type = 0 AND amount > 0 AND tick_number >= {tickStart} AND tick_number <= {tickEnd}";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
@@ -1696,6 +1696,107 @@ public class AnalyticsQueryService : IDisposable
     }
 
     /// <summary>
+    /// Recalculates avg_tx_size, median_tx_size, and exchange flow columns
+    /// for all network_stats_history snapshots, excluding zero-amount transfers.
+    /// Returns the number of snapshots updated.
+    /// </summary>
+    public async Task<int> RecalculateNetworkStatsAsync(CancellationToken ct = default)
+    {
+        // Get all existing snapshots
+        await using var cmdSelect = _connection.CreateCommand();
+        cmdSelect.CommandText = @"
+            SELECT epoch, snapshot_at, tick_start, tick_end
+            FROM network_stats_history FINAL
+            ORDER BY epoch, snapshot_at";
+
+        var snapshots = new List<(uint Epoch, DateTime SnapshotAt, ulong TickStart, ulong TickEnd)>();
+        await using (var reader = await cmdSelect.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                snapshots.Add((
+                    reader.GetFieldValue<uint>(0),
+                    reader.GetDateTime(1),
+                    reader.GetFieldValue<ulong>(2),
+                    reader.GetFieldValue<ulong>(3)
+                ));
+            }
+        }
+
+        if (snapshots.Count == 0)
+            return 0;
+
+        _logger.LogInformation("Recalculating {Count} network stats snapshots", snapshots.Count);
+
+        foreach (var s in snapshots)
+        {
+            var isWindowSnapshot = s.TickStart > 0 && s.TickEnd > 0;
+            string logFilter = isWindowSnapshot
+                ? $"tick_number >= {s.TickStart} AND tick_number <= {s.TickEnd}"
+                : $"epoch = {s.Epoch}";
+
+            // Recalculate avg/median tx size (excluding zero-amount)
+            await using var sizeCmd = _connection.CreateCommand();
+            sizeCmd.CommandText = $@"
+                SELECT
+                    avg(amount) as avg_size,
+                    median(amount) as median_size
+                FROM logs FINAL
+                WHERE {logFilter} AND log_type = 0 AND amount > 0";
+
+            double avgTxSize = 0, medianTxSize = 0;
+            await using (var reader = await sizeCmd.ExecuteReaderAsync(ct))
+            {
+                if (await reader.ReadAsync(ct))
+                {
+                    avgTxSize = ToSafeDouble(reader.GetValue(0));
+                    medianTxSize = ToSafeDouble(reader.GetValue(1));
+                }
+            }
+
+            // Recalculate exchange flows (excluding zero-amount)
+            var exchangeFlows = isWindowSnapshot
+                ? await GetExchangeFlowsForTickRangeAsync(s.TickStart, s.TickEnd, ct)
+                : await GetExchangeFlowsForEpochAsync(s.Epoch, ct);
+
+            // Insert corrected row with bumped snapshot_at for ReplacingMergeTree versioning
+            var newSnapshotAt = s.SnapshotAt.AddMilliseconds(1);
+
+            await using var cmdUpdate = _connection.CreateCommand();
+            cmdUpdate.CommandText = $@"
+                INSERT INTO network_stats_history
+                SELECT
+                    epoch, '{newSnapshotAt:yyyy-MM-dd HH:mm:ss.fff}' as snapshot_at,
+                    tick_start, tick_end,
+                    total_transactions, total_transfers, total_volume,
+                    unique_senders, unique_receivers, total_active_addresses,
+                    new_addresses, returning_addresses,
+                    {(ulong)exchangeFlows.InflowVolume} as exchange_inflow_volume,
+                    {exchangeFlows.InflowCount} as exchange_inflow_count,
+                    {(ulong)exchangeFlows.OutflowVolume} as exchange_outflow_volume,
+                    {exchangeFlows.OutflowCount} as exchange_outflow_count,
+                    {(long)exchangeFlows.InflowVolume - (long)exchangeFlows.OutflowVolume} as exchange_net_flow,
+                    sc_call_count, sc_unique_callers,
+                    {avgTxSize} as avg_tx_size,
+                    {medianTxSize} as median_tx_size,
+                    new_users_100m_plus, new_users_1b_plus, new_users_10b_plus
+                FROM network_stats_history FINAL
+                WHERE epoch = {s.Epoch}
+                  AND snapshot_at = '{s.SnapshotAt:yyyy-MM-dd HH:mm:ss.fff}'";
+
+            await cmdUpdate.ExecuteNonQueryAsync(ct);
+        }
+
+        // Force merge to apply ReplacingMergeTree deduplication
+        await using var cmdOptimize = _connection.CreateCommand();
+        cmdOptimize.CommandText = "OPTIMIZE TABLE network_stats_history FINAL";
+        await cmdOptimize.ExecuteNonQueryAsync(ct);
+
+        _logger.LogInformation("Recalculated {Count} network stats snapshots", snapshots.Count);
+        return snapshots.Count;
+    }
+
+    /// <summary>
     /// Gets total emission for computors in an epoch (from computor_emissions table)
     /// </summary>
     public async Task<decimal> GetTotalEmissionForEpochAsync(uint epoch, CancellationToken ct = default)
@@ -2211,7 +2312,7 @@ public class AnalyticsQueryService : IDisposable
                 COALESCE(sum(amount), 0) as total_amount,
                 count() as tx_count
             FROM logs
-            WHERE log_type = 0
+            WHERE log_type = 0 AND amount > 0
               AND source_address != '{AddressLabelService.BurnAddress}'
               AND dest_address IN ({addressList})
               AND tick_number BETWEEN {tickStart} AND {tickEnd}";
@@ -2250,7 +2351,7 @@ public class AnalyticsQueryService : IDisposable
                 COALESCE(sum(amount), 0) as total_amount,
                 count() as tx_count
             FROM logs
-            WHERE log_type = 0
+            WHERE log_type = 0 AND amount > 0
               AND source_address IN ({addressList})
               AND dest_address != '{AddressLabelService.BurnAddress}'
               AND tick_number BETWEEN {tickStart} AND {tickEnd}";
