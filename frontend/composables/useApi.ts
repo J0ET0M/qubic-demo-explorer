@@ -439,9 +439,11 @@ interface ParsedInputData {
   entries?: Array<{ contractIndex: number; executionFee: number }>
   // OracleUserQuery
   oracleInterfaceIndex?: number
+  oracleInterfaceName?: string
   timeoutMilliseconds?: number
   queryDataHex?: string
   queryDataSize?: number
+  parsedQueryFields?: Array<{ name: string; value: string; type: string }>
 }
 
 interface SpecialTransactionDto {

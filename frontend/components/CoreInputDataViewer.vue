@@ -314,17 +314,40 @@ const formatFileSize = (bytes: number) => {
       <div class="space-y-0">
         <div class="detail-row">
           <span class="detail-label">Oracle Interface</span>
-          <span class="detail-value font-mono">{{ parsed.oracleInterfaceIndex }}</span>
+          <span class="detail-value font-mono">
+            {{ parsed.oracleInterfaceName || `#${parsed.oracleInterfaceIndex}` }}
+            <span v-if="parsed.oracleInterfaceName" class="text-foreground-muted text-sm ml-1">({{ parsed.oracleInterfaceIndex }})</span>
+          </span>
         </div>
         <div class="detail-row">
           <span class="detail-label">Timeout</span>
           <span class="detail-value font-mono">{{ parsed.timeoutMilliseconds?.toLocaleString() }} ms</span>
         </div>
-        <div v-if="parsed.queryDataSize && parsed.queryDataSize > 0" class="detail-row">
+      </div>
+
+      <!-- Parsed query fields -->
+      <div v-if="parsed.parsedQueryFields?.length" class="space-y-0 mt-2">
+        <div class="text-xs font-semibold text-foreground-muted/70 uppercase tracking-wider mb-1">Query Data</div>
+        <div v-for="field in parsed.parsedQueryFields" :key="field.name" class="detail-row">
+          <span class="detail-label">{{ field.name }}</span>
+          <span class="detail-value">
+            <template v-if="field.type === 'id'">
+              <AddressDisplay :address="field.value" />
+            </template>
+            <template v-else>
+              <span class="font-mono">{{ field.value }}</span>
+            </template>
+          </span>
+        </div>
+      </div>
+
+      <!-- Fallback to raw hex if not parsed -->
+      <div v-else-if="parsed.queryDataHex" class="space-y-0 mt-2">
+        <div class="detail-row">
           <span class="detail-label">Query Data Size</span>
           <span class="detail-value font-mono">{{ parsed.queryDataSize }} bytes</span>
         </div>
-        <div v-if="parsed.queryDataHex" class="detail-row">
+        <div class="detail-row">
           <span class="detail-label">Query Data</span>
           <span class="detail-value font-mono text-xs break-all">{{ parsed.queryDataHex }}</span>
         </div>

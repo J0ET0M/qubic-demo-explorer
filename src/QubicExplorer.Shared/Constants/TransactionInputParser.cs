@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json.Serialization;
 using Qubic.Core;
+using Qubic.Core.Entities;
 
 namespace QubicExplorer.Shared.Constants;
 
@@ -245,11 +246,89 @@ public static class TransactionInputParser
         var queryDataSize = data.Length - 8;
         var queryData = queryDataSize > 0 ? ToHexString(data, 8, queryDataSize) : null;
 
+        var interfaceName = oracleInterfaceIndex switch
+        {
+            0 => "Price",
+            1 => "Mock",
+            _ => null
+        };
+
+        List<OracleQueryField>? parsedFields = null;
+        try
+        {
+            parsedFields = oracleInterfaceIndex switch
+            {
+                0 => ParsePriceQuery(data.AsSpan(8)),
+                1 => ParseMockQuery(data.AsSpan(8)),
+                _ => null
+            };
+        }
+        catch
+        {
+            // Silently fall back to raw hex if parsing fails
+        }
+
         return new OracleUserQueryInputData(
             OracleInterfaceIndex: oracleInterfaceIndex,
+            OracleInterfaceName: interfaceName,
             TimeoutMilliseconds: timeoutMilliseconds,
             QueryDataHex: queryData,
-            QueryDataSize: queryDataSize);
+            QueryDataSize: queryDataSize,
+            ParsedQueryFields: parsedFields);
+    }
+
+    // Price oracle query: oracle (32B id) + timestamp (8B DateAndTime) + currency1 (32B id) + currency2 (32B id)
+    private static List<OracleQueryField> ParsePriceQuery(ReadOnlySpan<byte> queryData)
+    {
+        if (queryData.Length < 104) return [];
+
+        var fields = new List<OracleQueryField>();
+
+        var oracleId = PublicKeyToIdentity(queryData.Slice(0, 32));
+        fields.Add(new OracleQueryField("Oracle", oracleId, "id"));
+
+        var timestampValue = BinaryPrimitives.ReadUInt64LittleEndian(queryData.Slice(32, 8));
+        fields.Add(new OracleQueryField("Timestamp", FormatDateAndTime(timestampValue), "DateAndTime"));
+
+        var currency1 = PublicKeyToIdentity(queryData.Slice(40, 32));
+        fields.Add(new OracleQueryField("Currency 1", currency1, "id"));
+
+        var currency2 = PublicKeyToIdentity(queryData.Slice(72, 32));
+        fields.Add(new OracleQueryField("Currency 2", currency2, "id"));
+
+        return fields;
+    }
+
+    // Mock oracle query: value (8B uint64)
+    private static List<OracleQueryField> ParseMockQuery(ReadOnlySpan<byte> queryData)
+    {
+        if (queryData.Length < 8) return [];
+
+        var value = BinaryPrimitives.ReadUInt64LittleEndian(queryData.Slice(0, 8));
+        return [new OracleQueryField("Value", value.ToString(), "uint64")];
+    }
+
+    private static string PublicKeyToIdentity(ReadOnlySpan<byte> publicKey)
+    {
+        return QubicIdentity.FromPublicKey(publicKey.ToArray()).Identity;
+    }
+
+    /// <summary>
+    /// Decodes a Qubic DateAndTime packed uint64 into a human-readable string.
+    /// Bit layout: year(18) | month(4) | day(5) | hour(5) | minute(6) | second(6) | millisec(10) | microsec(10)
+    /// </summary>
+    private static string FormatDateAndTime(ulong value)
+    {
+        var year = (int)(value >> 46) & 0x3FFFF;
+        var month = (int)(value >> 42) & 0xF;
+        var day = (int)(value >> 37) & 0x1F;
+        var hour = (int)(value >> 32) & 0x1F;
+        var minute = (int)(value >> 26) & 0x3F;
+        var second = (int)(value >> 20) & 0x3F;
+        var millisec = (int)(value >> 10) & 0x3FF;
+
+        if (value == 0) return "0 (unset)";
+        return $"{year:D4}-{month:D2}-{day:D2} {hour:D2}:{minute:D2}:{second:D2}.{millisec:D3}";
     }
 
     // =========================================================================
@@ -403,11 +482,19 @@ public record ExecutionFeeReportInputData(
     public override string TypeName => "EXECUTION_FEE_REPORT";
 }
 
+public record OracleQueryField(
+    string Name,
+    string Value,
+    string Type
+);
+
 public record OracleUserQueryInputData(
     uint OracleInterfaceIndex,
+    string? OracleInterfaceName,
     uint TimeoutMilliseconds,
     string? QueryDataHex,
-    int QueryDataSize
+    int QueryDataSize,
+    List<OracleQueryField>? ParsedQueryFields
 ) : ParsedInputData
 {
     public override string TypeName => "ORACLE_USER_QUERY";
