@@ -11,6 +11,29 @@ const showRaw = ref(false)
 const showVotes = ref(false)
 const showScores = ref(false)
 
+// Compute stats and heatmap data for vote/score arrays
+const computorStats = (values: number[] | undefined) => {
+  if (!values?.length) return null
+  const nonZero = values.filter(v => v > 0)
+  const max = Math.max(...values)
+  const min = nonZero.length > 0 ? Math.min(...nonZero) : 0
+  const avg = nonZero.length > 0 ? nonZero.reduce((a, b) => a + b, 0) / nonZero.length : 0
+  const median = nonZero.length > 0
+    ? [...nonZero].sort((a, b) => a - b)[Math.floor(nonZero.length / 2)]
+    : 0
+  return { max, min, avg, median, activeCount: nonZero.length, activePercent: (nonZero.length / values.length * 100) }
+}
+
+const voteStats = computed(() => computorStats(props.parsed.votes))
+const scoreStats = computed(() => computorStats(props.parsed.scores))
+
+const heatmapColor = (value: number, max: number) => {
+  if (value === 0 || max === 0) return ''
+  const intensity = Math.max(0.15, value / max)
+  // Use the accent color #6c8ccc with variable opacity
+  return `rgba(108, 140, 204, ${intensity})`
+}
+
 const typeIcon = computed(() => {
   switch (props.parsed.typeName) {
     case 'VOTE_COUNTER': return BarChart3
@@ -82,6 +105,58 @@ const formatFileSize = (bytes: number) => {
           <span class="detail-value font-mono text-xs break-all">{{ parsed.dataLock }}</span>
         </div>
       </div>
+
+      <!-- Distribution stats -->
+      <div v-if="voteStats" class="space-y-3">
+        <!-- Active computors bar -->
+        <div>
+          <div class="flex items-center justify-between text-xs text-foreground-muted mb-1">
+            <span>Participation</span>
+            <span>{{ voteStats.activePercent.toFixed(1) }}%</span>
+          </div>
+          <div class="h-2 bg-background-secondary rounded-full overflow-hidden">
+            <div
+              class="h-full bg-accent rounded-full transition-all"
+              :style="{ width: `${voteStats.activePercent}%` }"
+            />
+          </div>
+        </div>
+        <!-- Stats row -->
+        <div class="grid grid-cols-4 gap-2 text-center">
+          <div class="bg-background-secondary rounded-lg p-2">
+            <div class="text-xs text-foreground-muted">Min</div>
+            <div class="font-mono text-sm">{{ voteStats.min }}</div>
+          </div>
+          <div class="bg-background-secondary rounded-lg p-2">
+            <div class="text-xs text-foreground-muted">Max</div>
+            <div class="font-mono text-sm">{{ voteStats.max }}</div>
+          </div>
+          <div class="bg-background-secondary rounded-lg p-2">
+            <div class="text-xs text-foreground-muted">Avg</div>
+            <div class="font-mono text-sm">{{ voteStats.avg.toFixed(1) }}</div>
+          </div>
+          <div class="bg-background-secondary rounded-lg p-2">
+            <div class="text-xs text-foreground-muted">Median</div>
+            <div class="font-mono text-sm">{{ voteStats.median }}</div>
+          </div>
+        </div>
+
+        <!-- Heatmap grid (26x26 = 676 computors) -->
+        <div>
+          <div class="text-xs text-foreground-muted mb-1">Computor Heatmap</div>
+          <div class="inline-grid grid-cols-[repeat(26,1fr)] gap-px">
+            <div
+              v-for="(vote, i) in parsed.votes"
+              :key="i"
+              class="w-2.5 h-2.5 rounded-sm"
+              :style="vote > 0 ? { backgroundColor: heatmapColor(vote, voteStats.max) } : {}"
+              :class="vote === 0 ? 'bg-background-secondary' : ''"
+              :title="`Computor ${i}: ${vote} votes`"
+            />
+          </div>
+        </div>
+      </div>
+
       <!-- Expandable vote list -->
       <button
         @click="showVotes = !showVotes"
@@ -140,6 +215,56 @@ const formatFileSize = (bytes: number) => {
           <span class="detail-value font-mono text-xs break-all">{{ parsed.dataLock }}</span>
         </div>
       </div>
+
+      <!-- Distribution stats -->
+      <div v-if="scoreStats" class="space-y-3">
+        <div>
+          <div class="flex items-center justify-between text-xs text-foreground-muted mb-1">
+            <span>Participation</span>
+            <span>{{ scoreStats.activePercent.toFixed(1) }}%</span>
+          </div>
+          <div class="h-2 bg-background-secondary rounded-full overflow-hidden">
+            <div
+              class="h-full bg-accent rounded-full transition-all"
+              :style="{ width: `${scoreStats.activePercent}%` }"
+            />
+          </div>
+        </div>
+        <div class="grid grid-cols-4 gap-2 text-center">
+          <div class="bg-background-secondary rounded-lg p-2">
+            <div class="text-xs text-foreground-muted">Min</div>
+            <div class="font-mono text-sm">{{ scoreStats.min }}</div>
+          </div>
+          <div class="bg-background-secondary rounded-lg p-2">
+            <div class="text-xs text-foreground-muted">Max</div>
+            <div class="font-mono text-sm">{{ scoreStats.max }}</div>
+          </div>
+          <div class="bg-background-secondary rounded-lg p-2">
+            <div class="text-xs text-foreground-muted">Avg</div>
+            <div class="font-mono text-sm">{{ scoreStats.avg.toFixed(1) }}</div>
+          </div>
+          <div class="bg-background-secondary rounded-lg p-2">
+            <div class="text-xs text-foreground-muted">Median</div>
+            <div class="font-mono text-sm">{{ scoreStats.median }}</div>
+          </div>
+        </div>
+
+        <!-- Heatmap grid -->
+        <div>
+          <div class="text-xs text-foreground-muted mb-1">Computor Heatmap</div>
+          <div class="inline-grid grid-cols-[repeat(26,1fr)] gap-px">
+            <div
+              v-for="(score, i) in parsed.scores"
+              :key="i"
+              class="w-2.5 h-2.5 rounded-sm"
+              :style="score > 0 ? { backgroundColor: heatmapColor(score, scoreStats.max) } : {}"
+              :class="score === 0 ? 'bg-background-secondary' : ''"
+              :title="`Computor ${i}: ${score} shares`"
+            />
+          </div>
+        </div>
+      </div>
+
       <button
         @click="showScores = !showScores"
         class="btn btn-ghost btn-sm flex items-center gap-1"
