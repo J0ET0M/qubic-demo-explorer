@@ -28,6 +28,15 @@ public class ClickHouseQueryService : IDisposable
         _connection.Open();
     }
 
+    /// <summary>
+    /// Safely convert ClickHouse values that may be BigInteger (from UInt128/Int128 type promotion)
+    /// </summary>
+    private static ulong ToUInt64(object value) =>
+        value is BigInteger bi ? (ulong)bi : Convert.ToUInt64(value);
+
+    private static decimal ToDecimal(object value) =>
+        value is BigInteger bi ? (decimal)bi : Convert.ToDecimal(value);
+
     public async Task<PaginatedResponse<TickDto>> GetTicksAsync(int page, int limit, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
@@ -763,15 +772,15 @@ public class ClickHouseQueryService : IDisposable
         while (await reader.ReadAsync(ct))
         {
             items.Add(new EpochSummaryDto(
-                reader.GetFieldValue<uint>(0),          // epoch
-                Convert.ToUInt64(reader.GetValue(1)),   // tick_count
-                Convert.ToUInt64(reader.GetValue(2)),   // tx_count
-                Convert.ToDecimal(reader.GetValue(3)),  // total_volume
-                Convert.ToUInt64(reader.GetValue(4)),   // active_addresses
-                reader.GetDateTime(5),                  // start_time
-                reader.GetDateTime(6),                  // end_time
-                Convert.ToUInt64(reader.GetValue(7)),   // initial_tick (from epoch_meta)
-                Convert.ToUInt64(reader.GetValue(8))    // end_tick (from epoch_meta)
+                reader.GetFieldValue<uint>(0),  // epoch
+                ToUInt64(reader.GetValue(1)),   // tick_count
+                ToUInt64(reader.GetValue(2)),   // tx_count
+                ToDecimal(reader.GetValue(3)),  // total_volume
+                ToUInt64(reader.GetValue(4)),   // active_addresses
+                reader.GetDateTime(5),          // start_time
+                reader.GetDateTime(6),          // end_time
+                ToUInt64(reader.GetValue(7)),   // initial_tick
+                ToUInt64(reader.GetValue(8))    // end_tick
             ));
         }
 
@@ -848,19 +857,19 @@ public class ClickHouseQueryService : IDisposable
 
         return new EpochStatsDto(
             reader.GetFieldValue<uint>(0),
-            Convert.ToUInt64(reader.GetValue(1)),
-            Convert.ToUInt64(reader.GetValue(2)),
-            Convert.ToUInt64(reader.GetValue(3)),
+            ToUInt64(reader.GetValue(1)),
+            ToUInt64(reader.GetValue(2)),
+            ToUInt64(reader.GetValue(3)),
             reader.GetDateTime(4),
             reader.GetDateTime(5),
-            Convert.ToUInt64(reader.GetValue(6)),
-            Convert.ToDecimal(reader.GetValue(7)),
-            Convert.ToUInt64(reader.GetValue(8)),
-            Convert.ToUInt64(reader.GetValue(9)),
-            Convert.ToUInt64(reader.GetValue(10)),
-            Convert.ToUInt64(reader.GetValue(11)),
-            Convert.ToDecimal(reader.GetValue(12)),
-            Convert.ToUInt64(reader.GetValue(13))
+            ToUInt64(reader.GetValue(6)),
+            ToDecimal(reader.GetValue(7)),
+            ToUInt64(reader.GetValue(8)),
+            ToUInt64(reader.GetValue(9)),
+            ToUInt64(reader.GetValue(10)),
+            ToUInt64(reader.GetValue(11)),
+            ToDecimal(reader.GetValue(12)),
+            ToUInt64(reader.GetValue(13))
         );
     }
 
@@ -887,8 +896,8 @@ public class ClickHouseQueryService : IDisposable
                 reader.GetFieldValue<uint>(0),
                 logType,
                 LogTypes.GetName(logType),
-                Convert.ToUInt64(reader.GetValue(2)),
-                Convert.ToDecimal(reader.GetValue(3))
+                ToUInt64(reader.GetValue(2)),
+                ToDecimal(reader.GetValue(3))
             ));
         }
 
@@ -1016,7 +1025,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var totalAmount = Convert.ToUInt64(reader.GetValue(4));
+            var totalAmount = ToUInt64(reader.GetValue(4));
             var amountPerShare = (decimal)totalAmount / LogTypes.NumberOfComputors;
 
             items.Add(new RewardDistributionDto(
@@ -1113,7 +1122,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var totalAmount = Convert.ToUInt64(reader.GetValue(4));
+            var totalAmount = ToUInt64(reader.GetValue(4));
             var amountPerShare = (decimal)totalAmount / LogTypes.NumberOfComputors;
 
             items.Add(new RewardDistributionDto(
@@ -1129,7 +1138,7 @@ public class ClickHouseQueryService : IDisposable
 
             // These are the same for all rows due to window functions
             totalCount = Convert.ToInt64(reader.GetValue(6));
-            totalAllTimeDistributed = Convert.ToUInt64(reader.GetValue(7));
+            totalAllTimeDistributed = ToUInt64(reader.GetValue(7));
         }
 
         return (items, totalCount, totalAllTimeDistributed);
@@ -1192,9 +1201,9 @@ public class ClickHouseQueryService : IDisposable
                 address,
                 label?.Label,
                 label?.Type.ToString().ToLowerInvariant(),
-                Convert.ToUInt64(reader.GetValue(1)),
-                Convert.ToUInt64(reader.GetValue(2)),
-                Convert.ToUInt64(reader.GetValue(3)),
+                ToUInt64(reader.GetValue(1)),
+                ToUInt64(reader.GetValue(2)),
+                ToUInt64(reader.GetValue(3)),
                 Convert.ToUInt32(reader.GetValue(4)),
                 Convert.ToUInt32(reader.GetValue(5)),
                 Convert.ToUInt32(reader.GetValue(6))
@@ -1311,8 +1320,8 @@ public class ClickHouseQueryService : IDisposable
                     contractAddress,
                     label.Label,
                     label.ContractIndex,
-                    Convert.ToUInt64(reader.GetValue(1)),
-                    Convert.ToUInt64(reader.GetValue(2)),
+                    ToUInt64(reader.GetValue(1)),
+                    ToUInt64(reader.GetValue(2)),
                     Convert.ToUInt32(reader.GetValue(3))
                 ));
             }
@@ -1371,9 +1380,9 @@ public class ClickHouseQueryService : IDisposable
                 items.Add(new ActiveAddressTrendDto(
                     null,
                     reader.GetDateTime(0),
-                    Convert.ToUInt64(reader.GetValue(1)),
-                    Convert.ToUInt64(reader.GetValue(2)),
-                    Convert.ToUInt64(reader.GetValue(3))
+                    ToUInt64(reader.GetValue(1)),
+                    ToUInt64(reader.GetValue(2)),
+                    ToUInt64(reader.GetValue(3))
                 ));
             }
             else
@@ -1381,9 +1390,9 @@ public class ClickHouseQueryService : IDisposable
                 items.Add(new ActiveAddressTrendDto(
                     reader.GetFieldValue<uint>(0),
                     null,
-                    Convert.ToUInt64(reader.GetValue(1)),
-                    Convert.ToUInt64(reader.GetValue(2)),
-                    Convert.ToUInt64(reader.GetValue(3))
+                    ToUInt64(reader.GetValue(1)),
+                    ToUInt64(reader.GetValue(2)),
+                    ToUInt64(reader.GetValue(3))
                 ));
             }
         }
@@ -1441,9 +1450,9 @@ public class ClickHouseQueryService : IDisposable
         {
             items.Add(new NewVsReturningDto(
                 reader.GetFieldValue<uint>(0),
-                Convert.ToUInt64(reader.GetValue(1)),
-                Convert.ToUInt64(reader.GetValue(2)),
-                Convert.ToUInt64(reader.GetValue(3))
+                ToUInt64(reader.GetValue(1)),
+                ToUInt64(reader.GetValue(2)),
+                ToUInt64(reader.GetValue(3))
             ));
         }
 
@@ -1507,8 +1516,8 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var inflowVolume = Convert.ToUInt64(reader.GetValue(1));
-            var outflowVolume = Convert.ToUInt64(reader.GetValue(3));
+            var inflowVolume = ToUInt64(reader.GetValue(1));
+            var outflowVolume = ToUInt64(reader.GetValue(3));
             totalInflow += inflowVolume;
             totalOutflow += outflowVolume;
 
@@ -1638,28 +1647,28 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
         {
-            var totalBalance = Convert.ToDecimal(reader.GetValue(10));
+            var totalBalance = ToDecimal(reader.GetValue(10));
 
             var result = new HolderDistributionDto(
                 new List<HolderBracketDto>
                 {
-                    new("Whales (≥100B)", Convert.ToUInt64(reader.GetValue(0)),
-                        Convert.ToDecimal(reader.GetValue(5)),
-                        totalBalance > 0 ? Convert.ToDecimal(reader.GetValue(5)) / totalBalance * 100 : 0),
-                    new("Large (20B-100B)", Convert.ToUInt64(reader.GetValue(1)),
-                        Convert.ToDecimal(reader.GetValue(6)),
-                        totalBalance > 0 ? Convert.ToDecimal(reader.GetValue(6)) / totalBalance * 100 : 0),
-                    new("Medium (5B-20B)", Convert.ToUInt64(reader.GetValue(2)),
-                        Convert.ToDecimal(reader.GetValue(7)),
-                        totalBalance > 0 ? Convert.ToDecimal(reader.GetValue(7)) / totalBalance * 100 : 0),
-                    new("Small (500M-5B)", Convert.ToUInt64(reader.GetValue(3)),
-                        Convert.ToDecimal(reader.GetValue(8)),
-                        totalBalance > 0 ? Convert.ToDecimal(reader.GetValue(8)) / totalBalance * 100 : 0),
-                    new("Micro (<500M)", Convert.ToUInt64(reader.GetValue(4)),
-                        Convert.ToDecimal(reader.GetValue(9)),
-                        totalBalance > 0 ? Convert.ToDecimal(reader.GetValue(9)) / totalBalance * 100 : 0)
+                    new("Whales (≥100B)", ToUInt64(reader.GetValue(0)),
+                        ToDecimal(reader.GetValue(5)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(5)) / totalBalance * 100 : 0),
+                    new("Large (20B-100B)", ToUInt64(reader.GetValue(1)),
+                        ToDecimal(reader.GetValue(6)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(6)) / totalBalance * 100 : 0),
+                    new("Medium (5B-20B)", ToUInt64(reader.GetValue(2)),
+                        ToDecimal(reader.GetValue(7)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(7)) / totalBalance * 100 : 0),
+                    new("Small (500M-5B)", ToUInt64(reader.GetValue(3)),
+                        ToDecimal(reader.GetValue(8)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(8)) / totalBalance * 100 : 0),
+                    new("Micro (<500M)", ToUInt64(reader.GetValue(4)),
+                        ToDecimal(reader.GetValue(9)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(9)) / totalBalance * 100 : 0)
                 },
-                Convert.ToUInt64(reader.GetValue(11)),
+                ToUInt64(reader.GetValue(11)),
                 totalBalance
             );
 
@@ -1728,10 +1737,10 @@ public class ClickHouseQueryService : IDisposable
                 items.Add(new AvgTxSizeTrendDto(
                     null,
                     reader.GetDateTime(0),
-                    Convert.ToUInt64(reader.GetValue(1)),
-                    Convert.ToDecimal(reader.GetValue(2)),
-                    Convert.ToDecimal(reader.GetValue(3)),
-                    Convert.ToDecimal(reader.GetValue(4))
+                    ToUInt64(reader.GetValue(1)),
+                    ToDecimal(reader.GetValue(2)),
+                    ToDecimal(reader.GetValue(3)),
+                    ToDecimal(reader.GetValue(4))
                 ));
             }
             else
@@ -1739,10 +1748,10 @@ public class ClickHouseQueryService : IDisposable
                 items.Add(new AvgTxSizeTrendDto(
                     reader.GetFieldValue<uint>(0),
                     null,
-                    Convert.ToUInt64(reader.GetValue(1)),
-                    Convert.ToDecimal(reader.GetValue(2)),
-                    Convert.ToDecimal(reader.GetValue(3)),
-                    Convert.ToDecimal(reader.GetValue(4))
+                    ToUInt64(reader.GetValue(1)),
+                    ToDecimal(reader.GetValue(2)),
+                    ToDecimal(reader.GetValue(3)),
+                    ToDecimal(reader.GetValue(4))
                 ));
             }
         }
@@ -1882,10 +1891,10 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
         {
-            var top10 = Convert.ToDecimal(reader.GetValue(0));
-            var top50 = Convert.ToDecimal(reader.GetValue(1));
-            var top100 = Convert.ToDecimal(reader.GetValue(2));
-            var total = Convert.ToDecimal(reader.GetValue(3));
+            var top10 = ToDecimal(reader.GetValue(0));
+            var top50 = ToDecimal(reader.GetValue(1));
+            var top100 = ToDecimal(reader.GetValue(2));
+            var total = ToDecimal(reader.GetValue(3));
 
             return new ConcentrationMetricsDto(
                 top10,
@@ -1940,11 +1949,11 @@ public class ClickHouseQueryService : IDisposable
             var tickStart = reader.GetFieldValue<ulong>(2);
             var tickEnd = reader.GetFieldValue<ulong>(3);
 
-            var whaleCount = Convert.ToUInt64(reader.GetValue(4));
-            var largeCount = Convert.ToUInt64(reader.GetValue(5));
-            var mediumCount = Convert.ToUInt64(reader.GetValue(6));
-            var smallCount = Convert.ToUInt64(reader.GetValue(7));
-            var microCount = Convert.ToUInt64(reader.GetValue(8));
+            var whaleCount = ToUInt64(reader.GetValue(4));
+            var largeCount = ToUInt64(reader.GetValue(5));
+            var mediumCount = ToUInt64(reader.GetValue(6));
+            var smallCount = ToUInt64(reader.GetValue(7));
+            var microCount = ToUInt64(reader.GetValue(8));
 
             // UInt128 columns return BigInteger, use helper method
             var whaleBalance = ToBigDecimal(reader.GetValue(9));
@@ -1953,7 +1962,7 @@ public class ClickHouseQueryService : IDisposable
             var smallBalance = ToBigDecimal(reader.GetValue(12));
             var microBalance = ToBigDecimal(reader.GetValue(13));
 
-            var totalHolders = Convert.ToUInt64(reader.GetValue(14));
+            var totalHolders = ToUInt64(reader.GetValue(14));
             var totalBalance = ToBigDecimal(reader.GetValue(15));
 
             var top10 = ToBigDecimal(reader.GetValue(16));
@@ -2033,28 +2042,28 @@ public class ClickHouseQueryService : IDisposable
             items.Add(new NetworkStatsHistoryDto(
                 reader.GetFieldValue<uint>(0),    // epoch
                 reader.GetDateTime(1),            // snapshot_at
-                Convert.ToUInt64(reader.GetValue(2)),   // tick_start
-                Convert.ToUInt64(reader.GetValue(3)),   // tick_end
-                Convert.ToUInt64(reader.GetValue(4)),   // total_transactions
-                Convert.ToUInt64(reader.GetValue(5)),   // total_transfers
+                ToUInt64(reader.GetValue(2)),   // tick_start
+                ToUInt64(reader.GetValue(3)),   // tick_end
+                ToUInt64(reader.GetValue(4)),   // total_transactions
+                ToUInt64(reader.GetValue(5)),   // total_transfers
                 ToBigDecimal(reader.GetValue(6)),       // total_volume (UInt128)
-                Convert.ToUInt64(reader.GetValue(7)),   // unique_senders
-                Convert.ToUInt64(reader.GetValue(8)),   // unique_receivers
-                Convert.ToUInt64(reader.GetValue(9)),   // total_active_addresses
-                Convert.ToUInt64(reader.GetValue(10)),  // new_addresses
-                Convert.ToUInt64(reader.GetValue(11)),  // returning_addresses
+                ToUInt64(reader.GetValue(7)),   // unique_senders
+                ToUInt64(reader.GetValue(8)),   // unique_receivers
+                ToUInt64(reader.GetValue(9)),   // total_active_addresses
+                ToUInt64(reader.GetValue(10)),  // new_addresses
+                ToUInt64(reader.GetValue(11)),  // returning_addresses
                 ToBigDecimal(reader.GetValue(12)),      // exchange_inflow_volume (UInt128)
-                Convert.ToUInt64(reader.GetValue(13)),  // exchange_inflow_count
+                ToUInt64(reader.GetValue(13)),  // exchange_inflow_count
                 ToBigDecimal(reader.GetValue(14)),      // exchange_outflow_volume (UInt128)
-                Convert.ToUInt64(reader.GetValue(15)),  // exchange_outflow_count
+                ToUInt64(reader.GetValue(15)),  // exchange_outflow_count
                 ToBigDecimal(reader.GetValue(16)),      // exchange_net_flow (Int128)
-                Convert.ToUInt64(reader.GetValue(17)),  // sc_call_count
-                Convert.ToUInt64(reader.GetValue(18)),  // sc_unique_callers
+                ToUInt64(reader.GetValue(17)),  // sc_call_count
+                ToUInt64(reader.GetValue(18)),  // sc_unique_callers
                 ToSafeDouble(reader.GetValue(19)),      // avg_tx_size
                 ToSafeDouble(reader.GetValue(20)),      // median_tx_size
-                Convert.ToUInt64(reader.GetValue(21)),  // new_users_100m_plus
-                Convert.ToUInt64(reader.GetValue(22)),  // new_users_1b_plus
-                Convert.ToUInt64(reader.GetValue(23))   // new_users_10b_plus
+                ToUInt64(reader.GetValue(21)),  // new_users_100m_plus
+                ToUInt64(reader.GetValue(22)),  // new_users_1b_plus
+                ToUInt64(reader.GetValue(23))   // new_users_10b_plus
             ));
         }
 
@@ -2123,18 +2132,18 @@ public class ClickHouseQueryService : IDisposable
             items.Add(new BurnStatsHistoryDto(
                 reader.GetFieldValue<uint>(0),          // epoch
                 reader.GetDateTime(1),                   // snapshot_at
-                Convert.ToUInt64(reader.GetValue(2)),    // tick_start
-                Convert.ToUInt64(reader.GetValue(3)),    // tick_end
-                Convert.ToUInt64(reader.GetValue(4)),    // total_burned
-                Convert.ToUInt64(reader.GetValue(5)),    // burn_count
-                Convert.ToUInt64(reader.GetValue(6)),    // burn_amount
-                Convert.ToUInt64(reader.GetValue(7)),    // dust_burn_count
-                Convert.ToUInt64(reader.GetValue(8)),    // dust_burned
-                Convert.ToUInt64(reader.GetValue(9)),    // transfer_burn_count
-                Convert.ToUInt64(reader.GetValue(10)),   // transfer_burned
-                Convert.ToUInt64(reader.GetValue(11)),   // unique_burners
-                Convert.ToUInt64(reader.GetValue(12)),   // largest_burn
-                Convert.ToUInt64(reader.GetValue(13))    // cumulative_burned
+                ToUInt64(reader.GetValue(2)),    // tick_start
+                ToUInt64(reader.GetValue(3)),    // tick_end
+                ToUInt64(reader.GetValue(4)),    // total_burned
+                ToUInt64(reader.GetValue(5)),    // burn_count
+                ToUInt64(reader.GetValue(6)),    // burn_amount
+                ToUInt64(reader.GetValue(7)),    // dust_burn_count
+                ToUInt64(reader.GetValue(8)),    // dust_burned
+                ToUInt64(reader.GetValue(9)),    // transfer_burn_count
+                ToUInt64(reader.GetValue(10)),   // transfer_burned
+                ToUInt64(reader.GetValue(11)),   // unique_burners
+                ToUInt64(reader.GetValue(12)),   // largest_burn
+                ToUInt64(reader.GetValue(13))    // cumulative_burned
             ));
         }
 
@@ -2199,7 +2208,7 @@ public class ClickHouseQueryService : IDisposable
         if (!await reader.ReadAsync(ct) || reader.IsDBNull(0) || reader.IsDBNull(1))
             return null;
 
-        return (Convert.ToUInt64(reader.GetValue(0)), Convert.ToUInt64(reader.GetValue(1)));
+        return (ToUInt64(reader.GetValue(0)), ToUInt64(reader.GetValue(1)));
     }
 
     // =====================================================
@@ -2393,11 +2402,11 @@ public class ClickHouseQueryService : IDisposable
 
         var updatedMeta = meta with
         {
-            TickCount = Convert.ToUInt64(reader.GetValue(0)),
-            TxCount = Convert.ToUInt64(reader.GetValue(1)),
+            TickCount = ToUInt64(reader.GetValue(0)),
+            TxCount = ToUInt64(reader.GetValue(1)),
             TotalVolume = ToBigDecimal(reader.GetValue(2)),
-            ActiveAddresses = Convert.ToUInt64(reader.GetValue(3)),
-            TransferCount = Convert.ToUInt64(reader.GetValue(4)),
+            ActiveAddresses = ToUInt64(reader.GetValue(3)),
+            TransferCount = ToUInt64(reader.GetValue(4)),
             QuTransferred = ToBigDecimal(reader.GetValue(5)),
             UpdatedAt = DateTime.UtcNow
         };
