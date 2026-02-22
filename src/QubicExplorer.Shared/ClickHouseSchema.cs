@@ -440,6 +440,27 @@ public static class ClickHouseSchema
         ORDER BY (epoch, snapshot_at)
         """,
 
+        // Burn stats history (4-hour snapshots)
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.burn_stats_history (
+            epoch UInt32,
+            snapshot_at DateTime64(3) DEFAULT now64(3),
+            tick_start UInt64 DEFAULT 0,
+            tick_end UInt64 DEFAULT 0,
+            total_burned UInt64,
+            burn_count UInt64,
+            burn_amount UInt64,
+            dust_burn_count UInt64,
+            dust_burned UInt64,
+            transfer_burn_count UInt64,
+            transfer_burned UInt64,
+            unique_burners UInt64,
+            largest_burn UInt64,
+            cumulative_burned UInt64
+        ) ENGINE = ReplacingMergeTree(snapshot_at)
+        ORDER BY (epoch, snapshot_at)
+        """,
+
         // Computors
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.computors (

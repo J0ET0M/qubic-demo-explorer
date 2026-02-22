@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Users, PieChart, Building2, Cpu, TrendingUp, Pickaxe } from 'lucide-vue-next'
+import { BarChart3, Users, PieChart, Building2, Cpu, TrendingUp, Pickaxe, Flame } from 'lucide-vue-next'
 
 interface Tab {
   id: string
@@ -13,6 +13,7 @@ const tabs: Tab[] = [
   { id: 'holders', label: 'Holders', icon: PieChart },
   { id: 'exchanges', label: 'Exchange Flows', icon: Building2 },
   { id: 'miner-flows', label: 'Miner Flows', icon: Pickaxe },
+  { id: 'burns', label: 'Burns', icon: Flame },
   { id: 'contracts', label: 'Smart Contracts', icon: Cpu },
   { id: 'top-addresses', label: 'Top Addresses', icon: TrendingUp }
 ]

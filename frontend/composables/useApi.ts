@@ -260,6 +260,21 @@ export const useApi = () => {
     return fetchApi<NetworkStatsExtendedDto>(`/api/stats/network-stats/extended?${params}`)
   }
 
+  // Burn stats
+  const getBurnStatsHistory = (limit = 500, from?: string, to?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return fetchApi<BurnStatsHistoryDto[]>(`/api/stats/burn-stats/history?${params}`)
+  }
+
+  const getBurnStatsExtended = (historyLimit = 500, from?: string, to?: string) => {
+    const params = new URLSearchParams({ historyLimit: String(historyLimit) })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return fetchApi<BurnStatsExtendedDto>(`/api/stats/burn-stats/extended?${params}`)
+  }
+
   // Miner/Computor Flow
   const getMinerFlowStats = (limit = 500, from?: string, to?: string) => {
     const params = new URLSearchParams({ limit: String(limit) })
@@ -333,6 +348,8 @@ export const useApi = () => {
     getHolderDistributionHistory,
     getNetworkStatsHistory,
     getNetworkStatsExtended,
+    getBurnStatsHistory,
+    getBurnStatsExtended,
     getMinerFlowStats,
     getComputors,
     getFlowVisualization,
@@ -701,6 +718,31 @@ interface NetworkStatsHistoryDto {
 interface NetworkStatsExtendedDto {
   current: NetworkStatsHistoryDto | null
   history: NetworkStatsHistoryDto[]
+}
+
+// Burn stats history snapshot
+interface BurnStatsHistoryDto {
+  epoch: number
+  snapshotAt: string
+  tickStart: number
+  tickEnd: number
+  totalBurned: number
+  burnCount: number
+  burnAmount: number
+  dustBurnCount: number
+  dustBurned: number
+  transferBurnCount: number
+  transferBurned: number
+  uniqueBurners: number
+  largestBurn: number
+  cumulativeBurned: number
+}
+
+// Extended burn stats with history
+interface BurnStatsExtendedDto {
+  current: BurnStatsHistoryDto | null
+  history: BurnStatsHistoryDto[]
+  allTimeTotalBurned: number
 }
 
 // Epoch metadata

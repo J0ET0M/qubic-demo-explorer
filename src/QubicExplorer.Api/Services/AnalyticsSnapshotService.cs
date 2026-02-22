@@ -52,6 +52,7 @@ public class AnalyticsSnapshotService : BackgroundService
                     // Try to create snapshots (will skip if not enough data for next window)
                     await CreateHolderDistributionSnapshotAsync(queryService, currentEpoch.Value, stoppingToken);
                     await CreateNetworkStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken);
+                    await CreateBurnStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken);
 
                     // Create miner flow snapshot
                     var flowService = scope.ServiceProvider.GetRequiredService<ComputorFlowService>();
@@ -122,6 +123,22 @@ public class AnalyticsSnapshotService : BackgroundService
                 _logger.LogInformation("Created {Count} network stats snapshots during catch-up", networkSnapshotsCreated);
             }
 
+            // Catch up on burn stats snapshots
+            var burnSnapshotsCreated = 0;
+            while (!ct.IsCancellationRequested)
+            {
+                var created = await CreateBurnStatsSnapshotAsync(queryService, currentEpoch.Value, ct);
+                if (!created) break;
+                burnSnapshotsCreated++;
+
+                await Task.Delay(100, ct);
+            }
+
+            if (burnSnapshotsCreated > 0)
+            {
+                _logger.LogInformation("Created {Count} burn stats snapshots during catch-up", burnSnapshotsCreated);
+            }
+
             // Catch up on miner flow snapshots
             var flowService = scope.ServiceProvider.GetRequiredService<ComputorFlowService>();
             var minerFlowSnapshotsCreated = 0;
@@ -140,7 +157,7 @@ public class AnalyticsSnapshotService : BackgroundService
                 _logger.LogInformation("Created {Count} miner flow snapshots during catch-up", minerFlowSnapshotsCreated);
             }
 
-            if (holderSnapshotsCreated == 0 && networkSnapshotsCreated == 0 && minerFlowSnapshotsCreated == 0)
+            if (holderSnapshotsCreated == 0 && networkSnapshotsCreated == 0 && burnSnapshotsCreated == 0 && minerFlowSnapshotsCreated == 0)
             {
                 _logger.LogInformation("Analytics snapshots are up to date");
             }
@@ -446,6 +463,89 @@ public class AnalyticsSnapshotService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to save miner flow snapshot for epoch {Epoch}", currentEpoch);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Creates a burn stats snapshot for the next 4-hour window.
+    /// Returns true if a snapshot was created, false if there's not enough data yet.
+    /// </summary>
+    private async Task<bool> CreateBurnStatsSnapshotAsync(
+        ClickHouseQueryService queryService, uint currentEpoch, CancellationToken ct)
+    {
+        try
+        {
+            var lastTickEnd = await queryService.GetLastBurnStatsSnapshotTickEndAsync(currentEpoch, ct);
+
+            ulong tickStart;
+            DateTime windowStartTime;
+
+            if (lastTickEnd == 0)
+            {
+                var firstTick = await queryService.GetFirstTickAsync(ct);
+                if (firstTick == null)
+                {
+                    _logger.LogDebug("No ticks found in database, skipping burn stats snapshot");
+                    return false;
+                }
+                tickStart = firstTick.Value.TickNumber;
+                windowStartTime = firstTick.Value.Timestamp;
+                _logger.LogInformation("Starting burn stats from first tick {Tick} at {Time}", tickStart, windowStartTime);
+            }
+            else
+            {
+                tickStart = lastTickEnd + 1;
+                var startTimestamp = await queryService.GetTickTimestampAsync(tickStart, ct);
+                if (startTimestamp == null)
+                {
+                    _logger.LogDebug("Could not get timestamp for tick {Tick}, skipping burn stats snapshot", tickStart);
+                    return false;
+                }
+                windowStartTime = startTimestamp.Value;
+            }
+
+            var windowEndTime = windowStartTime.AddHours(4);
+
+            var currentTick = await queryService.GetCurrentTickAsync(ct);
+            if (currentTick == null)
+            {
+                _logger.LogDebug("Could not get current tick, skipping burn stats snapshot");
+                return false;
+            }
+
+            var currentTickTimestamp = await queryService.GetTickTimestampAsync(currentTick.Value, ct);
+            if (currentTickTimestamp == null || currentTickTimestamp.Value < windowEndTime)
+            {
+                _logger.LogDebug("Not enough data for 4h burn stats window yet. Current tick time: {Current}, need: {Needed}",
+                    currentTickTimestamp?.ToString("yyyy-MM-dd HH:mm:ss") ?? "unknown",
+                    windowEndTime.ToString("yyyy-MM-dd HH:mm:ss"));
+                return false;
+            }
+
+            var tickEnd = await queryService.GetTickAtTimestampAsync(windowEndTime, ct);
+            if (tickEnd == null || tickEnd.Value <= tickStart)
+            {
+                _logger.LogDebug("Could not determine tick end for burn stats window ending at {Time}", windowEndTime);
+                return false;
+            }
+
+            _logger.LogInformation("Creating burn stats snapshot for 4h window: ticks {TickStart}-{TickEnd} ({StartTime} to {EndTime})",
+                tickStart, tickEnd.Value,
+                windowStartTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                windowEndTime.ToString("yyyy-MM-dd HH:mm:ss"));
+
+            await queryService.SaveBurnStatsSnapshotAsync(currentEpoch, tickStart, tickEnd.Value, ct);
+
+            _logger.LogInformation(
+                "Successfully saved burn stats snapshot for epoch {Epoch} (ticks {TickStart}-{TickEnd})",
+                currentEpoch, tickStart, tickEnd.Value);
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to save burn stats snapshot for epoch {Epoch}", currentEpoch);
             return false;
         }
     }

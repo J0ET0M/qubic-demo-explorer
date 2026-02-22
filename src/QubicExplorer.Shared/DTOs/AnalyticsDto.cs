@@ -205,6 +205,39 @@ public record NetworkStatsExtendedDto(
 );
 
 // =====================================================
+// BURN STATS HISTORY DTOs
+// =====================================================
+
+/// <summary>
+/// Historical snapshot of burn statistics for a specific time window
+/// </summary>
+public record BurnStatsHistoryDto(
+    uint Epoch,
+    DateTime SnapshotAt,
+    ulong TickStart,
+    ulong TickEnd,
+    ulong TotalBurned,
+    ulong BurnCount,
+    ulong BurnAmount,
+    ulong DustBurnCount,
+    ulong DustBurned,
+    ulong TransferBurnCount,
+    ulong TransferBurned,
+    ulong UniqueBurners,
+    ulong LargestBurn,
+    ulong CumulativeBurned
+);
+
+/// <summary>
+/// Extended burn stats with current and historical data
+/// </summary>
+public record BurnStatsExtendedDto(
+    BurnStatsHistoryDto? Current,
+    List<BurnStatsHistoryDto> History,
+    ulong AllTimeTotalBurned
+);
+
+// =====================================================
 // EPOCH METADATA DTOs
 // =====================================================
 

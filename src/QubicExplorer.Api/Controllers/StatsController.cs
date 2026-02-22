@@ -195,4 +195,36 @@ public class StatsController : ControllerBase
         await _queryService.SaveNetworkStatsSnapshotAsync(epoch, tickStart, tickEnd, ct);
         return Ok(new { success = true, epoch, tickStart, tickEnd });
     }
+
+    // =====================================================
+    // BURN STATS HISTORY
+    // =====================================================
+
+    [HttpGet("burn-stats/history")]
+    public async Task<IActionResult> GetBurnStatsHistory(
+        [FromQuery] int limit = 30,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        CancellationToken ct = default)
+    {
+        if (limit < 1) limit = 1;
+        if (limit > 500) limit = 500;
+
+        var result = await _queryService.GetBurnStatsHistoryAsync(limit, from, to, ct);
+        return Ok(result);
+    }
+
+    [HttpGet("burn-stats/extended")]
+    public async Task<IActionResult> GetBurnStatsExtended(
+        [FromQuery] int historyLimit = 30,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        CancellationToken ct = default)
+    {
+        if (historyLimit < 1) historyLimit = 1;
+        if (historyLimit > 500) historyLimit = 500;
+
+        var result = await _queryService.GetBurnStatsExtendedAsync(historyLimit, from, to, ct);
+        return Ok(result);
+    }
 }

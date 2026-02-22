@@ -2653,6 +2653,192 @@ public class ClickHouseQueryService : IDisposable
         return Convert.ToDateTime(result);
     }
 
+    // =====================================================
+    // BURN STATS HISTORY
+    // =====================================================
+
+    /// <summary>
+    /// Save burn stats snapshot for the given epoch and tick range.
+    /// Aggregates BURNING (log_type=8), DUST_BURNING (log_type=9),
+    /// and direct transfers to burn address (log_type=0, input_type=0).
+    /// </summary>
+    public async Task SaveBurnStatsSnapshotAsync(
+        uint epoch, ulong tickStart, ulong tickEnd, CancellationToken ct = default)
+    {
+        _logger.LogInformation(
+            "Saving burn stats snapshot for epoch {Epoch} (ticks {TickStart}-{TickEnd})",
+            epoch, tickStart, tickEnd);
+
+        var tickEndTimestamp = await GetTickTimestampAsync(tickEnd, ct);
+        var snapshotAt = tickEndTimestamp ?? DateTime.UtcNow;
+
+        var tickFilter = $"tick_number >= {tickStart} AND tick_number <= {tickEnd}";
+
+        // Query 1: explicit + dust burns
+        await using var burnCmd = _connection.CreateCommand();
+        burnCmd.CommandText = $@"
+            SELECT
+                countIf(log_type = 8) as burn_count,
+                sumIf(amount, log_type = 8) as burn_amount,
+                countIf(log_type = 9) as dust_count,
+                sumIf(amount, log_type = 9) as dust_amount,
+                max(amount) as max_burn
+            FROM logs
+            WHERE log_type IN (8, 9) AND {tickFilter}";
+
+        ulong burnCount = 0, burnAmount = 0, dustBurnCount = 0, dustBurned = 0, maxBurnFromLogs = 0;
+        await using (var reader = await burnCmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct))
+            {
+                burnCount = Convert.ToUInt64(reader.GetValue(0));
+                burnAmount = Convert.ToUInt64(reader.GetValue(1));
+                dustBurnCount = Convert.ToUInt64(reader.GetValue(2));
+                dustBurned = Convert.ToUInt64(reader.GetValue(3));
+                maxBurnFromLogs = Convert.ToUInt64(reader.GetValue(4));
+            }
+        }
+
+        // Query 2: transfers to burn address (direct only, input_type=0 excludes IPO bids)
+        await using var transferCmd = _connection.CreateCommand();
+        transferCmd.CommandText = $@"
+            SELECT count() as transfer_burn_count, sum(amount) as transfer_burned, max(amount) as max_transfer_burn
+            FROM logs
+            WHERE log_type = 0 AND dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0
+              AND {tickFilter}";
+
+        ulong transferBurnCount = 0, transferBurned = 0, maxTransferBurn = 0;
+        await using (var reader = await transferCmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct))
+            {
+                transferBurnCount = Convert.ToUInt64(reader.GetValue(0));
+                transferBurned = Convert.ToUInt64(reader.GetValue(1));
+                maxTransferBurn = Convert.ToUInt64(reader.GetValue(2));
+            }
+        }
+
+        // Query 3: unique burners across all types
+        await using var uniqueCmd = _connection.CreateCommand();
+        uniqueCmd.CommandText = $@"
+            SELECT uniq(source_address)
+            FROM logs
+            WHERE (log_type IN (8, 9) OR (log_type = 0 AND dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0))
+              AND {tickFilter}";
+        var uniqueBurners = Convert.ToUInt64(await uniqueCmd.ExecuteScalarAsync(ct));
+
+        var totalBurned = burnAmount + dustBurned + transferBurned;
+        var largestBurn = Math.Max(maxBurnFromLogs, maxTransferBurn);
+
+        // Query 4: cumulative total from prior snapshots
+        await using var cumulativeCmd = _connection.CreateCommand();
+        cumulativeCmd.CommandText = "SELECT sum(total_burned) FROM burn_stats_history";
+        var priorTotal = Convert.ToUInt64(await cumulativeCmd.ExecuteScalarAsync(ct) ?? 0UL);
+        var cumulativeBurned = priorTotal + totalBurned;
+
+        // Insert
+        await using var insertCmd = _connection.CreateCommand();
+        insertCmd.CommandText = $@"
+            INSERT INTO burn_stats_history
+            (epoch, snapshot_at, tick_start, tick_end,
+             total_burned, burn_count, burn_amount,
+             dust_burn_count, dust_burned,
+             transfer_burn_count, transfer_burned,
+             unique_burners, largest_burn, cumulative_burned)
+            VALUES
+            ({epoch}, '{snapshotAt:yyyy-MM-dd HH:mm:ss.fff}', {tickStart}, {tickEnd},
+             {totalBurned}, {burnCount}, {burnAmount},
+             {dustBurnCount}, {dustBurned},
+             {transferBurnCount}, {transferBurned},
+             {uniqueBurners}, {largestBurn}, {cumulativeBurned})";
+
+        await insertCmd.ExecuteNonQueryAsync(ct);
+        _logger.LogInformation(
+            "Saved burn stats snapshot for epoch {Epoch} (ticks {TickStart}-{TickEnd}): totalBurned={Total}, burns={Burns}, dust={Dust}, transfers={Transfers}",
+            epoch, tickStart, tickEnd, totalBurned, burnCount, dustBurnCount, transferBurnCount);
+    }
+
+    /// <summary>
+    /// Get burn stats history with optional date range filter
+    /// </summary>
+    public async Task<List<BurnStatsHistoryDto>> GetBurnStatsHistoryAsync(
+        int limit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        var conditions = new List<string>();
+        if (from.HasValue)
+            conditions.Add($"snapshot_at >= '{from.Value:yyyy-MM-dd HH:mm:ss}'");
+        if (to.HasValue)
+            conditions.Add($"snapshot_at <= '{to.Value:yyyy-MM-dd HH:mm:ss}'");
+        var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+
+        cmd.CommandText = $@"
+            SELECT
+                epoch, snapshot_at, tick_start, tick_end,
+                total_burned, burn_count, burn_amount,
+                dust_burn_count, dust_burned,
+                transfer_burn_count, transfer_burned,
+                unique_burners, largest_burn, cumulative_burned
+            FROM burn_stats_history
+            {whereClause}
+            ORDER BY snapshot_at DESC
+            LIMIT {limit}";
+
+        var items = new List<BurnStatsHistoryDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            items.Add(new BurnStatsHistoryDto(
+                reader.GetFieldValue<uint>(0),          // epoch
+                reader.GetDateTime(1),                   // snapshot_at
+                Convert.ToUInt64(reader.GetValue(2)),    // tick_start
+                Convert.ToUInt64(reader.GetValue(3)),    // tick_end
+                Convert.ToUInt64(reader.GetValue(4)),    // total_burned
+                Convert.ToUInt64(reader.GetValue(5)),    // burn_count
+                Convert.ToUInt64(reader.GetValue(6)),    // burn_amount
+                Convert.ToUInt64(reader.GetValue(7)),    // dust_burn_count
+                Convert.ToUInt64(reader.GetValue(8)),    // dust_burned
+                Convert.ToUInt64(reader.GetValue(9)),    // transfer_burn_count
+                Convert.ToUInt64(reader.GetValue(10)),   // transfer_burned
+                Convert.ToUInt64(reader.GetValue(11)),   // unique_burners
+                Convert.ToUInt64(reader.GetValue(12)),   // largest_burn
+                Convert.ToUInt64(reader.GetValue(13))    // cumulative_burned
+            ));
+        }
+
+        items.Reverse();
+        return items;
+    }
+
+    /// <summary>
+    /// Get extended burn stats with current and historical data
+    /// </summary>
+    public async Task<BurnStatsExtendedDto> GetBurnStatsExtendedAsync(
+        int historyLimit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
+    {
+        var history = await GetBurnStatsHistoryAsync(historyLimit, from, to, ct);
+        var current = history.Count > 0 ? history[^1] : null;
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT sum(total_burned) FROM burn_stats_history";
+        var allTimeTotal = Convert.ToUInt64(await cmd.ExecuteScalarAsync(ct) ?? 0UL);
+
+        return new BurnStatsExtendedDto(current, history, allTimeTotal);
+    }
+
+    /// <summary>
+    /// Get the last burn stats snapshot tick end for the given epoch
+    /// </summary>
+    public async Task<ulong> GetLastBurnStatsSnapshotTickEndAsync(uint epoch, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"SELECT max(tick_end) FROM burn_stats_history WHERE epoch = {epoch} AND tick_end > 0";
+        var result = await cmd.ExecuteScalarAsync(ct);
+        if (result == null || result == DBNull.Value)
+            return 0;
+        return Convert.ToUInt64(result);
+    }
+
     /// <summary>
     /// Get the current (latest) epoch from the ticks table (real-time source of truth)
     /// </summary>

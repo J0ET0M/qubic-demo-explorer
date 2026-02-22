@@ -18,7 +18,7 @@ if (initialRange && ['24h', '7d', '30d', '90d', 'all'].includes(initialRange)) {
 }
 
 // Tabs that use 4-hour snapshot data
-const snapshotTabs = ['network', 'holders', 'exchanges', 'miner-flows']
+const snapshotTabs = ['network', 'holders', 'exchanges', 'miner-flows', 'burns']
 
 // Update URL when tab or range changes
 watch(activeTab, (newTab) => {
@@ -35,6 +35,7 @@ const NetworkActivityTab = defineAsyncComponent(() => import('~/components/analy
 const HoldersTab = defineAsyncComponent(() => import('~/components/analytics/HoldersTab.vue'))
 const ExchangeFlowsTab = defineAsyncComponent(() => import('~/components/analytics/ExchangeFlowsTab.vue'))
 const MinerFlowsTab = defineAsyncComponent(() => import('~/components/analytics/MinerFlowsTab.vue'))
+const BurnsTab = defineAsyncComponent(() => import('~/components/analytics/BurnsTab.vue'))
 const SmartContractsTab = defineAsyncComponent(() => import('~/components/analytics/SmartContractsTab.vue'))
 const TopAddressesTab = defineAsyncComponent(() => import('~/components/analytics/TopAddressesTab.vue'))
 </script>
@@ -63,6 +64,7 @@ const TopAddressesTab = defineAsyncComponent(() => import('~/components/analytic
               activeTab === 'holders' ? HoldersTab :
               activeTab === 'exchanges' ? ExchangeFlowsTab :
               activeTab === 'miner-flows' ? MinerFlowsTab :
+              activeTab === 'burns' ? BurnsTab :
               activeTab === 'contracts' ? SmartContractsTab :
               activeTab === 'top-addresses' ? TopAddressesTab :
               OverviewTab
