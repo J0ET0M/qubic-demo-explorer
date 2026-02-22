@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Filter, X } from 'lucide-vue-next'
+import { getSupportedContracts, getContractSchema } from '~/utils/contractInputDecoder'
 
 const api = useApi()
 const route = useRoute()
@@ -17,10 +18,34 @@ const executed = ref<boolean | undefined>(
 const inputType = ref<number | undefined>(
   route.query.inputType !== undefined ? Number(route.query.inputType) : undefined
 )
+const contractFilter = ref((route.query.contract as string) || '')
 const limit = 20
 
-const inputTypeOptions = [
-  { value: undefined, label: 'All' },
+// Contract list with addresses (fetched from labels API)
+const contracts = ref<Array<{ index: number; name: string; address: string }>>([])
+
+// Fetch contract addresses on mount
+const supportedContracts = getSupportedContracts()
+const { data: knownAddresses } = await useAsyncData(
+  'contract-addresses',
+  () => api.getAllKnownAddresses('smartcontract')
+)
+
+watchEffect(() => {
+  if (knownAddresses.value) {
+    contracts.value = supportedContracts
+      .map(sc => {
+        const found = knownAddresses.value!.find(ka => ka.contractIndex === sc.index)
+        return found ? { index: sc.index, name: sc.name, address: found.address } : null
+      })
+      .filter((c): c is { index: number; name: string; address: string } => c !== null)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+})
+
+// Core input type options (for burn address transactions)
+const coreInputTypeOptions = [
+  { value: undefined as number | undefined, label: 'All' },
   { value: 0, label: 'Transfer' },
   { value: 1, label: 'Vote Counter' },
   { value: 2, label: 'Mining Solution' },
@@ -32,7 +57,31 @@ const inputTypeOptions = [
   { value: 8, label: 'Mining Share Counter' },
   { value: 9, label: 'Execution Fee Report' },
   { value: 10, label: 'Oracle User Query' },
-] as const
+]
+
+// Dynamic input type options: show contract procedures when a contract is selected
+const inputTypeOptions = computed(() => {
+  if (!contractFilter.value) return coreInputTypeOptions
+  const contract = contracts.value.find(c => c.address === contractFilter.value)
+  if (!contract) return [{ value: undefined as number | undefined, label: 'All' }]
+  const schema = getContractSchema(contract.index)
+  if (!schema) return [{ value: undefined as number | undefined, label: 'All' }]
+  const procedures = Object.entries(schema.procedures).map(([id, proc]) => ({
+    value: parseInt(id) as number | undefined,
+    label: proc.name,
+  }))
+  return [{ value: undefined as number | undefined, label: 'All' }, ...procedures]
+})
+
+// Get the selected contract's address for the API
+const selectedContractAddress = computed(() => contractFilter.value || undefined)
+
+// Get label for input type pill
+const inputTypeLabel = computed(() => {
+  if (inputType.value === undefined) return ''
+  const opt = inputTypeOptions.value.find(o => o.value === inputType.value)
+  return opt?.label || `Type ${inputType.value}`
+})
 
 // UI state for filter panel
 const showFilters = ref(false)
@@ -40,7 +89,8 @@ const minAmountInput = ref(minAmount.value?.toString() || '')
 
 // Check if any filters are active
 const hasActiveFilters = computed(() =>
-  address.value !== '' || minAmount.value !== undefined || executed.value !== undefined || inputType.value !== undefined
+  address.value !== '' || minAmount.value !== undefined || executed.value !== undefined
+  || inputType.value !== undefined || contractFilter.value !== ''
 )
 
 // Build filter options for API
@@ -51,19 +101,21 @@ const filterOptions = computed(() => {
     minAmount?: number
     executed?: boolean
     inputType?: number
+    toAddress?: string
   } = {}
   if (address.value) opts.address = address.value
   if (direction.value === 'from' || direction.value === 'to') opts.direction = direction.value
   if (minAmount.value !== undefined) opts.minAmount = minAmount.value
   if (executed.value !== undefined) opts.executed = executed.value
   if (inputType.value !== undefined) opts.inputType = inputType.value
+  if (selectedContractAddress.value) opts.toAddress = selectedContractAddress.value
   return opts
 })
 
 const { data, pending, refresh } = await useAsyncData(
-  () => `transactions-${page.value}-${address.value}-${direction.value}-${minAmount.value}-${executed.value}-${inputType.value}`,
+  () => `transactions-${page.value}-${address.value}-${direction.value}-${minAmount.value}-${executed.value}-${inputType.value}-${contractFilter.value}`,
   () => api.getTransactions(page.value, limit, Object.keys(filterOptions.value).length > 0 ? filterOptions.value : undefined),
-  { watch: [page, address, direction, minAmount, executed, inputType] }
+  { watch: [page, address, direction, minAmount, executed, inputType, contractFilter] }
 )
 
 // Update URL when filters change
@@ -75,10 +127,11 @@ const updateUrl = () => {
   if (minAmount.value !== undefined) query.minAmount = minAmount.value
   if (executed.value !== undefined) query.executed = String(executed.value)
   if (inputType.value !== undefined) query.inputType = inputType.value
+  if (contractFilter.value) query.contract = contractFilter.value
   router.push({ query })
 }
 
-watch([page, address, direction, minAmount, executed, inputType], updateUrl)
+watch([page, address, direction, minAmount, executed, inputType, contractFilter], updateUrl)
 
 const updatePage = async (newPage: number) => {
   page.value = newPage
@@ -97,6 +150,12 @@ const clearFilters = () => {
   minAmount.value = undefined
   executed.value = undefined
   inputType.value = undefined
+  contractFilter.value = ''
+  page.value = 1
+}
+
+const onContractChange = () => {
+  inputType.value = undefined // Reset procedure filter when contract changes
   page.value = 1
 }
 
@@ -158,10 +217,19 @@ const toggleExecutedFilter = (value: boolean | undefined) => {
               </button>
             </span>
             <span
+              v-if="contractFilter"
+              class="badge badge-accent flex items-center gap-1"
+            >
+              {{ contracts.find(c => c.address === contractFilter)?.name || 'Contract' }}
+              <button @click="contractFilter = ''; inputType = undefined; page = 1" class="hover:text-white">
+                <X class="h-3 w-3" />
+              </button>
+            </span>
+            <span
               v-if="inputType !== undefined"
               class="badge badge-warning flex items-center gap-1"
             >
-              {{ inputTypeOptions.find(o => o.value === inputType)?.label || `Type ${inputType}` }}
+              {{ inputTypeLabel }}
               <button @click="inputType = undefined; page = 1" class="hover:text-white">
                 <X class="h-3 w-3" />
               </button>
@@ -180,7 +248,7 @@ const toggleExecutedFilter = (value: boolean | undefined) => {
 
       <!-- Expanded filter panel -->
       <div v-if="showFilters" class="mt-4 pt-4 border-t border-border">
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label class="block text-sm font-medium mb-1">Address</label>
             <input
@@ -217,7 +285,16 @@ const toggleExecutedFilter = (value: boolean | undefined) => {
             </select>
           </div>
           <div>
-            <label class="block text-sm font-medium mb-1">Input Type</label>
+            <label class="block text-sm font-medium mb-1">Smart Contract</label>
+            <select v-model="contractFilter" class="input w-full" @change="onContractChange">
+              <option value="">All (Core + Contracts)</option>
+              <option v-for="c in contracts" :key="c.address" :value="c.address">
+                {{ c.name }}
+              </option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">{{ contractFilter ? 'Procedure' : 'Input Type' }}</label>
             <select v-model="inputType" class="input w-full" @change="page = 1">
               <option v-for="opt in inputTypeOptions" :key="String(opt.value)" :value="opt.value">
                 {{ opt.label }}{{ opt.value !== undefined ? ` (${opt.value})` : '' }}

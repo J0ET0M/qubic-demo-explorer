@@ -260,7 +260,8 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<PaginatedResponse<TransactionDto>> GetTransactionsAsync(
         int page, int limit, string? address = null, string? direction = null,
-        ulong? minAmount = null, bool? executed = null, int? inputType = null, CancellationToken ct = default)
+        ulong? minAmount = null, bool? executed = null, int? inputType = null,
+        string? toAddress = null, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
         var conditions = new List<string>();
@@ -283,6 +284,9 @@ public class ClickHouseQueryService : IDisposable
 
         if (inputType.HasValue)
             conditions.Add($"input_type = {inputType.Value}");
+
+        if (!string.IsNullOrEmpty(toAddress))
+            conditions.Add($"to_address = '{toAddress.Replace("'", "''")}'");
 
         var whereClause = conditions.Count > 0
             ? "WHERE " + string.Join(" AND ", conditions)

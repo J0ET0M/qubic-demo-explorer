@@ -25,6 +25,7 @@ public class TransactionsController : ControllerBase
     /// <param name="minAmount">Minimum amount filter (useful to exclude zero/dust transactions)</param>
     /// <param name="executed">Filter by execution status: true=executed only, false=failed only</param>
     /// <param name="inputType">Filter by input type (0=transfer, 1=vote counter, 2=mining solution, etc.)</param>
+    /// <param name="toAddress">Filter by destination address (e.g. smart contract address)</param>
     [HttpGet]
     public async Task<IActionResult> GetTransactions(
         [FromQuery] int page = 1,
@@ -34,12 +35,13 @@ public class TransactionsController : ControllerBase
         [FromQuery] ulong? minAmount = null,
         [FromQuery] bool? executed = null,
         [FromQuery] int? inputType = null,
+        [FromQuery] string? toAddress = null,
         CancellationToken ct = default)
     {
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetTransactionsAsync(page, limit, address, direction, minAmount, executed, inputType, ct);
+        var result = await _queryService.GetTransactionsAsync(page, limit, address, direction, minAmount, executed, inputType, toAddress, ct);
         return Ok(result);
     }
 

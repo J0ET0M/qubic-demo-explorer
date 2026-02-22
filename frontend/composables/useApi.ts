@@ -73,6 +73,7 @@ export const useApi = () => {
     minAmount?: number
     executed?: boolean
     inputType?: number
+    toAddress?: string
   }) => {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) })
     if (options?.address) params.set('address', options.address)
@@ -80,6 +81,7 @@ export const useApi = () => {
     if (options?.minAmount !== undefined) params.set('minAmount', String(options.minAmount))
     if (options?.executed !== undefined) params.set('executed', String(options.executed))
     if (options?.inputType !== undefined) params.set('inputType', String(options.inputType))
+    if (options?.toAddress) params.set('toAddress', options.toAddress)
     return fetchApi<PaginatedResponse<TransactionDto>>(`/api/transactions?${params}`)
   }
 
