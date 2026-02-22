@@ -132,29 +132,37 @@ const formatVolume = (amount: number | undefined) => {
     <!-- Stats -->
     <div class="stats-grid" v-if="!statsLoading && stats">
       <div class="stat-card">
-        <div class="flex items-center gap-2 mb-2">
-          <Blocks class="h-5 w-5 text-accent" />
+        <div class="flex items-center gap-2 mb-3">
+          <div class="p-1.5 rounded-md bg-accent/10">
+            <Blocks class="h-4 w-4 text-accent" />
+          </div>
         </div>
         <div class="value">{{ formatNumber(stats.latestTick) }}</div>
         <div class="label">Latest Tick</div>
       </div>
       <div class="stat-card">
-        <div class="flex items-center gap-2 mb-2">
-          <Activity class="h-5 w-5 text-accent" />
+        <div class="flex items-center gap-2 mb-3">
+          <div class="p-1.5 rounded-md bg-secondary/10">
+            <Activity class="h-4 w-4 text-secondary" />
+          </div>
         </div>
         <div class="value">{{ stats.currentEpoch }}</div>
         <div class="label">Current Epoch</div>
       </div>
       <div class="stat-card">
-        <div class="flex items-center gap-2 mb-2">
-          <ArrowLeftRight class="h-5 w-5 text-accent" />
+        <div class="flex items-center gap-2 mb-3">
+          <div class="p-1.5 rounded-md bg-success/10">
+            <ArrowLeftRight class="h-4 w-4 text-success" />
+          </div>
         </div>
         <div class="value">{{ formatNumber(stats.totalTransactions) }}</div>
         <div class="label">Total Transactions</div>
       </div>
       <div class="stat-card">
-        <div class="flex items-center gap-2 mb-2">
-          <TrendingUp class="h-5 w-5 text-accent" />
+        <div class="flex items-center gap-2 mb-3">
+          <div class="p-1.5 rounded-md bg-warning/10">
+            <TrendingUp class="h-4 w-4 text-warning" />
+          </div>
         </div>
         <div class="value">{{ formatVolume(stats.totalVolume) }}</div>
         <div class="label">Total Volume (QU)</div>
@@ -164,8 +172,9 @@ const formatVolume = (amount: number | undefined) => {
     <!-- Loading state for stats -->
     <div v-else-if="statsLoading" class="stats-grid">
       <div class="stat-card animate-pulse" v-for="i in 4" :key="i">
-        <div class="h-8 bg-surface-elevated rounded w-24 mb-2"></div>
-        <div class="h-4 bg-surface-elevated rounded w-20"></div>
+        <div class="h-6 bg-surface-elevated rounded-md w-8 mb-3"></div>
+        <div class="h-7 bg-surface-elevated rounded w-24 mb-2"></div>
+        <div class="h-3 bg-surface-elevated rounded w-20"></div>
       </div>
     </div>
 
@@ -175,10 +184,10 @@ const formatVolume = (amount: number | undefined) => {
       <div class="card">
         <div class="flex items-center justify-between mb-4">
           <h3 class="section-title mb-0">
-            <BarChart3 class="h-5 w-5 text-accent" />
+            <BarChart3 class="h-4 w-4 text-accent" />
             Transactions per Epoch
           </h3>
-          <NuxtLink to="/epochs" class="btn btn-outline text-sm">
+          <NuxtLink to="/epochs" class="btn btn-outline text-xs">
             View All
           </NuxtLink>
         </div>
@@ -189,7 +198,7 @@ const formatVolume = (amount: number | undefined) => {
             :height="200"
           />
           <template #fallback>
-            <div class="h-[200px] flex items-center justify-center text-foreground-muted">
+            <div class="h-[200px] flex items-center justify-center text-foreground-muted text-sm">
               Loading chart...
             </div>
           </template>
@@ -200,10 +209,10 @@ const formatVolume = (amount: number | undefined) => {
       <div class="card">
         <div class="flex items-center justify-between mb-4">
           <h3 class="section-title mb-0">
-            <TrendingUp class="h-5 w-5 text-accent" />
+            <TrendingUp class="h-4 w-4 text-success" />
             Volume per Epoch (QU)
           </h3>
-          <NuxtLink to="/epochs" class="btn btn-outline text-sm">
+          <NuxtLink to="/epochs" class="btn btn-outline text-xs">
             View All
           </NuxtLink>
         </div>
@@ -213,13 +222,13 @@ const formatVolume = (amount: number | undefined) => {
             :datasets="[{
               label: 'Volume',
               data: volumeData,
-              borderColor: 'rgb(16, 185, 129)',
-              backgroundColor: 'rgba(16, 185, 129, 0.1)'
+              borderColor: 'rgb(102, 187, 154)',
+              backgroundColor: 'rgba(102, 187, 154, 0.08)'
             }]"
             :height="200"
           />
           <template #fallback>
-            <div class="h-[200px] flex items-center justify-center text-foreground-muted">
+            <div class="h-[200px] flex items-center justify-center text-foreground-muted text-sm">
               Loading chart...
             </div>
           </template>
@@ -231,10 +240,10 @@ const formatVolume = (amount: number | undefined) => {
     <div class="card">
       <div class="flex items-center justify-between mb-4">
         <h2 class="section-title mb-0">
-          <Blocks class="h-5 w-5 text-accent" />
+          <Blocks class="h-4 w-4 text-accent" />
           Recent Ticks
         </h2>
-        <NuxtLink to="/ticks" class="btn btn-outline text-sm">
+        <NuxtLink to="/ticks" class="btn btn-outline text-xs">
           View All
         </NuxtLink>
       </div>

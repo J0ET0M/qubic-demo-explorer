@@ -171,8 +171,5 @@ const recentAvgTxSize = computed(() => {
       </div>
     </div>
 
-    <p class="text-sm text-foreground-muted text-center">
-      Select a tab above to view detailed analytics for each category.
-    </p>
   </div>
 </template>

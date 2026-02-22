@@ -1,83 +1,56 @@
 <script setup lang="ts">
-import { BarChart3 } from 'lucide-vue-next'
-import type { TimeRangePreset } from '~/composables/useTimeRange'
+import { BarChart3, Users, PieChart, Building2, Pickaxe, Flame, Cpu, TrendingUp, Network } from 'lucide-vue-next'
+import OverviewTab from '~/components/analytics/OverviewTab.vue'
 
-// Current active tab - persisted in URL
-const route = useRoute()
-const router = useRouter()
+useHead({ title: 'Analytics - QLI Explorer' })
 
-const activeTab = ref((route.query.tab as string) || 'overview')
-
-// Time range - shared across snapshot tabs
-const { timeRange, setPreset } = useTimeRange()
-
-// Initialize time range from URL if present
-const initialRange = route.query.range as string
-if (initialRange && ['24h', '7d', '30d', '90d', 'all'].includes(initialRange)) {
-  setPreset(initialRange as TimeRangePreset)
-}
-
-// Tabs that use 4-hour snapshot data
-const snapshotTabs = ['network', 'holders', 'exchanges', 'miner-flows', 'burns']
-
-// Update URL when tab or range changes
-watch(activeTab, (newTab) => {
-  router.replace({ query: { ...route.query, tab: newTab } })
-})
-
-watch(() => timeRange.value.preset, (preset) => {
-  router.replace({ query: { ...route.query, range: preset } })
-})
-
-// Tab components loaded lazily
-const OverviewTab = defineAsyncComponent(() => import('~/components/analytics/OverviewTab.vue'))
-const NetworkActivityTab = defineAsyncComponent(() => import('~/components/analytics/NetworkActivityTab.vue'))
-const HoldersTab = defineAsyncComponent(() => import('~/components/analytics/HoldersTab.vue'))
-const ExchangeFlowsTab = defineAsyncComponent(() => import('~/components/analytics/ExchangeFlowsTab.vue'))
-const MinerFlowsTab = defineAsyncComponent(() => import('~/components/analytics/MinerFlowsTab.vue'))
-const BurnsTab = defineAsyncComponent(() => import('~/components/analytics/BurnsTab.vue'))
-const SmartContractsTab = defineAsyncComponent(() => import('~/components/analytics/SmartContractsTab.vue'))
-const TopAddressesTab = defineAsyncComponent(() => import('~/components/analytics/TopAddressesTab.vue'))
+const subPages = [
+  { label: 'Network Activity', description: 'Active addresses, transaction sizes, and network trends', path: '/analytics/network', icon: Users },
+  { label: 'Holders', description: 'Holder brackets, wealth concentration, and trends', path: '/analytics/holders', icon: PieChart },
+  { label: 'Exchange Flows', description: 'Exchange inflows, outflows, and net flow tracking', path: '/analytics/exchanges', icon: Building2 },
+  { label: 'Miner Flows', description: 'Computor emission analysis and exchange sell pressure', path: '/analytics/miners', icon: Pickaxe },
+  { label: 'Burns', description: 'Burn volume history, categories, and cumulative totals', path: '/analytics/burns', icon: Flame },
+  { label: 'Smart Contracts', description: 'Contract usage, call counts, and volume', path: '/analytics/contracts', icon: Cpu },
+  { label: 'Top Addresses', description: 'Highest volume addresses and activity rankings', path: '/analytics/top', icon: TrendingUp },
+  { label: 'Flow Visualization', description: 'Sankey diagrams of miner emission flow paths', path: '/analytics/miner-flow', icon: Network },
+]
 </script>
 
 <template>
   <div class="space-y-6">
-    <h1 class="text-2xl font-bold flex items-center gap-2">
-      <BarChart3 class="h-6 w-6 text-accent" />
+    <h1 class="page-title flex items-center gap-2">
+      <BarChart3 class="h-5 w-5 text-accent" />
       Network Analytics
     </h1>
 
-    <!-- Tab Navigation -->
-    <AnalyticsTabs v-model="activeTab" />
-
-    <!-- Time Range Selector - only for tabs with 4-hour snapshot data -->
-    <AnalyticsTimeRangeSelector v-if="snapshotTabs.includes(activeTab)" />
-
-    <!-- Tab Content with Suspense for async loading -->
+    <!-- Summary Stats -->
     <Suspense>
       <template #default>
-        <KeepAlive>
-          <component
-            :is="
-              activeTab === 'overview' ? OverviewTab :
-              activeTab === 'network' ? NetworkActivityTab :
-              activeTab === 'holders' ? HoldersTab :
-              activeTab === 'exchanges' ? ExchangeFlowsTab :
-              activeTab === 'miner-flows' ? MinerFlowsTab :
-              activeTab === 'burns' ? BurnsTab :
-              activeTab === 'contracts' ? SmartContractsTab :
-              activeTab === 'top-addresses' ? TopAddressesTab :
-              OverviewTab
-            "
-            :key="activeTab"
-          />
-        </KeepAlive>
+        <OverviewTab />
       </template>
       <template #fallback>
         <div class="card">
-          <div class="loading py-12">Loading analytics data...</div>
+          <div class="loading py-12">Loading overview...</div>
         </div>
       </template>
     </Suspense>
+
+    <!-- Navigation Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <NuxtLink
+        v-for="page in subPages"
+        :key="page.path"
+        :to="page.path"
+        class="card group"
+      >
+        <div class="flex items-center gap-3 mb-2">
+          <div class="p-1.5 rounded-md bg-accent/10 group-hover:bg-accent/20 transition-colors">
+            <component :is="page.icon" class="h-4 w-4 text-accent" />
+          </div>
+          <h3 class="text-[0.8125rem] font-semibold">{{ page.label }}</h3>
+        </div>
+        <p class="text-xs text-foreground-muted leading-relaxed">{{ page.description }}</p>
+      </NuxtLink>
+    </div>
   </div>
 </template>

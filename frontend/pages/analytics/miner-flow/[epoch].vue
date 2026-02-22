@@ -140,7 +140,7 @@ const getNodeIcon = (type: string) => {
     <!-- Header -->
     <div class="flex items-center justify-between flex-wrap gap-4">
       <div class="flex items-center gap-4">
-        <NuxtLink to="/analytics?tab=miner-flows" class="btn btn-ghost">
+        <NuxtLink to="/analytics/miners" class="btn btn-ghost">
           <ArrowLeft class="h-4 w-4" />
           Back
         </NuxtLink>

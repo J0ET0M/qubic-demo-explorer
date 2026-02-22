@@ -40,12 +40,12 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const colors = [
-  'rgba(59, 130, 246, 0.8)',   // blue
-  'rgba(16, 185, 129, 0.8)',   // green
-  'rgba(245, 158, 11, 0.8)',   // amber
-  'rgba(239, 68, 68, 0.8)',    // red
-  'rgba(139, 92, 246, 0.8)',   // purple
-  'rgba(236, 72, 153, 0.8)'    // pink
+  'rgba(108, 140, 204, 0.75)',  // accent blue
+  'rgba(102, 187, 154, 0.75)',  // success green
+  'rgba(240, 184, 90, 0.75)',   // warning amber
+  'rgba(229, 115, 115, 0.75)',  // error red
+  'rgba(169, 142, 218, 0.75)',  // secondary purple
+  'rgba(236, 120, 170, 0.75)'   // pink
 ]
 
 const chartData = computed(() => ({
@@ -71,24 +71,24 @@ const chartOptions = computed(() => ({
       display: props.datasets.length > 1,
       position: 'top' as const,
       labels: {
-        color: 'rgb(156, 163, 175)',
+        color: 'rgb(139, 149, 168)',
         usePointStyle: true
       }
     },
     title: {
       display: !!props.title,
       text: props.title,
-      color: 'rgb(229, 231, 235)',
+      color: 'rgb(230, 234, 240)',
       font: {
         size: 14,
         weight: 'bold' as const
       }
     },
     tooltip: {
-      backgroundColor: 'rgb(31, 41, 55)',
-      titleColor: 'rgb(229, 231, 235)',
-      bodyColor: 'rgb(156, 163, 175)',
-      borderColor: 'rgb(75, 85, 99)',
+      backgroundColor: 'rgb(24, 27, 36)',
+      titleColor: 'rgb(230, 234, 240)',
+      bodyColor: 'rgb(139, 149, 168)',
+      borderColor: 'rgb(42, 48, 64)',
       borderWidth: 1,
       padding: 12,
       callbacks: {
@@ -107,16 +107,16 @@ const chartOptions = computed(() => ({
         display: false
       },
       ticks: {
-        color: 'rgb(156, 163, 175)'
+        color: 'rgb(139, 149, 168)'
       }
     },
     y: {
       stacked: props.stacked,
       grid: {
-        color: 'rgba(75, 85, 99, 0.3)'
+        color: 'rgba(42, 48, 64, 0.5)'
       },
       ticks: {
-        color: 'rgb(156, 163, 175)',
+        color: 'rgb(139, 149, 168)',
         callback: (value: number | string) => {
           const numValue = typeof value === 'string' ? parseFloat(value) : value
           if (numValue >= 1_000_000_000) return (numValue / 1_000_000_000).toFixed(1) + 'B'
@@ -128,7 +128,7 @@ const chartOptions = computed(() => ({
       title: {
         display: !!props.yAxisLabel,
         text: props.yAxisLabel,
-        color: 'rgb(156, 163, 175)'
+        color: 'rgb(139, 149, 168)'
       }
     }
   }
