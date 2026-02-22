@@ -2,7 +2,6 @@ using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json.Serialization;
 using Qubic.Core;
-using Qubic.Core.Entities;
 
 namespace QubicExplorer.Shared.Constants;
 
@@ -277,24 +276,24 @@ public static class TransactionInputParser
             ParsedQueryFields: parsedFields);
     }
 
-    // Price oracle query: oracle (32B id) + timestamp (8B DateAndTime) + currency1 (32B id) + currency2 (32B id)
+    // Price oracle query: oracle (32B id/ascii) + timestamp (8B DateAndTime) + currency1 (32B id/ascii) + currency2 (32B id/ascii)
     private static List<OracleQueryField> ParsePriceQuery(ReadOnlySpan<byte> queryData)
     {
         if (queryData.Length < 104) return [];
 
         var fields = new List<OracleQueryField>();
 
-        var oracleId = PublicKeyToIdentity(queryData.Slice(0, 32));
-        fields.Add(new OracleQueryField("Oracle", oracleId, "id"));
+        var oracle = ReadIdAsAscii(queryData.Slice(0, 32));
+        fields.Add(new OracleQueryField("Oracle", oracle, "text"));
 
         var timestampValue = BinaryPrimitives.ReadUInt64LittleEndian(queryData.Slice(32, 8));
         fields.Add(new OracleQueryField("Timestamp", FormatDateAndTime(timestampValue), "DateAndTime"));
 
-        var currency1 = PublicKeyToIdentity(queryData.Slice(40, 32));
-        fields.Add(new OracleQueryField("Currency 1", currency1, "id"));
+        var currency1 = ReadIdAsAscii(queryData.Slice(40, 32));
+        fields.Add(new OracleQueryField("Currency 1", currency1, "text"));
 
-        var currency2 = PublicKeyToIdentity(queryData.Slice(72, 32));
-        fields.Add(new OracleQueryField("Currency 2", currency2, "id"));
+        var currency2 = ReadIdAsAscii(queryData.Slice(72, 32));
+        fields.Add(new OracleQueryField("Currency 2", currency2, "text"));
 
         return fields;
     }
@@ -308,9 +307,16 @@ public static class TransactionInputParser
         return [new OracleQueryField("Value", value.ToString(), "uint64")];
     }
 
-    private static string PublicKeyToIdentity(ReadOnlySpan<byte> publicKey)
+    /// <summary>
+    /// Reads a 32-byte Qubic id as a null-terminated ASCII string.
+    /// Used for oracle fields like oracle name, currency names, etc. where the
+    /// id type stores text data (Ch namespace characters are plain ASCII values).
+    /// </summary>
+    private static string ReadIdAsAscii(ReadOnlySpan<byte> data)
     {
-        return QubicIdentity.FromPublicKey(publicKey.ToArray()).Identity;
+        var end = data.IndexOf((byte)0);
+        var textBytes = end >= 0 ? data.Slice(0, end) : data;
+        return Encoding.ASCII.GetString(textBytes);
     }
 
     /// <summary>
