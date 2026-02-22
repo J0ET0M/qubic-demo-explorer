@@ -166,6 +166,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
+            var inputType = reader.GetFieldValue<ushort>(6);
             items.Add(new TransactionDto(
                 reader.GetString(0),
                 reader.GetFieldValue<ulong>(1),
@@ -173,7 +174,8 @@ public class ClickHouseQueryService : IDisposable
                 reader.GetString(3),
                 reader.GetString(4),
                 reader.GetFieldValue<ulong>(5),
-                reader.GetFieldValue<ushort>(6),
+                inputType,
+                CoreTransactionInputTypes.IsKnownType(inputType) ? CoreTransactionInputTypes.GetDisplayName(inputType) : null,
                 reader.GetFieldValue<byte>(7) == 1,
                 reader.GetDateTime(8)
             ));
@@ -296,6 +298,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
+            var inputType = reader.GetFieldValue<ushort>(6);
             items.Add(new TransactionDto(
                 reader.GetString(0),
                 reader.GetFieldValue<ulong>(1),
@@ -303,7 +306,8 @@ public class ClickHouseQueryService : IDisposable
                 reader.GetString(3),
                 reader.GetString(4),
                 reader.GetFieldValue<ulong>(5),
-                reader.GetFieldValue<ushort>(6),
+                inputType,
+                CoreTransactionInputTypes.IsKnownType(inputType) ? CoreTransactionInputTypes.GetDisplayName(inputType) : null,
                 reader.GetFieldValue<byte>(7) == 1,
                 reader.GetDateTime(8)
             ));
@@ -379,9 +383,13 @@ public class ClickHouseQueryService : IDisposable
             }
         }
 
+        var inputTypeName = CoreTransactionInputTypes.IsKnownType(inputType)
+            ? CoreTransactionInputTypes.GetDisplayName(inputType) : null;
+        var parsedInput = TransactionInputParser.Parse(inputType, inputData);
+
         return new TransactionDetailDto(
             txHash, tickNumber, epoch, fromAddr, toAddr, amount,
-            inputType, inputData, executed, timestamp, logs);
+            inputType, inputTypeName, inputData, parsedInput, executed, timestamp, logs);
     }
 
     public async Task<SpecialTransactionDto?> GetSpecialTransactionAsync(string txHash, CancellationToken ct = default)

@@ -1,3 +1,5 @@
+using QubicExplorer.Shared.Constants;
+
 namespace QubicExplorer.Shared.DTOs;
 
 public record TransactionDto(
@@ -8,6 +10,7 @@ public record TransactionDto(
     string ToAddress,
     ulong Amount,
     ushort InputType,
+    string? InputTypeName,
     bool Executed,
     DateTime Timestamp
 );
@@ -20,7 +23,9 @@ public record TransactionDetailDto(
     string ToAddress,
     ulong Amount,
     ushort InputType,
+    string? InputTypeName,
     string? InputData,
+    ParsedInputData? ParsedInput,
     bool Executed,
     DateTime Timestamp,
     List<LogDto> Logs
