@@ -1,7 +1,8 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using QubicExplorer.Shared.Models;
 
-namespace QubicExplorer.Api.Services;
+namespace QubicExplorer.Shared.Services;
 
 public class AddressLabelService
 {
@@ -18,7 +19,7 @@ public class AddressLabelService
     // the burn address is also the zero address
     // zero address can be the source of emissions
     public const string BurnAddress =      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFXIB";
-    
+
     private static readonly HashSet<string> BurnAddresses = new(StringComparer.OrdinalIgnoreCase)
     {
         BurnAddress
@@ -271,9 +272,6 @@ public class AddressLabelService
         }
     }
 
-    /// <summary>
-    /// Get all addresses of a specific type
-    /// </summary>
     public List<AddressInfoDto> GetAddressesByType(AddressType type)
     {
         lock (_lock)
@@ -292,9 +290,6 @@ public class AddressLabelService
         }
     }
 
-    /// <summary>
-    /// Search for addresses by their label/name (case-insensitive partial match)
-    /// </summary>
     public List<AddressInfoDto> SearchByLabel(string query, int maxResults = 10)
     {
         if (string.IsNullOrWhiteSpace(query))
@@ -308,19 +303,17 @@ public class AddressLabelService
                 .Where(kvp =>
                 {
                     var label = kvp.Value.Label.ToLowerInvariant();
-                    // All search terms must be present in the label
                     return searchTerms.All(term => label.Contains(term));
                 })
                 .OrderByDescending(kvp =>
                 {
-                    // Prioritize exact matches, then prefix matches, then contains
                     var label = kvp.Value.Label.ToLowerInvariant();
                     var queryLower = query.ToLowerInvariant();
                     if (label == queryLower) return 100;
                     if (label.StartsWith(queryLower)) return 50;
                     return 0;
                 })
-                .ThenBy(kvp => kvp.Value.Label.Length) // Shorter labels first
+                .ThenBy(kvp => kvp.Value.Label.Length)
                 .Take(maxResults)
                 .Select(kvp => new AddressInfoDto
                 {

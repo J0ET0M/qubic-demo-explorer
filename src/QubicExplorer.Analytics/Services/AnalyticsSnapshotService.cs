@@ -1,10 +1,12 @@
-namespace QubicExplorer.Api.Services;
+namespace QubicExplorer.Analytics.Services;
 
 /// <summary>
 /// Background service that periodically saves analytics snapshots.
 /// Creates snapshots every 4 hours to track historical trends for:
 /// - Holder distribution (whale analysis, concentration metrics)
 /// - Network stats (transactions, active addresses, exchange flows, SC usage)
+/// - Burn stats (QU burned via BurnQubic SC, dust burns, direct transfers)
+/// - Miner flow (computor emission tracking through multiple hops)
 ///
 /// On startup, catches up on any missed snapshots by creating all windows
 /// from the last snapshot until the current time.
@@ -40,7 +42,7 @@ public class AnalyticsSnapshotService : BackgroundService
             {
                 // Get current epoch from the database
                 using var scope = _serviceProvider.CreateScope();
-                var queryService = scope.ServiceProvider.GetRequiredService<ClickHouseQueryService>();
+                var queryService = scope.ServiceProvider.GetRequiredService<AnalyticsQueryService>();
                 var currentEpoch = await queryService.GetCurrentEpochAsync(stoppingToken);
 
                 if (currentEpoch == null)
@@ -87,10 +89,6 @@ public class AnalyticsSnapshotService : BackgroundService
         }
     }
 
-    /// <summary>
-    /// Catches up on any missed snapshots by creating all 4-hour windows
-    /// from the last snapshot until the current time.
-    /// </summary>
     private async Task CatchUpOnMissedSnapshotsAsync(CancellationToken ct)
     {
         _logger.LogInformation("Checking for missed analytics snapshots...");
@@ -98,7 +96,7 @@ public class AnalyticsSnapshotService : BackgroundService
         try
         {
             using var scope = _serviceProvider.CreateScope();
-            var queryService = scope.ServiceProvider.GetRequiredService<ClickHouseQueryService>();
+            var queryService = scope.ServiceProvider.GetRequiredService<AnalyticsQueryService>();
 
             var currentEpoch = await queryService.GetCurrentEpochAsync(ct);
             if (currentEpoch == null)
@@ -114,8 +112,6 @@ public class AnalyticsSnapshotService : BackgroundService
                 var created = await CreateHolderDistributionSnapshotAsync(queryService, currentEpoch.Value, ct);
                 if (!created) break;
                 holderSnapshotsCreated++;
-
-                // Small delay to avoid overwhelming the database
                 await Task.Delay(100, ct);
             }
 
@@ -131,8 +127,6 @@ public class AnalyticsSnapshotService : BackgroundService
                 var created = await CreateNetworkStatsSnapshotAsync(queryService, currentEpoch.Value, ct);
                 if (!created) break;
                 networkSnapshotsCreated++;
-
-                // Small delay to avoid overwhelming the database
                 await Task.Delay(100, ct);
             }
 
@@ -148,7 +142,6 @@ public class AnalyticsSnapshotService : BackgroundService
                 var created = await CreateBurnStatsSnapshotAsync(queryService, currentEpoch.Value, ct);
                 if (!created) break;
                 burnSnapshotsCreated++;
-
                 await Task.Delay(100, ct);
             }
 
@@ -165,8 +158,6 @@ public class AnalyticsSnapshotService : BackgroundService
                 var created = await CreateMinerFlowSnapshotAsync(queryService, flowService, currentEpoch.Value, ct);
                 if (!created) break;
                 minerFlowSnapshotsCreated++;
-
-                // Small delay to avoid overwhelming the database
                 await Task.Delay(100, ct);
             }
 
@@ -186,16 +177,11 @@ public class AnalyticsSnapshotService : BackgroundService
         }
     }
 
-    /// <summary>
-    /// Creates a holder distribution snapshot for the next 4-hour window.
-    /// Returns true if a snapshot was created, false if there's not enough data yet.
-    /// </summary>
     private async Task<bool> CreateHolderDistributionSnapshotAsync(
-        ClickHouseQueryService queryService, uint currentEpoch, CancellationToken ct)
+        AnalyticsQueryService queryService, uint currentEpoch, CancellationToken ct)
     {
         try
         {
-            // Get the last snapshot's tick_end to determine the starting point
             var lastTickEnd = await queryService.GetLastHolderDistributionSnapshotTickEndAsync(currentEpoch, ct);
 
             ulong tickStart;
@@ -203,7 +189,6 @@ public class AnalyticsSnapshotService : BackgroundService
 
             if (lastTickEnd == 0)
             {
-                // No previous snapshot - start from the first tick in the database
                 var firstTick = await queryService.GetFirstTickAsync(ct);
                 if (firstTick == null)
                 {
@@ -216,7 +201,6 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             else
             {
-                // Find the next tick after the last snapshot's end (tick numbers have gaps)
                 var nextTick = await queryService.GetNextTickAfterAsync(lastTickEnd, ct);
                 if (nextTick == null)
                 {
@@ -224,16 +208,12 @@ public class AnalyticsSnapshotService : BackgroundService
                     return false;
                 }
                 tickStart = nextTick.Value.TickNumber;
-                // Use last snapshot's end tick timestamp as window start
-                // (epoch boundary ticks can have incorrect timestamps)
                 var lastTickTimestamp = await queryService.GetTickTimestampAsync(lastTickEnd, ct);
                 windowStartTime = lastTickTimestamp ?? nextTick.Value.Timestamp;
             }
 
-            // Calculate the window end time (start + 4 hours)
             var windowEndTime = windowStartTime.AddHours(4);
 
-            // Check if we have enough data for a full 4-hour window
             var currentTick = await queryService.GetCurrentTickAsync(ct);
             if (currentTick == null)
             {
@@ -250,7 +230,6 @@ public class AnalyticsSnapshotService : BackgroundService
                 return false;
             }
 
-            // Get the tick at the window end time
             var tickEnd = await queryService.GetTickAtTimestampAsync(windowEndTime, ct);
             if (tickEnd == null || tickEnd.Value <= tickStart)
             {
@@ -278,16 +257,11 @@ public class AnalyticsSnapshotService : BackgroundService
         }
     }
 
-    /// <summary>
-    /// Creates a network stats snapshot for the next 4-hour window.
-    /// Returns true if a snapshot was created, false if there's not enough data yet.
-    /// </summary>
     private async Task<bool> CreateNetworkStatsSnapshotAsync(
-        ClickHouseQueryService queryService, uint currentEpoch, CancellationToken ct)
+        AnalyticsQueryService queryService, uint currentEpoch, CancellationToken ct)
     {
         try
         {
-            // Get the last snapshot's tick_end to determine the starting point
             var lastTickEnd = await queryService.GetLastNetworkStatsSnapshotTickEndAsync(currentEpoch, ct);
 
             ulong tickStart;
@@ -295,7 +269,6 @@ public class AnalyticsSnapshotService : BackgroundService
 
             if (lastTickEnd == 0)
             {
-                // No previous snapshot - start from the first tick in the database
                 var firstTick = await queryService.GetFirstTickAsync(ct);
                 if (firstTick == null)
                 {
@@ -308,7 +281,6 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             else
             {
-                // Find the next tick after the last snapshot's end (tick numbers have gaps)
                 var nextTick = await queryService.GetNextTickAfterAsync(lastTickEnd, ct);
                 if (nextTick == null)
                 {
@@ -316,16 +288,12 @@ public class AnalyticsSnapshotService : BackgroundService
                     return false;
                 }
                 tickStart = nextTick.Value.TickNumber;
-                // Use last snapshot's end tick timestamp as window start
-                // (epoch boundary ticks can have incorrect timestamps)
                 var lastTickTimestamp = await queryService.GetTickTimestampAsync(lastTickEnd, ct);
                 windowStartTime = lastTickTimestamp ?? nextTick.Value.Timestamp;
             }
 
-            // Calculate the window end time (start + 4 hours)
             var windowEndTime = windowStartTime.AddHours(4);
 
-            // Check if we have enough data for a full 4-hour window
             var currentTick = await queryService.GetCurrentTickAsync(ct);
             if (currentTick == null)
             {
@@ -342,7 +310,6 @@ public class AnalyticsSnapshotService : BackgroundService
                 return false;
             }
 
-            // Get the tick at the window end time
             var tickEnd = await queryService.GetTickAtTimestampAsync(windowEndTime, ct);
             if (tickEnd == null || tickEnd.Value <= tickStart)
             {
@@ -370,25 +337,14 @@ public class AnalyticsSnapshotService : BackgroundService
         }
     }
 
-    /// <summary>
-    /// Creates a miner flow snapshot for the next 4-hour window.
-    /// Tracks money flow from computors (who receive epoch emission) through multiple hops.
-    /// Revenue distribution happens at the END of each epoch (in the last tick).
-    /// We track computors from the current epoch receiving their rewards.
-    /// Returns true if a snapshot was created, false if there's not enough data yet.
-    /// </summary>
     private async Task<bool> CreateMinerFlowSnapshotAsync(
-        ClickHouseQueryService queryService,
+        AnalyticsQueryService queryService,
         ComputorFlowService flowService,
         uint currentEpoch,
         CancellationToken ct)
     {
         try
         {
-            // We are in epoch N+1 (currentEpoch).
-            // Computors from epoch N received their emission at the END of epoch N (last tick).
-            // So we track computors from the PREVIOUS epoch (N = currentEpoch - 1).
-            // Their outflows during epoch N+1 represent the money flow we want to track.
             if (currentEpoch == 0)
             {
                 _logger.LogDebug("Current epoch is 0, no previous epoch to track miner flow from");
@@ -396,7 +352,6 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             var emissionEpoch = currentEpoch - 1;
 
-            // Get the last miner flow snapshot's tick_end to determine the starting point
             var lastTickEnd = await queryService.GetLastMinerFlowSnapshotTickEndAsync(currentEpoch, ct);
 
             ulong tickStart;
@@ -404,7 +359,6 @@ public class AnalyticsSnapshotService : BackgroundService
 
             if (lastTickEnd == 0)
             {
-                // No previous snapshot - start from the first tick in the database
                 var firstTick = await queryService.GetFirstTickAsync(ct);
                 if (firstTick == null)
                 {
@@ -417,7 +371,6 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             else
             {
-                // Find the next tick after the last snapshot's end (tick numbers have gaps)
                 var nextTick = await queryService.GetNextTickAfterAsync(lastTickEnd, ct);
                 if (nextTick == null)
                 {
@@ -425,16 +378,12 @@ public class AnalyticsSnapshotService : BackgroundService
                     return false;
                 }
                 tickStart = nextTick.Value.TickNumber;
-                // Use last snapshot's end tick timestamp as window start
-                // (epoch boundary ticks can have incorrect timestamps)
                 var lastTickTimestamp = await queryService.GetTickTimestampAsync(lastTickEnd, ct);
                 windowStartTime = lastTickTimestamp ?? nextTick.Value.Timestamp;
             }
 
-            // Calculate the window end time (start + 4 hours)
             var windowEndTime = windowStartTime.AddHours(4);
 
-            // Check if we have enough data for a full 4-hour window
             var currentTick = await queryService.GetCurrentTickAsync(ct);
             if (currentTick == null)
             {
@@ -451,7 +400,6 @@ public class AnalyticsSnapshotService : BackgroundService
                 return false;
             }
 
-            // Get the tick at the window end time
             var tickEnd = await queryService.GetTickAtTimestampAsync(windowEndTime, ct);
             if (tickEnd == null || tickEnd.Value <= tickStart)
             {
@@ -465,7 +413,6 @@ public class AnalyticsSnapshotService : BackgroundService
                 windowStartTime.ToString("yyyy-MM-dd HH:mm:ss"),
                 windowEndTime.ToString("yyyy-MM-dd HH:mm:ss"));
 
-            // Run the flow analysis
             var stats = await flowService.AnalyzeFlowForWindowAsync(
                 currentEpoch, emissionEpoch, tickStart, tickEnd.Value, ct);
 
@@ -488,12 +435,8 @@ public class AnalyticsSnapshotService : BackgroundService
         }
     }
 
-    /// <summary>
-    /// Creates a burn stats snapshot for the next 4-hour window.
-    /// Returns true if a snapshot was created, false if there's not enough data yet.
-    /// </summary>
     private async Task<bool> CreateBurnStatsSnapshotAsync(
-        ClickHouseQueryService queryService, uint currentEpoch, CancellationToken ct)
+        AnalyticsQueryService queryService, uint currentEpoch, CancellationToken ct)
     {
         try
         {
@@ -517,7 +460,6 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             else
             {
-                // Find the next tick after the last snapshot's end (tick numbers have gaps)
                 var nextTick = await queryService.GetNextTickAfterAsync(lastTickEnd, ct);
                 if (nextTick == null)
                 {
@@ -525,8 +467,6 @@ public class AnalyticsSnapshotService : BackgroundService
                     return false;
                 }
                 tickStart = nextTick.Value.TickNumber;
-                // Use last snapshot's end tick timestamp as window start
-                // (epoch boundary ticks can have incorrect timestamps)
                 var lastTickTimestamp = await queryService.GetTickTimestampAsync(lastTickEnd, ct);
                 windowStartTime = lastTickTimestamp ?? nextTick.Value.Timestamp;
                 _logger.LogInformation("Burn stats: continuing from tick {Tick}, window start {Time}", tickStart, windowStartTime);

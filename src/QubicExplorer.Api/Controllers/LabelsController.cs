@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using QubicExplorer.Api.Services;
+using QubicExplorer.Shared.Services;
 
 namespace QubicExplorer.Api.Controllers;
 

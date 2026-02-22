@@ -2,7 +2,8 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Options;
 using Qubic.Bob;
 using Qubic.Bob.Models;
-using QubicExplorer.Indexer.Configuration;
+using QubicExplorer.Shared.Configuration;
+using IndexerOptions = QubicExplorer.Indexer.Configuration.IndexerOptions;
 using QubicExplorer.Indexer.Models;
 
 namespace QubicExplorer.Indexer.Services;

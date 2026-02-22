@@ -4,7 +4,7 @@ using ClickHouse.Client.ADO;
 using ClickHouse.Client.Copy;
 using Microsoft.Extensions.Options;
 using Qubic.Crypto;
-using QubicExplorer.Api.Configuration;
+using QubicExplorer.Shared.Configuration;
 
 namespace QubicExplorer.Api.Services;
 

@@ -1,10 +1,9 @@
 using ClickHouse.Client.ADO;
 using Microsoft.Extensions.Options;
 using Qubic.Bob;
-using QubicExplorer.Shared.Configuration;
-using QubicExplorer.Api.Hubs;
-using QubicExplorer.Api.Services;
+using QubicExplorer.Analytics.Services;
 using QubicExplorer.Shared;
+using QubicExplorer.Shared.Configuration;
 using QubicExplorer.Shared.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -36,8 +35,7 @@ builder.Services.AddHttpClient();
 
 // Register services
 builder.Services.AddSingleton<AnalyticsCacheService>();
-builder.Services.AddSingleton<ClickHouseQueryService>();
-builder.Services.AddSingleton<SpectrumImportService>();
+builder.Services.AddSingleton<AnalyticsQueryService>();
 
 // AddressLabelService - fetches and caches address labels
 builder.Services.AddSingleton<AddressLabelService>(sp =>
@@ -48,7 +46,7 @@ builder.Services.AddSingleton<AddressLabelService>(sp =>
     return new AddressLabelService(httpClientFactory.CreateClient(), options.BundleUrl, logger);
 });
 
-// BobWebSocketClient - shared singleton for all Bob communication (subscriptions + RPC queries)
+// BobWebSocketClient - shared singleton for Bob communication
 builder.Services.AddSingleton<BobWebSocketClient>(sp =>
 {
     var bobOptions = sp.GetRequiredService<IOptions<BobOptions>>().Value;
@@ -59,49 +57,21 @@ builder.Services.AddSingleton<BobWebSocketClient>(sp =>
     return new BobWebSocketClient(wsOptions);
 });
 
-// BobProxyService - cached RPC queries over the shared BobWebSocketClient
+// BobProxyService - cached RPC queries
 builder.Services.AddSingleton<BobProxyService>();
 
-// ComputorFlowService - manages computor list imports
+// ComputorFlowService - tracks miner/computor money flow
 builder.Services.AddSingleton<ComputorFlowService>();
 
-builder.Services.AddHostedService<LiveTickService>();
-builder.Services.AddHostedService<EpochMetaSyncService>();
-builder.Services.AddHostedService<EpochTransitionService>();
+// Background services
+builder.Services.AddHostedService<AnalyticsSnapshotService>();
 
-// Add controllers
+// Add controllers (for admin endpoints)
 builder.Services.AddControllers();
-
-// Add SignalR
-builder.Services.AddSignalR();
-
-// Add CORS - allow all origins
-builder.Services.AddCors(options =>
-{
-    options.AddDefaultPolicy(policy =>
-    {
-        policy.SetIsOriginAllowed(_ => true)
-              .AllowAnyMethod()
-              .AllowAnyHeader()
-              .AllowCredentials();
-    });
-
-    options.AddPolicy("SignalR", policy =>
-    {
-        policy.SetIsOriginAllowed(_ => true)
-              .AllowAnyMethod()
-              .AllowAnyHeader()
-              .AllowCredentials();
-    });
-});
-
-// Add Swagger
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// Ensure ClickHouse database and schema exist before any service opens a connection
+// Ensure ClickHouse database and schema exist
 {
     var chOptions = app.Services.GetRequiredService<IOptions<ClickHouseOptions>>().Value;
     var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SchemaInit");
@@ -135,25 +105,10 @@ await bobClient.ConnectAsync();
 var addressLabelService = app.Services.GetRequiredService<AddressLabelService>();
 await addressLabelService.InitializeAsync();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
-
-app.UseRouting();
-
-// CORS must be after UseRouting and before UseEndpoints
-app.UseCors();
-
-// Map endpoints
+// Map admin endpoints
 app.MapControllers();
 
-// SignalR hub with CORS policy
-app.MapHub<LiveUpdatesHub>("/hubs/live").RequireCors("SignalR");
-
 // Health check endpoint
-app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "analytics" }));
 
 app.Run();

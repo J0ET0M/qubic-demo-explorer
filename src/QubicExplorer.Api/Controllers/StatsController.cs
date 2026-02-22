@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Mvc;
-using QubicExplorer.Api.Attributes;
 using QubicExplorer.Api.Services;
 
 namespace QubicExplorer.Api.Controllers;
@@ -182,18 +181,6 @@ public class StatsController : ControllerBase
 
         var result = await _queryService.GetNetworkStatsExtendedAsync(historyLimit, from, to, ct);
         return Ok(result);
-    }
-
-    [HttpPost("network-stats/snapshot/{epoch}")]
-    [AdminApiKey]
-    public async Task<IActionResult> SaveNetworkStatsSnapshot(
-        uint epoch,
-        [FromQuery] ulong tickStart = 0,
-        [FromQuery] ulong tickEnd = 0,
-        CancellationToken ct = default)
-    {
-        await _queryService.SaveNetworkStatsSnapshotAsync(epoch, tickStart, tickEnd, ct);
-        return Ok(new { success = true, epoch, tickStart, tickEnd });
     }
 
     // =====================================================

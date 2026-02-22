@@ -1,5 +1,6 @@
-using QubicExplorer.Indexer.Configuration;
 using QubicExplorer.Indexer.Services;
+using QubicExplorer.Shared.Configuration;
+using IndexerOptions = QubicExplorer.Indexer.Configuration.IndexerOptions;
 
 var builder = Host.CreateApplicationBuilder(args);
 

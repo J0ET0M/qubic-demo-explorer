@@ -1,40 +1,31 @@
 using Microsoft.AspNetCore.Mvc;
-using QubicExplorer.Api.Attributes;
 using QubicExplorer.Api.Services;
+using QubicExplorer.Shared.DTOs;
 
 namespace QubicExplorer.Api.Controllers;
 
 /// <summary>
-/// Controller for miner/computor flow tracking and analysis.
-/// Tracks money flow from computors (who receive epoch emission) through multiple hops
-/// to identify flow to exchanges and other destinations.
+/// Read-only controller for miner/computor flow data.
+/// Admin/write operations are in the Analytics service's AdminController.
 /// </summary>
 [ApiController]
 [Route("api/miner-flow")]
 public class MinerFlowController : ControllerBase
 {
-    private readonly ComputorFlowService _flowService;
     private readonly ClickHouseQueryService _queryService;
-    private readonly ILogger<MinerFlowController> _logger;
 
-    public MinerFlowController(
-        ComputorFlowService flowService,
-        ClickHouseQueryService queryService,
-        ILogger<MinerFlowController> logger)
+    public MinerFlowController(ClickHouseQueryService queryService)
     {
-        _flowService = flowService;
         _queryService = queryService;
-        _logger = logger;
     }
 
     /// <summary>
     /// Gets the list of computors for a specific epoch.
-    /// Fetches from RPC and caches if not already imported.
     /// </summary>
     [HttpGet("computors/{epoch}")]
     public async Task<IActionResult> GetComputors(uint epoch, CancellationToken ct = default)
     {
-        var result = await _flowService.GetComputorsAsync(epoch, ct);
+        var result = await _queryService.GetComputorsAsync(epoch, ct);
         if (result == null)
         {
             return NotFound(new { error = $"Computors not available for epoch {epoch}" });
@@ -56,13 +47,27 @@ public class MinerFlowController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 500) limit = 500;
 
-        var result = await _flowService.GetMinerFlowHistoryAsync(limit, from, to, ct);
-        return Ok(result);
+        var history = await _queryService.GetMinerFlowStatsHistoryAsync(limit, from, to, ct);
+        var latest = history.FirstOrDefault();
+
+        var uniqueEmissionEpochs = history.Select(s => s.EmissionEpoch).Distinct().ToList();
+        var totalEmission = await _queryService.GetTotalEmissionsForEpochsAsync(uniqueEmissionEpochs, ct);
+
+        var totalToExchange = history.Sum(s => s.FlowToExchangeTotal);
+        var avgPercent = totalEmission > 0 ? (totalToExchange / totalEmission) * 100 : 0;
+
+        return Ok(new MinerFlowSummaryDto(
+            Latest: latest,
+            History: history,
+            TotalEmissionTracked: totalEmission,
+            TotalFlowToExchange: totalToExchange,
+            AverageExchangeFlowPercent: avgPercent
+        ));
     }
 
     /// <summary>
     /// Gets flow visualization data for Sankey diagram.
-    /// The emissionEpoch parameter specifies which emission to track (e.g., EP195 = computors from epoch 195).
+    /// The emissionEpoch parameter specifies which emission to track.
     /// Returns all flow hops for that emission across all tracked tick windows.
     /// </summary>
     [HttpGet("visualization/{emissionEpoch}")]
@@ -74,12 +79,13 @@ public class MinerFlowController : ControllerBase
         if (maxDepth < 1) maxDepth = 1;
         if (maxDepth > 10) maxDepth = 10;
 
-        // Get all flow hops for this emission epoch (across all tick windows)
-        var result = await _flowService.GetFlowVisualizationByEmissionEpochAsync(emissionEpoch, maxDepth, ct);
-        if (result == null)
+        var hops = await _queryService.GetFlowHopsByEmissionEpochAsync(emissionEpoch, maxDepth, ct);
+        if (hops.Count == 0)
         {
             return NotFound(new { error = $"No flow visualization data available for emission epoch {emissionEpoch}" });
         }
+
+        var result = BuildFlowVisualization(emissionEpoch, hops);
         return Ok(result);
     }
 
@@ -100,7 +106,6 @@ public class MinerFlowController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 10000) limit = 10000;
 
-        // If no tick range provided, get the latest window for this epoch
         if (tickStart == 0 || tickEnd == 0)
         {
             var latestStats = await _queryService.GetMinerFlowStatsHistoryAsync(1, ct: ct);
@@ -128,225 +133,12 @@ public class MinerFlowController : ControllerBase
         });
     }
 
-    /// <summary>
-    /// Triggers flow analysis for a specific epoch/window.
-    /// Admin only - normally triggered by the scheduled snapshot service.
-    /// </summary>
-    [HttpPost("analyze/{currentEpoch}")]
-    [AdminApiKey]
-    public async Task<IActionResult> AnalyzeFlow(
-        uint currentEpoch,
-        [FromQuery] uint? emissionEpoch = null,
-        [FromQuery] ulong tickStart = 0,
-        [FromQuery] ulong tickEnd = 0,
-        CancellationToken ct = default)
-    {
-        // Emission epoch defaults to current-1 (computors from previous epoch receive rewards in current)
-        var effectiveEmissionEpoch = emissionEpoch ?? (currentEpoch > 0 ? currentEpoch - 1 : 0);
-
-        if (tickStart == 0 || tickEnd == 0)
-        {
-            return BadRequest(new { error = "tickStart and tickEnd are required" });
-        }
-
-        _logger.LogInformation(
-            "Manual flow analysis triggered for epoch {Epoch} (emission from {EmissionEpoch}), ticks {TickStart}-{TickEnd}",
-            currentEpoch, effectiveEmissionEpoch, tickStart, tickEnd);
-
-        var result = await _flowService.AnalyzeFlowForWindowAsync(
-            currentEpoch, effectiveEmissionEpoch, tickStart, tickEnd, ct);
-
-        if (result == null)
-        {
-            return BadRequest(new { error = "Flow analysis failed - check logs for details" });
-        }
-
-        return Ok(result);
-    }
-
-    /// <summary>
-    /// Triggers flow analysis for a specific emission epoch.
-    /// Admin only - this analyzes flow from emissionEpoch+1 initial tick to the latest tick available.
-    ///
-    /// The emission happens at the END of emissionEpoch, so we track transfers starting from
-    /// the beginning of emissionEpoch+1 onwards (when computors can start moving their rewards).
-    /// </summary>
-    [HttpPost("analyze-emission/{emissionEpoch}")]
-    [AdminApiKey]
-    public async Task<IActionResult> AnalyzeEmissionFlow(
-        uint emissionEpoch,
-        [FromQuery] int batchSize = 10000,
-        CancellationToken ct = default)
-    {
-        // Get the starting epoch (emissionEpoch + 1) tick range
-        var startEpoch = emissionEpoch + 1;
-        var startTickRange = await _queryService.GetTickRangeForEpochAsync(startEpoch, ct);
-        if (!startTickRange.HasValue)
-        {
-            return NotFound(new { error = $"No ticks found for epoch {startEpoch} (emission epoch + 1)" });
-        }
-
-        var tickStart = startTickRange.Value.MinTick;
-
-        // Get the latest tick in the database (across all epochs)
-        var networkStats = await _queryService.GetNetworkStatsAsync(ct);
-        var tickEnd = networkStats?.LatestTick ?? startTickRange.Value.MaxTick;
-
-        // Get the current epoch for the tick end
-        var currentEpoch = networkStats?.CurrentEpoch ?? startEpoch;
-
-        _logger.LogInformation(
-            "Full emission flow analysis triggered for emission epoch {EmissionEpoch}, " +
-            "tracking from tick {TickStart} (epoch {StartEpoch}) to tick {TickEnd} (epoch {CurrentEpoch})",
-            emissionEpoch, tickStart, startEpoch, tickEnd, currentEpoch);
-
-        // Process in batches to avoid timeouts and memory issues
-        var batchCount = 0;
-        var currentTick = tickStart;
-        var processedEpochs = new HashSet<uint>();
-
-        while (currentTick <= tickEnd)
-        {
-            var batchEnd = Math.Min(currentTick + (ulong)batchSize - 1, tickEnd);
-            batchCount++;
-
-            // Determine which epoch this batch belongs to (for logging)
-            // We use the emissionEpoch for all batches since we're tracking that emission
-            var batchEpoch = startEpoch; // Could be refined to track actual epoch per tick
-            processedEpochs.Add(batchEpoch);
-
-            _logger.LogInformation(
-                "Processing batch {Batch}: ticks {Start}-{End}",
-                batchCount, currentTick, batchEnd);
-
-            // Always use startEpoch as the "current epoch" parameter since we're tracking
-            // a specific emission epoch's flow
-            await _flowService.AnalyzeFlowForWindowAsync(
-                startEpoch, emissionEpoch, currentTick, batchEnd, ct);
-
-            currentTick = batchEnd + 1;
-        }
-
-        // Get final flow visualization stats
-        var flowViz = await _flowService.GetFlowVisualizationByEmissionEpochAsync(emissionEpoch, 10, ct);
-
-        return Ok(new
-        {
-            success = true,
-            emissionEpoch,
-            tickStart,
-            tickEnd,
-            startEpoch,
-            currentEpoch,
-            batchCount,
-            batchSize,
-            totalTicks = tickEnd - tickStart + 1,
-            nodesTracked = flowViz?.Nodes.Count ?? 0,
-            linksTracked = flowViz?.Links.Count ?? 0
-        });
-    }
-
-    /// <summary>
-    /// Validates flow conservation for an emission epoch.
-    /// Checks data integrity: computor emissions match, no negative pending amounts,
-    /// flow conservation across hop levels.
-    /// </summary>
-    [HttpGet("validate/{emissionEpoch}")]
-    public async Task<IActionResult> ValidateFlowConservation(uint emissionEpoch, CancellationToken ct = default)
-    {
-        var result = await _flowService.ValidateFlowConservationAsync(emissionEpoch, ct);
-        return Ok(result);
-    }
-
-    /// <summary>
-    /// Imports computors for a specific epoch from RPC.
-    /// Admin only - normally done automatically during analysis.
-    /// </summary>
-    [HttpPost("import-computors/{epoch}")]
-    [AdminApiKey]
-    public async Task<IActionResult> ImportComputors(uint epoch, CancellationToken ct = default)
-    {
-        var success = await _flowService.EnsureComputorsImportedAsync(epoch, ct);
-        if (!success)
-        {
-            return BadRequest(new { error = $"Failed to import computors for epoch {epoch}" });
-        }
-
-        var computors = await _flowService.GetComputorsAsync(epoch, ct);
-        return Ok(new
-        {
-            success = true,
-            epoch,
-            count = computors?.Count ?? 0
-        });
-    }
-
     // =====================================================
-    // EMISSIONS ENDPOINTS
+    // EMISSIONS ENDPOINTS (read-only)
     // =====================================================
-
-    /// <summary>
-    /// Manually captures emissions for a specific epoch.
-    /// Admin only - use this to backfill emissions for historical epochs.
-    /// </summary>
-    [HttpPost("emissions/{epoch}/capture")]
-    [AdminApiKey]
-    public async Task<IActionResult> CaptureEmissions(uint epoch, CancellationToken ct = default)
-    {
-        // Check if already captured
-        if (await _queryService.IsEmissionImportedAsync(epoch, ct))
-        {
-            var existing = await _queryService.GetEmissionSummaryAsync(epoch, ct);
-            return Ok(new
-            {
-                success = true,
-                message = "Emissions already captured",
-                epoch,
-                computorCount = existing?.ComputorCount ?? 0,
-                totalEmission = existing?.TotalEmission ?? 0
-            });
-        }
-
-        // Get epoch metadata to find the end tick
-        var epochMeta = await _queryService.GetEpochMetaAsync(epoch, ct);
-        if (epochMeta == null || epochMeta.EndTick == 0)
-        {
-            return BadRequest(new { error = $"Epoch {epoch} metadata not found or incomplete. EndTick is required." });
-        }
-
-        // Ensure computors are imported
-        if (!await _flowService.EnsureComputorsImportedAsync(epoch, ct))
-        {
-            return BadRequest(new { error = $"Failed to import computors for epoch {epoch}" });
-        }
-
-        // Get computor addresses
-        var computorList = await _queryService.GetComputorsAsync(epoch, ct);
-        if (computorList == null || computorList.Computors.Count == 0)
-        {
-            return BadRequest(new { error = $"No computors found for epoch {epoch}" });
-        }
-
-        var computorAddresses = computorList.Computors.Select(c => c.Address).ToHashSet();
-        var addressToIndex = computorList.Computors.ToDictionary(c => c.Address, c => (int)c.Index);
-
-        // Capture emissions
-        var (count, total) = await _queryService.CaptureEmissionsForEpochAsync(
-            epoch, epochMeta.EndTick, computorAddresses, addressToIndex, ct);
-
-        return Ok(new
-        {
-            success = count > 0,
-            epoch,
-            endTick = epochMeta.EndTick,
-            computorCount = count,
-            totalEmission = total
-        });
-    }
 
     /// <summary>
     /// Gets emission summary for an epoch.
-    /// Returns total emission and computor count.
     /// </summary>
     [HttpGet("emissions/{epoch}")]
     public async Task<IActionResult> GetEmissions(uint epoch, CancellationToken ct = default)
@@ -404,24 +196,94 @@ public class MinerFlowController : ControllerBase
     }
 
     /// <summary>
-    /// Recalculates all miner_flow_stats snapshots with correct emission values from emission_imports.
-    /// Admin only - use this after backfilling emissions to fix historical snapshots.
+    /// Builds flow visualization (Sankey diagram data) from raw flow hops.
     /// </summary>
-    [HttpPost("recalculate-emissions")]
-    [AdminApiKey]
-    public async Task<IActionResult> RecalculateEmissions(CancellationToken ct = default)
+    private static FlowVisualizationDto BuildFlowVisualization(uint emissionEpoch, List<FlowHopDto> hops)
     {
-        _logger.LogInformation("Manual recalculation of miner flow stats emissions triggered");
+        var nodeMinDepth = new Dictionary<string, int>();
+        var nodeTypes = new Dictionary<string, string>();
+        var nodeLabels = new Dictionary<string, string?>();
 
-        var updatedCount = await _queryService.RecalculateMinerFlowStatsEmissionsAsync(ct);
-
-        _logger.LogInformation("Recalculated {Count} miner flow stats snapshots", updatedCount);
-
-        return Ok(new
+        // Identify computors (sources at hop level 1)
+        foreach (var hop in hops.Where(h => h.HopLevel == 1))
         {
-            success = true,
-            message = $"Recalculated {updatedCount} snapshots with correct emission values",
-            snapshotsUpdated = updatedCount
-        });
+            nodeMinDepth[hop.SourceAddress] = 0;
+            nodeTypes[hop.SourceAddress] = "computor";
+            if (!string.IsNullOrEmpty(hop.SourceLabel))
+                nodeLabels[hop.SourceAddress] = hop.SourceLabel;
+        }
+
+        // Determine depths for all nodes
+        foreach (var hop in hops.OrderBy(h => h.HopLevel))
+        {
+            if (!nodeMinDepth.ContainsKey(hop.SourceAddress))
+            {
+                nodeMinDepth[hop.SourceAddress] = hop.HopLevel - 1;
+                nodeTypes[hop.SourceAddress] = "intermediary";
+            }
+            if (!string.IsNullOrEmpty(hop.SourceLabel) && !nodeLabels.ContainsKey(hop.SourceAddress))
+                nodeLabels[hop.SourceAddress] = hop.SourceLabel;
+
+            if (!nodeMinDepth.ContainsKey(hop.DestAddress))
+            {
+                nodeMinDepth[hop.DestAddress] = hop.HopLevel;
+                nodeTypes[hop.DestAddress] = hop.DestType ?? "unknown";
+            }
+            else if (hop.HopLevel < nodeMinDepth[hop.DestAddress])
+            {
+                nodeMinDepth[hop.DestAddress] = hop.HopLevel;
+            }
+            if (!string.IsNullOrEmpty(hop.DestLabel) && !nodeLabels.ContainsKey(hop.DestAddress))
+                nodeLabels[hop.DestAddress] = hop.DestLabel;
+        }
+
+        // Build nodes
+        var nodes = new Dictionary<string, FlowVisualizationNodeDto>();
+        foreach (var (address, depth) in nodeMinDepth)
+        {
+            nodes[address] = new FlowVisualizationNodeDto(
+                Id: address,
+                Address: address,
+                Label: nodeLabels.GetValueOrDefault(address),
+                Type: nodeTypes.GetValueOrDefault(address, "unknown"),
+                TotalInflow: 0,
+                TotalOutflow: 0,
+                Depth: depth
+            );
+        }
+
+        // Process hops to update flows and links
+        var links = new Dictionary<(string, string), (decimal Amount, uint Count)>();
+        foreach (var hop in hops)
+        {
+            var sourceNode = nodes[hop.SourceAddress];
+            nodes[hop.SourceAddress] = sourceNode with { TotalOutflow = sourceNode.TotalOutflow + hop.Amount };
+
+            var destNode = nodes[hop.DestAddress];
+            nodes[hop.DestAddress] = destNode with { TotalInflow = destNode.TotalInflow + hop.Amount };
+
+            var linkKey = (hop.SourceAddress, hop.DestAddress);
+            if (links.TryGetValue(linkKey, out var existing))
+                links[linkKey] = (existing.Amount + hop.Amount, existing.Count + 1);
+            else
+                links[linkKey] = (hop.Amount, 1);
+        }
+
+        var vizLinks = links.Select(kvp => new FlowVisualizationLinkDto(
+            SourceId: kvp.Key.Item1,
+            TargetId: kvp.Key.Item2,
+            Amount: kvp.Value.Amount,
+            TransactionCount: kvp.Value.Count
+        )).ToList();
+
+        return new FlowVisualizationDto(
+            Epoch: emissionEpoch,
+            TickStart: hops.Min(h => h.TickNumber),
+            TickEnd: hops.Max(h => h.TickNumber),
+            Nodes: nodes.Values.ToList(),
+            Links: vizLinks,
+            MaxDepth: hops.Max(h => h.HopLevel),
+            TotalTrackedVolume: hops.Where(h => h.HopLevel == 1).Sum(h => h.Amount)
+        );
     }
 }

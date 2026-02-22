@@ -145,21 +145,29 @@ public class EpochMetaSyncService : BackgroundService
                 epochInfo.Epoch, epochInfo.InitialTick, epochInfo.EndTick, epochInfo.FinalTick,
                 epochInfo.EndTickStartLogId, epochInfo.EndTickEndLogId);
 
-            // Validate we got meaningful data
-            if (epochInfo.InitialTick == 0)
+            // If Bob doesn't know initialTick, fall back to the ticks table
+            var initialTick = epochInfo.InitialTick;
+            if (initialTick == 0)
             {
-                _logger.LogWarning("Bob returned initialTick=0 for epoch {Epoch}, skipping upsert", epoch);
-                return;
+                _logger.LogWarning("Bob returned initialTick=0 for epoch {Epoch}, falling back to ticks table", epoch);
+                var tickRange = await queryService.GetTickRangeForEpochAsync(epoch, ct);
+                if (tickRange == null)
+                {
+                    _logger.LogWarning("No ticks found for epoch {Epoch} either, skipping upsert", epoch);
+                    return;
+                }
+                initialTick = tickRange.Value.MinTick;
+                _logger.LogInformation("Using initialTick={InitialTick} from ticks table for epoch {Epoch}", initialTick, epoch);
             }
 
             // Determine if epoch is complete
             // An epoch is complete if it has an end tick (finalTick or endTick > 0)
             var endTick = epochInfo.EndTick > 0 ? epochInfo.EndTick : epochInfo.FinalTick;
-            var isComplete = endTick > 0 && endTick > epochInfo.InitialTick;
+            var isComplete = endTick > 0 && endTick > initialTick;
 
             var dto = new EpochMetaDto(
                 epochInfo.Epoch,
-                epochInfo.InitialTick,
+                initialTick,
                 endTick,
                 epochInfo.EndTickStartLogId,
                 epochInfo.EndTickEndLogId,
@@ -168,8 +176,8 @@ public class EpochMetaSyncService : BackgroundService
             );
 
             await queryService.UpsertEpochMetaAsync(dto, ct);
-            _logger.LogInformation("Synced epoch {Epoch} metadata from Bob (initialTick={InitialTick}, endTick={EndTick}, complete={IsComplete})",
-                epoch, epochInfo.InitialTick, endTick, isComplete);
+            _logger.LogInformation("Synced epoch {Epoch} metadata (initialTick={InitialTick}, endTick={EndTick}, complete={IsComplete})",
+                epoch, initialTick, endTick, isComplete);
         }
         catch (Exception ex)
         {
