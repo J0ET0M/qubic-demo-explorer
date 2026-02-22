@@ -168,15 +168,17 @@ public class ClickHouseQueryService : IDisposable
         while (await reader.ReadAsync(ct))
         {
             var rowInputType = reader.GetFieldValue<ushort>(6);
+            var rowToAddr = reader.GetString(4);
+            var isCoreTx = string.Equals(rowToAddr, AddressLabelService.BurnAddress, StringComparison.OrdinalIgnoreCase);
             items.Add(new TransactionDto(
                 reader.GetString(0),
                 reader.GetFieldValue<ulong>(1),
                 reader.GetFieldValue<uint>(2),
                 reader.GetString(3),
-                reader.GetString(4),
+                rowToAddr,
                 reader.GetFieldValue<ulong>(5),
                 rowInputType,
-                CoreTransactionInputTypes.IsKnownType(rowInputType) ? CoreTransactionInputTypes.GetDisplayName(rowInputType) : null,
+                isCoreTx && CoreTransactionInputTypes.IsKnownType(rowInputType) ? CoreTransactionInputTypes.GetDisplayName(rowInputType) : null,
                 reader.GetFieldValue<byte>(7) == 1,
                 reader.GetDateTime(8)
             ));
@@ -303,15 +305,17 @@ public class ClickHouseQueryService : IDisposable
         while (await reader.ReadAsync(ct))
         {
             var rowInputType = reader.GetFieldValue<ushort>(6);
+            var rowToAddr = reader.GetString(4);
+            var isCoreTx = string.Equals(rowToAddr, AddressLabelService.BurnAddress, StringComparison.OrdinalIgnoreCase);
             items.Add(new TransactionDto(
                 reader.GetString(0),
                 reader.GetFieldValue<ulong>(1),
                 reader.GetFieldValue<uint>(2),
                 reader.GetString(3),
-                reader.GetString(4),
+                rowToAddr,
                 reader.GetFieldValue<ulong>(5),
                 rowInputType,
-                CoreTransactionInputTypes.IsKnownType(rowInputType) ? CoreTransactionInputTypes.GetDisplayName(rowInputType) : null,
+                isCoreTx && CoreTransactionInputTypes.IsKnownType(rowInputType) ? CoreTransactionInputTypes.GetDisplayName(rowInputType) : null,
                 reader.GetFieldValue<byte>(7) == 1,
                 reader.GetDateTime(8)
             ));
@@ -387,9 +391,10 @@ public class ClickHouseQueryService : IDisposable
             }
         }
 
-        var inputTypeName = CoreTransactionInputTypes.IsKnownType(inputType)
+        var isCoreTransaction = string.Equals(toAddr, AddressLabelService.BurnAddress, StringComparison.OrdinalIgnoreCase);
+        var inputTypeName = isCoreTransaction && CoreTransactionInputTypes.IsKnownType(inputType)
             ? CoreTransactionInputTypes.GetDisplayName(inputType) : null;
-        var parsedInput = TransactionInputParser.Parse(inputType, inputData);
+        var parsedInput = isCoreTransaction ? TransactionInputParser.Parse(inputType, inputData) : null;
 
         return new TransactionDetailDto(
             txHash, tickNumber, epoch, fromAddr, toAddr, amount,

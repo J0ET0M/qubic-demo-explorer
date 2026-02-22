@@ -343,25 +343,22 @@ public static class TransactionInputParser
 
     /// <summary>
     /// Extract 10-bit packed values from a byte buffer (used by vote counter and mining shares).
-    /// Each value occupies 10 bits, packed in little-endian bit order.
+    /// Matches the C++ extract10Bit() big-endian bit packing: every 4 values occupy 5 bytes,
+    /// with bits packed from MSB to LSB within each byte.
     /// </summary>
     private static ushort[] Extract10BitValues(ReadOnlySpan<byte> data, int count)
     {
         var values = new ushort[count];
         for (var i = 0; i < count; i++)
         {
-            var bitOffset = i * 10;
-            var byteOffset = bitOffset / 8;
-            var bitShift = bitOffset % 8;
-
-            // Read 2-3 bytes spanning this 10-bit value
-            uint raw = data[byteOffset];
-            if (byteOffset + 1 < data.Length)
-                raw |= (uint)data[byteOffset + 1] << 8;
-            if (byteOffset + 2 < data.Length)
-                raw |= (uint)data[byteOffset + 2] << 16;
-
-            values[i] = (ushort)((raw >> bitShift) & 0x3FF);
+            // C++ layout: byte0 = data[idx + (idx >> 2)], byte1 = data[idx + (idx >> 2) + 1]
+            var byteIndex = i + (i >> 2);
+            uint byte0 = data[byteIndex];
+            uint byte1 = data[byteIndex + 1];
+            var lastBit0 = 8 - (i & 3) * 2;
+            var firstBit1 = 10 - lastBit0;
+            values[i] = (ushort)(((byte0 & ((1u << lastBit0) - 1)) << firstBit1)
+                               | (byte1 >> (8 - firstBit1)));
         }
         return values;
     }
