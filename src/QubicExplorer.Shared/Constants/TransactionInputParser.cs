@@ -21,10 +21,15 @@ public static class TransactionInputParser
         if (string.IsNullOrEmpty(inputData))
             return null;
 
+        // Strip 0x prefix if present
+        var hex = inputData.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? inputData[2..]
+            : inputData;
+
         byte[] data;
         try
         {
-            data = Convert.FromHexString(inputData);
+            data = Convert.FromHexString(hex);
         }
         catch
         {
