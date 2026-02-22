@@ -2699,21 +2699,14 @@ public class ClickHouseQueryService : IDisposable
             }
         }
 
-        // Query 2: net transfers to burn address
-        // Gross = direct transfers TO burn address (input_type=0 excludes IPO bids)
-        // Refunds = transfers FROM burn address (e.g. valid solution deposits returned)
-        // Net = gross - refunds
+        // Query 2: direct transfers to burn address (input_type=0)
+        // input_type=0 already excludes solution deposits (contract calls have input_type > 0)
+        // and IPO bids (also input_type > 0). No need to subtract refunds.
         await using var transferCmd = _connection.CreateCommand();
         transferCmd.CommandText = $@"
-            SELECT
-                countIf(dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0) as gross_count,
-                sumIf(amount, dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0) as gross_burned,
-                countIf(source_address = '{AddressLabelService.BurnAddress}') as refund_count,
-                sumIf(amount, source_address = '{AddressLabelService.BurnAddress}') as refund_amount,
-                maxIf(amount, dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0) as max_transfer_burn
+            SELECT count() as transfer_burn_count, sum(amount) as transfer_burned, max(amount) as max_transfer_burn
             FROM logs FINAL
-            WHERE log_type = 0
-              AND ((dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0) OR source_address = '{AddressLabelService.BurnAddress}')
+            WHERE log_type = 0 AND dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0
               AND {tickFilter}";
 
         ulong transferBurnCount = 0, transferBurned = 0, maxTransferBurn = 0;
@@ -2721,14 +2714,9 @@ public class ClickHouseQueryService : IDisposable
         {
             if (await reader.ReadAsync(ct))
             {
-                var grossCount = Convert.ToUInt64(reader.GetValue(0));
-                var grossBurned = Convert.ToUInt64(reader.GetValue(1));
-                var refundCount = Convert.ToUInt64(reader.GetValue(2));
-                var refundAmount = Convert.ToUInt64(reader.GetValue(3));
-                maxTransferBurn = Convert.ToUInt64(reader.GetValue(4));
-                // Net burn = gross deposits - refunds (solution deposits returned)
-                transferBurnCount = grossCount > refundCount ? grossCount - refundCount : 0;
-                transferBurned = grossBurned > refundAmount ? grossBurned - refundAmount : 0;
+                transferBurnCount = Convert.ToUInt64(reader.GetValue(0));
+                transferBurned = Convert.ToUInt64(reader.GetValue(1));
+                maxTransferBurn = Convert.ToUInt64(reader.GetValue(2));
             }
         }
 
