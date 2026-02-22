@@ -40,7 +40,8 @@ watch(tx, async (txData) => {
       await fetchLabels(addresses)
 
       // Fetch procedure name and contract index if this is a smart contract call
-      if (txData.inputType > 0) {
+      // Skip for core/system transactions (parsedInput already provided by API)
+      if (txData.inputType > 0 && !txData.parsedInput) {
         try {
           const result = await api.getProcedureName(txData.toAddress, txData.inputType)
           procedureName.value = result.procedureName

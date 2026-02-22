@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json.Serialization;
 using Qubic.Core;
 
 namespace QubicExplorer.Shared.Constants;
@@ -288,6 +289,17 @@ public static class TransactionInputParser
 // =========================================================================
 
 /// <summary>Base type for all parsed input data.</summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(VoteCounterInputData), "VOTE_COUNTER")]
+[JsonDerivedType(typeof(MiningSolutionInputData), "MINING_SOLUTION")]
+[JsonDerivedType(typeof(FileHeaderInputData), "FILE_HEADER")]
+[JsonDerivedType(typeof(FileFragmentInputData), "FILE_FRAGMENT")]
+[JsonDerivedType(typeof(FileTrailerInputData), "FILE_TRAILER")]
+[JsonDerivedType(typeof(OracleReplyCommitInputData), "ORACLE_REPLY_COMMIT")]
+[JsonDerivedType(typeof(OracleReplyRevealInputData), "ORACLE_REPLY_REVEAL")]
+[JsonDerivedType(typeof(CustomMiningShareCounterInputData), "CUSTOM_MINING_SHARE_COUNTER")]
+[JsonDerivedType(typeof(ExecutionFeeReportInputData), "EXECUTION_FEE_REPORT")]
+[JsonDerivedType(typeof(OracleUserQueryInputData), "ORACLE_USER_QUERY")]
 public abstract record ParsedInputData
 {
     public abstract string TypeName { get; }
