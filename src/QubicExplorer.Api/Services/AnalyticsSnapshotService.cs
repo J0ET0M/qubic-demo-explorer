@@ -492,6 +492,7 @@ public class AnalyticsSnapshotService : BackgroundService
         try
         {
             var lastTickEnd = await queryService.GetLastBurnStatsSnapshotTickEndAsync(currentEpoch, ct);
+            _logger.LogInformation("Burn stats: lastTickEnd={LastTickEnd} for epoch {Epoch}", lastTickEnd, currentEpoch);
 
             ulong tickStart;
             DateTime windowStartTime;
@@ -501,7 +502,7 @@ public class AnalyticsSnapshotService : BackgroundService
                 var firstTick = await queryService.GetFirstTickAsync(ct);
                 if (firstTick == null)
                 {
-                    _logger.LogDebug("No ticks found in database, skipping burn stats snapshot");
+                    _logger.LogInformation("No ticks found in database, skipping burn stats snapshot");
                     return false;
                 }
                 tickStart = firstTick.Value.TickNumber;
@@ -514,12 +515,12 @@ public class AnalyticsSnapshotService : BackgroundService
                 var nextTick = await queryService.GetNextTickAfterAsync(lastTickEnd, ct);
                 if (nextTick == null)
                 {
-                    _logger.LogDebug("No tick found after {Tick}, skipping burn stats snapshot", lastTickEnd);
+                    _logger.LogInformation("No tick found after {Tick}, skipping burn stats snapshot", lastTickEnd);
                     return false;
                 }
                 tickStart = nextTick.Value.TickNumber;
-                var startTimestamp = (DateTime?)nextTick.Value.Timestamp;
-                windowStartTime = startTimestamp.Value;
+                windowStartTime = nextTick.Value.Timestamp;
+                _logger.LogInformation("Burn stats: continuing from tick {Tick} at {Time}", tickStart, windowStartTime);
             }
 
             var windowEndTime = windowStartTime.AddHours(4);
@@ -527,14 +528,14 @@ public class AnalyticsSnapshotService : BackgroundService
             var currentTick = await queryService.GetCurrentTickAsync(ct);
             if (currentTick == null)
             {
-                _logger.LogDebug("Could not get current tick, skipping burn stats snapshot");
+                _logger.LogInformation("Could not get current tick, skipping burn stats snapshot");
                 return false;
             }
 
             var currentTickTimestamp = await queryService.GetTickTimestampAsync(currentTick.Value, ct);
             if (currentTickTimestamp == null || currentTickTimestamp.Value < windowEndTime)
             {
-                _logger.LogDebug("Not enough data for 4h burn stats window yet. Current tick time: {Current}, need: {Needed}",
+                _logger.LogInformation("Not enough data for 4h burn stats window yet. Current: {Current}, need: {Needed}",
                     currentTickTimestamp?.ToString("yyyy-MM-dd HH:mm:ss") ?? "unknown",
                     windowEndTime.ToString("yyyy-MM-dd HH:mm:ss"));
                 return false;
@@ -543,7 +544,7 @@ public class AnalyticsSnapshotService : BackgroundService
             var tickEnd = await queryService.GetTickAtTimestampAsync(windowEndTime, ct);
             if (tickEnd == null || tickEnd.Value <= tickStart)
             {
-                _logger.LogDebug("Could not determine tick end for burn stats window ending at {Time}", windowEndTime);
+                _logger.LogInformation("Could not determine tick end for burn stats window ending at {Time}", windowEndTime);
                 return false;
             }
 
