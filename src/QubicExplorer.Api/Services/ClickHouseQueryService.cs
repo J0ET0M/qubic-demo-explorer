@@ -2892,6 +2892,19 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
+    /// Get the next tick after a given tick number (handles gaps in tick numbers)
+    /// </summary>
+    public async Task<(ulong TickNumber, DateTime Timestamp)?> GetNextTickAfterAsync(ulong tickNumber, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"SELECT tick_number, timestamp FROM ticks WHERE tick_number > {tickNumber} ORDER BY tick_number ASC LIMIT 1";
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return null;
+        return (Convert.ToUInt64(reader.GetValue(0)), reader.GetDateTime(1));
+    }
+
+    /// <summary>
     /// Get the tick number at or before a specific timestamp
     /// </summary>
     public async Task<ulong?> GetTickAtTimestampAsync(DateTime timestamp, CancellationToken ct = default)

@@ -49,14 +49,32 @@ public class AnalyticsSnapshotService : BackgroundService
                 }
                 else
                 {
-                    // Try to create snapshots (will skip if not enough data for next window)
-                    await CreateHolderDistributionSnapshotAsync(queryService, currentEpoch.Value, stoppingToken);
-                    await CreateNetworkStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken);
-                    await CreateBurnStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken);
+                    // Create all pending snapshots (loop until no more can be created)
+                    while (!stoppingToken.IsCancellationRequested &&
+                           await CreateHolderDistributionSnapshotAsync(queryService, currentEpoch.Value, stoppingToken))
+                    {
+                        await Task.Delay(100, stoppingToken);
+                    }
 
-                    // Create miner flow snapshot
+                    while (!stoppingToken.IsCancellationRequested &&
+                           await CreateNetworkStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken))
+                    {
+                        await Task.Delay(100, stoppingToken);
+                    }
+
+                    while (!stoppingToken.IsCancellationRequested &&
+                           await CreateBurnStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken))
+                    {
+                        await Task.Delay(100, stoppingToken);
+                    }
+
+                    // Create miner flow snapshots
                     var flowService = scope.ServiceProvider.GetRequiredService<ComputorFlowService>();
-                    await CreateMinerFlowSnapshotAsync(queryService, flowService, currentEpoch.Value, stoppingToken);
+                    while (!stoppingToken.IsCancellationRequested &&
+                           await CreateMinerFlowSnapshotAsync(queryService, flowService, currentEpoch.Value, stoppingToken))
+                    {
+                        await Task.Delay(100, stoppingToken);
+                    }
                 }
             }
             catch (Exception ex)
@@ -198,16 +216,15 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             else
             {
-                // Start from the tick after the last snapshot's end
-                tickStart = lastTickEnd + 1;
-
-                // Get the timestamp of the tick start
-                var startTimestamp = await queryService.GetTickTimestampAsync(tickStart, ct);
-                if (startTimestamp == null)
+                // Find the next tick after the last snapshot's end (tick numbers have gaps)
+                var nextTick = await queryService.GetNextTickAfterAsync(lastTickEnd, ct);
+                if (nextTick == null)
                 {
-                    _logger.LogDebug("Could not get timestamp for tick {Tick}, skipping holder snapshot", tickStart);
+                    _logger.LogDebug("No tick found after {Tick}, skipping holder snapshot", lastTickEnd);
                     return false;
                 }
+                tickStart = nextTick.Value.TickNumber;
+                var startTimestamp = (DateTime?)nextTick.Value.Timestamp;
                 windowStartTime = startTimestamp.Value;
             }
 
@@ -289,16 +306,15 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             else
             {
-                // Start from the tick after the last snapshot's end
-                tickStart = lastTickEnd + 1;
-
-                // Get the timestamp of the tick start
-                var startTimestamp = await queryService.GetTickTimestampAsync(tickStart, ct);
-                if (startTimestamp == null)
+                // Find the next tick after the last snapshot's end (tick numbers have gaps)
+                var nextTick = await queryService.GetNextTickAfterAsync(lastTickEnd, ct);
+                if (nextTick == null)
                 {
-                    _logger.LogDebug("Could not get timestamp for tick {Tick}, skipping snapshot", tickStart);
+                    _logger.LogDebug("No tick found after {Tick}, skipping network stats snapshot", lastTickEnd);
                     return false;
                 }
+                tickStart = nextTick.Value.TickNumber;
+                var startTimestamp = (DateTime?)nextTick.Value.Timestamp;
                 windowStartTime = startTimestamp.Value;
             }
 
@@ -397,16 +413,15 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             else
             {
-                // Start from the tick after the last snapshot's end
-                tickStart = lastTickEnd + 1;
-
-                // Get the timestamp of the tick start
-                var startTimestamp = await queryService.GetTickTimestampAsync(tickStart, ct);
-                if (startTimestamp == null)
+                // Find the next tick after the last snapshot's end (tick numbers have gaps)
+                var nextTick = await queryService.GetNextTickAfterAsync(lastTickEnd, ct);
+                if (nextTick == null)
                 {
-                    _logger.LogDebug("Could not get timestamp for tick {Tick}, skipping miner flow snapshot", tickStart);
+                    _logger.LogDebug("No tick found after {Tick}, skipping miner flow snapshot", lastTickEnd);
                     return false;
                 }
+                tickStart = nextTick.Value.TickNumber;
+                var startTimestamp = (DateTime?)nextTick.Value.Timestamp;
                 windowStartTime = startTimestamp.Value;
             }
 
@@ -495,13 +510,15 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             else
             {
-                tickStart = lastTickEnd + 1;
-                var startTimestamp = await queryService.GetTickTimestampAsync(tickStart, ct);
-                if (startTimestamp == null)
+                // Find the next tick after the last snapshot's end (tick numbers have gaps)
+                var nextTick = await queryService.GetNextTickAfterAsync(lastTickEnd, ct);
+                if (nextTick == null)
                 {
-                    _logger.LogDebug("Could not get timestamp for tick {Tick}, skipping burn stats snapshot", tickStart);
+                    _logger.LogDebug("No tick found after {Tick}, skipping burn stats snapshot", lastTickEnd);
                     return false;
                 }
+                tickStart = nextTick.Value.TickNumber;
+                var startTimestamp = (DateTime?)nextTick.Value.Timestamp;
                 windowStartTime = startTimestamp.Value;
             }
 
