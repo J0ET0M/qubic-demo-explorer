@@ -146,9 +146,11 @@ watchEffect(() => {
               >
                 <component :is="item.icon" class="h-[18px] w-[18px]" />
               </button>
-              <!-- Flyout menu -->
-              <div class="absolute left-full top-0 ml-2 hidden group-hover/flyout:block z-[60]">
-                <div class="bg-surface border border-border rounded-lg shadow-xl py-1.5 min-w-[11rem]">
+              <!-- Flyout menu with invisible bridge to prevent gap hover-loss -->
+              <div class="absolute left-full top-0 hidden group-hover/flyout:block z-[60]">
+                <!-- Invisible bridge spanning the gap between icon and menu -->
+                <div class="absolute -left-3 top-0 w-3 h-full" />
+                <div class="bg-surface border border-border rounded-lg shadow-xl py-1.5 min-w-[11rem] ml-2">
                   <div class="px-3 py-1.5 text-[0.6875rem] font-semibold text-foreground-muted/70 uppercase tracking-wider">
                     {{ item.label }}
                   </div>
