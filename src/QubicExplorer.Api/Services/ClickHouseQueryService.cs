@@ -2259,7 +2259,7 @@ public class ClickHouseQueryService : IDisposable
         // Get transfer count
         await using var transferCmd = _connection.CreateCommand();
         transferCmd.CommandText = $@"
-            SELECT count() FROM logs WHERE {logFilter} AND log_type = 0";
+            SELECT count() FROM logs FINAL WHERE {logFilter} AND log_type = 0";
         var totalTransfers = Convert.ToUInt64(await transferCmd.ExecuteScalarAsync(ct));
 
         // Get active addresses
@@ -2318,7 +2318,7 @@ public class ClickHouseQueryService : IDisposable
             SELECT
                 avg(amount) as avg_size,
                 median(amount) as median_size
-            FROM logs
+            FROM logs FINAL
             WHERE {logFilter} AND log_type = 0";
 
         double avgTxSize = 0;
@@ -2683,7 +2683,7 @@ public class ClickHouseQueryService : IDisposable
                 countIf(log_type = 9) as dust_count,
                 sumIf(amount, log_type = 9) as dust_amount,
                 max(amount) as max_burn
-            FROM logs
+            FROM logs FINAL
             WHERE log_type IN (8, 9) AND {tickFilter}";
 
         ulong burnCount = 0, burnAmount = 0, dustBurnCount = 0, dustBurned = 0, maxBurnFromLogs = 0;
@@ -2699,12 +2699,21 @@ public class ClickHouseQueryService : IDisposable
             }
         }
 
-        // Query 2: transfers to burn address (direct only, input_type=0 excludes IPO bids)
+        // Query 2: net transfers to burn address
+        // Gross = direct transfers TO burn address (input_type=0 excludes IPO bids)
+        // Refunds = transfers FROM burn address (e.g. valid solution deposits returned)
+        // Net = gross - refunds
         await using var transferCmd = _connection.CreateCommand();
         transferCmd.CommandText = $@"
-            SELECT count() as transfer_burn_count, sum(amount) as transfer_burned, max(amount) as max_transfer_burn
-            FROM logs
-            WHERE log_type = 0 AND dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0
+            SELECT
+                countIf(dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0) as gross_count,
+                sumIf(amount, dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0) as gross_burned,
+                countIf(source_address = '{AddressLabelService.BurnAddress}') as refund_count,
+                sumIf(amount, source_address = '{AddressLabelService.BurnAddress}') as refund_amount,
+                maxIf(amount, dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0) as max_transfer_burn
+            FROM logs FINAL
+            WHERE log_type = 0
+              AND ((dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0) OR source_address = '{AddressLabelService.BurnAddress}')
               AND {tickFilter}";
 
         ulong transferBurnCount = 0, transferBurned = 0, maxTransferBurn = 0;
@@ -2712,9 +2721,14 @@ public class ClickHouseQueryService : IDisposable
         {
             if (await reader.ReadAsync(ct))
             {
-                transferBurnCount = Convert.ToUInt64(reader.GetValue(0));
-                transferBurned = Convert.ToUInt64(reader.GetValue(1));
-                maxTransferBurn = Convert.ToUInt64(reader.GetValue(2));
+                var grossCount = Convert.ToUInt64(reader.GetValue(0));
+                var grossBurned = Convert.ToUInt64(reader.GetValue(1));
+                var refundCount = Convert.ToUInt64(reader.GetValue(2));
+                var refundAmount = Convert.ToUInt64(reader.GetValue(3));
+                maxTransferBurn = Convert.ToUInt64(reader.GetValue(4));
+                // Net burn = gross deposits - refunds (solution deposits returned)
+                transferBurnCount = grossCount > refundCount ? grossCount - refundCount : 0;
+                transferBurned = grossBurned > refundAmount ? grossBurned - refundAmount : 0;
             }
         }
 
@@ -2722,7 +2736,7 @@ public class ClickHouseQueryService : IDisposable
         await using var uniqueCmd = _connection.CreateCommand();
         uniqueCmd.CommandText = $@"
             SELECT uniq(source_address)
-            FROM logs
+            FROM logs FINAL
             WHERE (log_type IN (8, 9) OR (log_type = 0 AND dest_address = '{AddressLabelService.BurnAddress}' AND input_type = 0))
               AND {tickFilter}";
         var uniqueBurners = Convert.ToUInt64(await uniqueCmd.ExecuteScalarAsync(ct));
