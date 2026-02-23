@@ -114,6 +114,28 @@ public class BobProxyService
     }
 
     /// <summary>
+    /// Gets log entries by ID range for a specific epoch. Used to backfill missing logs.
+    /// </summary>
+    public async Task<List<BobLog>?> GetLogsByIdRangeAsync(uint epoch, long startLogId, long endLogId, CancellationToken ct = default)
+    {
+        try
+        {
+            // Use the raw CallAsync to get BobLog[] directly (same pattern as GetEndEpochLogsAsync).
+            // The JSON fields from qubic_getLogsByIdRange match BobLog's property names.
+            return await _bobClient.CallAsync<List<BobLog>>(
+                "qubic_getLogsByIdRange",
+                new object[] { (int)epoch, startLogId, endLogId },
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to get logs by ID range for epoch {Epoch} ({Start}-{End})",
+                epoch, startLogId, endLogId);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Gets the list of 676 computors for a specific epoch.
     /// </summary>
     public async Task<ComputorsResult?> GetComputorsAsync(uint epoch, CancellationToken ct = default)

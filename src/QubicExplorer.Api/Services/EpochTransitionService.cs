@@ -148,14 +148,39 @@ public class EpochTransitionService : BackgroundService
             return;
         }
 
-        // Case 2: We're missing some logs before the end tick
+        // Case 2: We're missing some logs before the end tick — try to backfill from Bob
         if (maxLogId < expectedMaxBeforeEndLogs)
         {
-            _logger.LogCritical(
-                "CRITICAL: Missing logs before end tick for epoch {Epoch}. Max log_id: {MaxLogId}, expected: {Expected} (endTickStartLogId - 1)",
+            _logger.LogWarning(
+                "Missing logs before end tick for epoch {Epoch}. Max log_id: {MaxLogId}, expected: {Expected}. Attempting to backfill from Bob...",
                 epoch, maxLogId, expectedMaxBeforeEndLogs);
-            SetCriticalError(epoch, $"Missing logs before end tick. Have up to {maxLogId}, need up to {expectedMaxBeforeEndLogs}");
-            return;
+
+            var backfilled = await BackfillMissingLogsAsync(epoch, maxLogId, expectedMaxBeforeEndLogs, queryService, ct);
+            if (!backfilled)
+            {
+                SetCriticalError(epoch, $"Failed to backfill missing logs. Have up to {maxLogId}, need up to {expectedMaxBeforeEndLogs}");
+                return;
+            }
+
+            // Re-check: verify max log_id AND count to detect gaps
+            maxLogId = await queryService.GetMaxLogIdForEpochAsync(epoch, ct);
+            var logCount = await queryService.CountLogsInRangeAsync(epoch, 1, expectedMaxBeforeEndLogs, ct);
+            _logger.LogInformation(
+                "After backfill, epoch {Epoch}: max log_id={MaxLogId}, log count={Count}, expected={Expected}",
+                epoch, maxLogId, logCount, expectedMaxBeforeEndLogs);
+
+            if (maxLogId < expectedMaxBeforeEndLogs)
+            {
+                SetCriticalError(epoch, $"Backfill incomplete. Have up to {maxLogId}, still need up to {expectedMaxBeforeEndLogs}");
+                return;
+            }
+
+            if (logCount < expectedMaxBeforeEndLogs)
+            {
+                _logger.LogWarning(
+                    "Backfill has gaps: epoch {Epoch} has {Count} logs but expected {Expected} contiguous log IDs",
+                    epoch, logCount, expectedMaxBeforeEndLogs);
+            }
         }
 
         // Case 3: We have all logs up to endTickStartLogId - 1, need to fetch end epoch logs
@@ -289,6 +314,55 @@ public class EpochTransitionService : BackgroundService
         {
             _logger.LogError(ex, "Failed to capture emissions for epoch {Epoch}", epoch);
         }
+    }
+
+    /// <summary>
+    /// Fetches missing logs from Bob by ID range and inserts them into ClickHouse.
+    /// Fetches in batches to avoid overwhelming Bob.
+    /// </summary>
+    private async Task<bool> BackfillMissingLogsAsync(
+        uint epoch, ulong currentMaxLogId, ulong targetMaxLogId,
+        ClickHouseQueryService queryService, CancellationToken ct)
+    {
+        const int batchSize = 5000;
+        var startLogId = (long)(currentMaxLogId + 1);
+        var endLogId = (long)targetMaxLogId;
+        var totalToFetch = endLogId - startLogId + 1;
+
+        _logger.LogInformation(
+            "Backfilling {Count} missing logs for epoch {Epoch} (log_id {Start} to {End})",
+            totalToFetch, epoch, startLogId, endLogId);
+
+        var totalInserted = 0;
+        var currentStart = startLogId;
+
+        while (currentStart <= endLogId)
+        {
+            var currentEnd = Math.Min(currentStart + batchSize - 1, endLogId);
+
+            _logger.LogInformation("Fetching log batch from Bob: epoch {Epoch}, log_id {Start}-{End}",
+                epoch, currentStart, currentEnd);
+
+            var logs = await _bobProxy.GetLogsByIdRangeAsync(epoch, currentStart, currentEnd, ct);
+            if (logs == null || logs.Count == 0)
+            {
+                _logger.LogError(
+                    "Bob returned no logs for epoch {Epoch}, range {Start}-{End}. Backfill aborted.",
+                    epoch, currentStart, currentEnd);
+                return false;
+            }
+
+            await queryService.InsertEndEpochLogsAsync(epoch, logs, ct);
+            totalInserted += logs.Count;
+
+            _logger.LogInformation("Inserted {Count} backfilled logs (batch {Start}-{End})",
+                logs.Count, currentStart, currentEnd);
+
+            currentStart = currentEnd + 1;
+        }
+
+        _logger.LogInformation("Backfill complete for epoch {Epoch}: inserted {Count} logs", epoch, totalInserted);
+        return true;
     }
 
     private void SetCriticalError(uint epoch, string message)

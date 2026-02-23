@@ -2457,6 +2457,17 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
+    /// Count logs in a specific log_id range for an epoch
+    /// </summary>
+    public async Task<ulong> CountLogsInRangeAsync(uint epoch, ulong startLogId, ulong endLogId, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"SELECT count() FROM logs WHERE epoch = {epoch} AND log_id >= {startLogId} AND log_id <= {endLogId}";
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result == null || result == DBNull.Value ? 0 : Convert.ToUInt64(result);
+    }
+
+    /// <summary>
     /// Check if the END_EPOCH log exists in the specified log range
     /// END_EPOCH log is type 255 (CUSTOM_MESSAGE) with customMessage field matching the OP code
     /// </summary>
