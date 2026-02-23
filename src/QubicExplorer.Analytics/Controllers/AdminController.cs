@@ -262,6 +262,42 @@ public class AdminController : ControllerBase
     }
 
     // =====================================================
+    // FLOW DATA DELETION
+    // =====================================================
+
+    /// <summary>
+    /// Deletes flow data (flow_hops, flow_tracking_state) for a specific emission epoch.
+    /// Optionally also deletes miner_flow_stats snapshots.
+    /// After deletion, you can re-trigger analysis via POST /api/admin/miner-flow/analyze-emission/{emissionEpoch}.
+    /// </summary>
+    [HttpDelete("miner-flow/{emissionEpoch}")]
+    public async Task<IActionResult> DeleteFlowData(
+        uint emissionEpoch,
+        [FromQuery] bool includeStats = false,
+        CancellationToken ct = default)
+    {
+        _logger.LogWarning("Deleting flow data for emission epoch {Epoch} (includeStats={IncludeStats})",
+            emissionEpoch, includeStats);
+
+        var (flowHops, trackingState, minerFlowStats) =
+            await _queryService.DeleteFlowDataForEmissionEpochAsync(emissionEpoch, includeStats, ct);
+
+        return Ok(new
+        {
+            success = true,
+            emissionEpoch,
+            deleted = new
+            {
+                flowHops,
+                trackingState,
+                minerFlowStats
+            },
+            message = "Deletion mutations submitted. Use GET /api/admin/miner-flow/validate/{emissionEpoch} to verify, " +
+                      "then POST /api/admin/miner-flow/analyze-emission/{emissionEpoch} to re-analyze."
+        });
+    }
+
+    // =====================================================
     // VALIDATION / DIAGNOSTICS
     // =====================================================
 

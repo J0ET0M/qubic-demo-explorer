@@ -2509,6 +2509,71 @@ public class AnalyticsQueryService : IDisposable
     }
 
     // =====================================================
+    // FLOW DATA DELETION
+    // =====================================================
+
+    /// <summary>
+    /// Deletes all flow data (flow_hops, flow_tracking_state, miner_flow_stats) for a specific emission epoch.
+    /// Uses ClickHouse lightweight DELETE (async mutations).
+    /// Returns row counts deleted from each table.
+    /// </summary>
+    public async Task<(long flowHops, long trackingState, long minerFlowStats)> DeleteFlowDataForEmissionEpochAsync(
+        uint emissionEpoch, bool deleteMinerFlowStats, CancellationToken ct = default)
+    {
+        // Count rows before deletion
+        long flowHopsCount = 0, trackingStateCount = 0, minerFlowStatsCount = 0;
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $"SELECT count() FROM flow_hops WHERE emission_epoch = {emissionEpoch}";
+            flowHopsCount = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct) ?? 0);
+        }
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $"SELECT count() FROM flow_tracking_state WHERE emission_epoch = {emissionEpoch}";
+            trackingStateCount = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct) ?? 0);
+        }
+
+        if (deleteMinerFlowStats)
+        {
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $"SELECT count() FROM miner_flow_stats FINAL WHERE emission_epoch = {emissionEpoch}";
+            minerFlowStatsCount = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct) ?? 0);
+        }
+
+        _logger.LogInformation(
+            "Deleting flow data for emission epoch {Epoch}: flow_hops={FlowHops}, tracking_state={TrackingState}, miner_flow_stats={MinerFlowStats}",
+            emissionEpoch, flowHopsCount, trackingStateCount, minerFlowStatsCount);
+
+        // Delete from flow_hops
+        if (flowHopsCount > 0)
+        {
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $"ALTER TABLE flow_hops DELETE WHERE emission_epoch = {emissionEpoch}";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        // Delete from flow_tracking_state
+        if (trackingStateCount > 0)
+        {
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $"ALTER TABLE flow_tracking_state DELETE WHERE emission_epoch = {emissionEpoch}";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        // Delete from miner_flow_stats
+        if (deleteMinerFlowStats && minerFlowStatsCount > 0)
+        {
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $"ALTER TABLE miner_flow_stats DELETE WHERE emission_epoch = {emissionEpoch}";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        return (flowHopsCount, trackingStateCount, minerFlowStatsCount);
+    }
+
+    // =====================================================
     // DISPOSE
     // =====================================================
 
