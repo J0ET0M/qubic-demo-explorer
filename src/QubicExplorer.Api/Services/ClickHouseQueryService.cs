@@ -3024,6 +3024,138 @@ public class ClickHouseQueryService : IDisposable
         return null;
     }
 
+    // =====================================================
+    // CUSTOM FLOW TRACKING
+    // =====================================================
+
+    public async Task CreateCustomFlowJobAsync(string jobId, List<string> addresses, List<ulong> balances,
+        ulong startTick, string alias, byte maxHops, CancellationToken ct = default)
+    {
+        var addrArray = string.Join(",", addresses.Select(a => $"'{EscapeSql(a)}'"));
+        var balArray = string.Join(",", balances);
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            INSERT INTO custom_flow_jobs (
+                job_id, alias, start_tick, addresses, balances, max_hops,
+                status, last_processed_tick, total_hops_recorded,
+                total_terminal_amount, total_pending_amount, error_message
+            ) VALUES (
+                '{EscapeSql(jobId)}',
+                '{EscapeSql(alias)}',
+                {startTick},
+                [{addrArray}],
+                [{balArray}],
+                {maxHops},
+                'pending',
+                0, 0, 0, 0, ''
+            )";
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<CustomFlowJobDto?> GetCustomFlowJobAsync(string jobId, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT job_id, alias, start_tick, addresses, balances, max_hops, status,
+                   last_processed_tick, total_hops_recorded, total_terminal_amount, total_pending_amount,
+                   error_message, created_at, updated_at
+            FROM custom_flow_jobs FINAL
+            WHERE job_id = '{EscapeSql(jobId)}'";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct))
+        {
+            return new CustomFlowJobDto(
+                JobId: reader.GetString(0),
+                Alias: reader.GetString(1),
+                StartTick: reader.GetFieldValue<ulong>(2),
+                Addresses: ((string[])reader.GetValue(3)).ToList(),
+                Balances: ((ulong[])reader.GetValue(4)).ToList(),
+                MaxHops: reader.GetFieldValue<byte>(5),
+                Status: reader.GetString(6),
+                LastProcessedTick: reader.GetFieldValue<ulong>(7),
+                TotalHopsRecorded: reader.GetFieldValue<ulong>(8),
+                TotalTerminalAmount: ToBigDecimal(reader.GetValue(9)),
+                TotalPendingAmount: ToBigDecimal(reader.GetValue(10)),
+                ErrorMessage: reader.GetString(11) is { Length: > 0 } err ? err : null,
+                CreatedAt: reader.GetFieldValue<DateTime>(12),
+                UpdatedAt: reader.GetFieldValue<DateTime>(13)
+            );
+        }
+        return null;
+    }
+
+    public async Task<List<CustomFlowHopDto>> GetCustomFlowHopsAsync(
+        string jobId, int maxDepth, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT job_id, tick_number, timestamp, tx_hash,
+                   source_address, dest_address, amount,
+                   origin_address, hop_level, dest_type, dest_label
+            FROM custom_flow_hops FINAL
+            WHERE job_id = '{EscapeSql(jobId)}'
+              AND hop_level <= {maxDepth}
+            ORDER BY hop_level, tick_number";
+
+        var result = new List<CustomFlowHopDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var sourceAddr = reader.GetString(4);
+            var destAddr = reader.GetString(5);
+            result.Add(new CustomFlowHopDto(
+                JobId: reader.GetString(0),
+                TickNumber: reader.GetFieldValue<ulong>(1),
+                Timestamp: reader.GetFieldValue<DateTime>(2),
+                TxHash: reader.GetString(3),
+                SourceAddress: sourceAddr,
+                SourceLabel: _labelService.GetLabel(sourceAddr),
+                DestAddress: destAddr,
+                DestLabel: reader.GetString(10) is { Length: > 0 } lbl ? lbl : _labelService.GetLabel(destAddr),
+                DestType: reader.GetString(9) is { Length: > 0 } dt ? dt : null,
+                Amount: Convert.ToDecimal(reader.GetFieldValue<ulong>(6)),
+                OriginAddress: reader.GetString(7),
+                HopLevel: reader.GetFieldValue<byte>(8)
+            ));
+        }
+        return result;
+    }
+
+    public async Task<List<CustomFlowTrackingStateDto>> GetCustomFlowStatesAsync(
+        string jobId, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT job_id, address, origin_address, address_type,
+                   received_amount, sent_amount, pending_amount,
+                   hop_level, last_tick, is_terminal, is_complete
+            FROM custom_flow_state FINAL
+            WHERE job_id = '{EscapeSql(jobId)}'
+            ORDER BY hop_level ASC, address";
+
+        var result = new List<CustomFlowTrackingStateDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new CustomFlowTrackingStateDto(
+                JobId: reader.GetString(0),
+                Address: reader.GetString(1),
+                OriginAddress: reader.GetString(2),
+                AddressType: reader.GetString(3),
+                ReceivedAmount: ToBigDecimal(reader.GetValue(4)),
+                SentAmount: ToBigDecimal(reader.GetValue(5)),
+                PendingAmount: ToBigDecimal(reader.GetValue(6)),
+                HopLevel: reader.GetFieldValue<byte>(7),
+                LastTick: reader.GetFieldValue<ulong>(8),
+                IsTerminal: reader.GetFieldValue<byte>(9) == 1,
+                IsComplete: reader.GetFieldValue<byte>(10) == 1
+            ));
+        }
+        return result;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

@@ -63,6 +63,9 @@ builder.Services.AddSingleton<BobProxyService>();
 // ComputorFlowService - tracks miner/computor money flow
 builder.Services.AddSingleton<ComputorFlowService>();
 
+// CustomFlowTrackingService - user-initiated flow tracking
+builder.Services.AddSingleton<CustomFlowTrackingService>();
+
 // Background services
 builder.Services.AddHostedService<AnalyticsSnapshotService>();
 

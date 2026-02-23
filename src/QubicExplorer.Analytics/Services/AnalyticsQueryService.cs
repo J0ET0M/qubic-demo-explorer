@@ -2574,6 +2574,393 @@ public class AnalyticsQueryService : IDisposable
     }
 
     // =====================================================
+    // CUSTOM FLOW TRACKING
+    // =====================================================
+
+    public async Task<List<CustomFlowJobDto>> GetPendingCustomFlowJobsAsync(int limit, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT job_id, alias, start_tick, addresses, balances, max_hops, status,
+                   last_processed_tick, total_hops_recorded, total_terminal_amount, total_pending_amount,
+                   error_message, created_at, updated_at
+            FROM custom_flow_jobs FINAL
+            WHERE status IN ('pending', 'processing')
+            ORDER BY created_at ASC
+            LIMIT {limit}";
+
+        var result = new List<CustomFlowJobDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(ReadCustomFlowJob(reader));
+        }
+        return result;
+    }
+
+    public async Task<CustomFlowJobDto?> GetCustomFlowJobAsync(string jobId, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT job_id, alias, start_tick, addresses, balances, max_hops, status,
+                   last_processed_tick, total_hops_recorded, total_terminal_amount, total_pending_amount,
+                   error_message, created_at, updated_at
+            FROM custom_flow_jobs FINAL
+            WHERE job_id = '{EscapeSql(jobId)}'";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct))
+        {
+            return ReadCustomFlowJob(reader);
+        }
+        return null;
+    }
+
+    private static CustomFlowJobDto ReadCustomFlowJob(System.Data.Common.DbDataReader reader)
+    {
+        return new CustomFlowJobDto(
+            JobId: reader.GetString(0),
+            Alias: reader.GetString(1),
+            StartTick: reader.GetFieldValue<ulong>(2),
+            Addresses: ((string[])reader.GetValue(3)).ToList(),
+            Balances: ((ulong[])reader.GetValue(4)).ToList(),
+            MaxHops: reader.GetFieldValue<byte>(5),
+            Status: reader.GetString(6),
+            LastProcessedTick: reader.GetFieldValue<ulong>(7),
+            TotalHopsRecorded: reader.GetFieldValue<ulong>(8),
+            TotalTerminalAmount: ToBigDecimal(reader.GetValue(9)),
+            TotalPendingAmount: ToBigDecimal(reader.GetValue(10)),
+            ErrorMessage: reader.GetString(11) is { Length: > 0 } err ? err : null,
+            CreatedAt: reader.GetFieldValue<DateTime>(12),
+            UpdatedAt: reader.GetFieldValue<DateTime>(13)
+        );
+    }
+
+    public async Task UpdateCustomFlowJobStatusAsync(
+        string jobId, string status, ulong lastProcessedTick,
+        ulong totalHops, decimal terminalAmount, decimal pendingAmount,
+        string? error, CancellationToken ct = default)
+    {
+        // Read existing job first to preserve fields
+        var job = await GetCustomFlowJobAsync(jobId, ct);
+        if (job == null) return;
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            INSERT INTO custom_flow_jobs (
+                job_id, alias, start_tick, addresses, balances, max_hops, status,
+                last_processed_tick, total_hops_recorded, total_terminal_amount, total_pending_amount,
+                error_message, created_at, updated_at
+            ) VALUES (
+                '{EscapeSql(jobId)}',
+                '{EscapeSql(job.Alias)}',
+                {job.StartTick},
+                [{string.Join(",", job.Addresses.Select(a => $"'{EscapeSql(a)}'"))}],
+                [{string.Join(",", job.Balances)}],
+                {job.MaxHops},
+                '{EscapeSql(status)}',
+                {lastProcessedTick},
+                {totalHops},
+                {terminalAmount},
+                {pendingAmount},
+                '{EscapeSql(error ?? "")}',
+                '{job.CreatedAt:yyyy-MM-dd HH:mm:ss.fff}',
+                now64(3)
+            )";
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<List<CustomFlowTrackingStateDto>> GetCustomPendingAddressesAsync(
+        string jobId, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT job_id, address, origin_address, address_type,
+                   received_amount, sent_amount, pending_amount,
+                   hop_level, last_tick, is_terminal, is_complete
+            FROM custom_flow_state FINAL
+            WHERE job_id = '{EscapeSql(jobId)}'
+              AND is_complete = 0
+            ORDER BY hop_level ASC, pending_amount DESC";
+
+        var result = new List<CustomFlowTrackingStateDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new CustomFlowTrackingStateDto(
+                JobId: reader.GetString(0),
+                Address: reader.GetString(1),
+                OriginAddress: reader.GetString(2),
+                AddressType: reader.GetString(3),
+                ReceivedAmount: ToBigDecimal(reader.GetValue(4)),
+                SentAmount: ToBigDecimal(reader.GetValue(5)),
+                PendingAmount: ToBigDecimal(reader.GetValue(6)),
+                HopLevel: reader.GetFieldValue<byte>(7),
+                LastTick: reader.GetFieldValue<ulong>(8),
+                IsTerminal: reader.GetFieldValue<byte>(9) == 1,
+                IsComplete: reader.GetFieldValue<byte>(10) == 1
+            ));
+        }
+        return result;
+    }
+
+    public async Task<bool> IsCustomTrackingInitializedAsync(string jobId, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"SELECT count() FROM custom_flow_state FINAL WHERE job_id = '{EscapeSql(jobId)}'";
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(result ?? 0) > 0;
+    }
+
+    public async Task InitializeCustomTrackingStateAsync(
+        string jobId, List<string> addresses, List<ulong> balances, CancellationToken ct = default)
+    {
+        if (addresses.Count == 0) return;
+
+        var sb = new StringBuilder();
+        sb.AppendLine(@"INSERT INTO custom_flow_state (
+            job_id, address, origin_address, address_type,
+            received_amount, sent_amount, pending_amount,
+            hop_level, last_tick, is_terminal, is_complete
+        ) VALUES");
+
+        var values = new List<string>();
+        for (var i = 0; i < addresses.Count; i++)
+        {
+            var balance = i < balances.Count ? balances[i] : 0UL;
+            values.Add($@"(
+                '{EscapeSql(jobId)}',
+                '{EscapeSql(addresses[i])}',
+                '{EscapeSql(addresses[i])}',
+                'tracked',
+                {balance},
+                0,
+                {balance},
+                1,
+                0,
+                0,
+                0
+            )");
+        }
+
+        sb.AppendLine(string.Join(",\n", values));
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = sb.ToString();
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task UpdateCustomTrackingStateAsync(
+        string jobId, ulong lastTick, List<FlowTrackingUpdateDto> updates, CancellationToken ct = default)
+    {
+        if (updates.Count == 0) return;
+
+        var sb = new StringBuilder();
+        sb.AppendLine(@"INSERT INTO custom_flow_state (
+            job_id, address, origin_address, address_type,
+            received_amount, sent_amount, pending_amount,
+            hop_level, last_tick, is_terminal, is_complete, updated_at
+        ) VALUES");
+
+        var values = updates.Select(u => $@"(
+            '{EscapeSql(jobId)}',
+            '{EscapeSql(u.Address)}',
+            '{EscapeSql(u.OriginAddress)}',
+            '{EscapeSql(u.AddressType)}',
+            {u.ReceivedAmount},
+            {u.SentAmount},
+            {u.PendingAmount},
+            {u.HopLevel},
+            {lastTick},
+            {(u.IsTerminal ? 1 : 0)},
+            {(u.IsComplete ? 1 : 0)},
+            now64(3)
+        )");
+
+        sb.AppendLine(string.Join(",\n", values));
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = sb.ToString();
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task SaveCustomFlowHopsAsync(string jobId, List<CustomFlowHopRecord> hops, CancellationToken ct = default)
+    {
+        if (hops.Count == 0) return;
+
+        var sb = new StringBuilder();
+        sb.AppendLine(@"INSERT INTO custom_flow_hops (
+            job_id, tick_number, timestamp, tx_hash, source_address, dest_address, amount,
+            origin_address, hop_level, dest_type, dest_label
+        ) VALUES");
+
+        var values = hops.Select(h => $@"(
+            '{EscapeSql(jobId)}',
+            {h.TickNumber},
+            '{h.Timestamp:yyyy-MM-dd HH:mm:ss}',
+            '{EscapeSql(h.TxHash)}',
+            '{EscapeSql(h.SourceAddress)}',
+            '{EscapeSql(h.DestAddress)}',
+            {h.Amount},
+            '{EscapeSql(h.OriginAddress)}',
+            {h.HopLevel},
+            '{EscapeSql(h.DestType)}',
+            '{EscapeSql(h.DestLabel)}'
+        )");
+
+        sb.AppendLine(string.Join(",\n", values));
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = sb.ToString();
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<List<CustomFlowHopDto>> GetCustomFlowHopsAsync(
+        string jobId, int maxDepth, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT job_id, tick_number, timestamp, tx_hash,
+                   source_address, dest_address, amount,
+                   origin_address, hop_level, dest_type, dest_label
+            FROM custom_flow_hops FINAL
+            WHERE job_id = '{EscapeSql(jobId)}'
+              AND hop_level <= {maxDepth}
+            ORDER BY hop_level, tick_number";
+
+        var result = new List<CustomFlowHopDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var sourceAddr = reader.GetString(4);
+            var destAddr = reader.GetString(5);
+            result.Add(new CustomFlowHopDto(
+                JobId: reader.GetString(0),
+                TickNumber: reader.GetFieldValue<ulong>(1),
+                Timestamp: reader.GetFieldValue<DateTime>(2),
+                TxHash: reader.GetString(3),
+                SourceAddress: sourceAddr,
+                SourceLabel: _labelService.GetLabel(sourceAddr),
+                DestAddress: destAddr,
+                DestLabel: reader.GetString(10) is { Length: > 0 } lbl ? lbl : _labelService.GetLabel(destAddr),
+                DestType: reader.GetString(9) is { Length: > 0 } dt ? dt : null,
+                Amount: Convert.ToDecimal(reader.GetFieldValue<ulong>(6)),
+                OriginAddress: reader.GetString(7),
+                HopLevel: reader.GetFieldValue<byte>(8)
+            ));
+        }
+        return result;
+    }
+
+    public async Task<List<CustomFlowTrackingStateDto>> GetCustomFlowAllStatesAsync(
+        string jobId, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT job_id, address, origin_address, address_type,
+                   received_amount, sent_amount, pending_amount,
+                   hop_level, last_tick, is_terminal, is_complete
+            FROM custom_flow_state FINAL
+            WHERE job_id = '{EscapeSql(jobId)}'
+            ORDER BY hop_level ASC, address";
+
+        var result = new List<CustomFlowTrackingStateDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new CustomFlowTrackingStateDto(
+                JobId: reader.GetString(0),
+                Address: reader.GetString(1),
+                OriginAddress: reader.GetString(2),
+                AddressType: reader.GetString(3),
+                ReceivedAmount: ToBigDecimal(reader.GetValue(4)),
+                SentAmount: ToBigDecimal(reader.GetValue(5)),
+                PendingAmount: ToBigDecimal(reader.GetValue(6)),
+                HopLevel: reader.GetFieldValue<byte>(7),
+                LastTick: reader.GetFieldValue<ulong>(8),
+                IsTerminal: reader.GetFieldValue<byte>(9) == 1,
+                IsComplete: reader.GetFieldValue<byte>(10) == 1
+            ));
+        }
+        return result;
+    }
+
+    public async Task DeleteCustomFlowJobAsync(string jobId, CancellationToken ct = default)
+    {
+        var escaped = EscapeSql(jobId);
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $"ALTER TABLE custom_flow_hops DELETE WHERE job_id = '{escaped}'";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $"ALTER TABLE custom_flow_state DELETE WHERE job_id = '{escaped}'";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $"ALTER TABLE custom_flow_jobs DELETE WHERE job_id = '{escaped}'";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    public async Task<int> DeleteOldCustomFlowJobsAsync(int days, CancellationToken ct = default)
+    {
+        // Get job IDs to delete
+        await using var countCmd = _connection.CreateCommand();
+        countCmd.CommandText = $@"
+            SELECT count() FROM custom_flow_jobs FINAL
+            WHERE updated_at < now64(3) - INTERVAL {days} DAY";
+        var count = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct) ?? 0);
+
+        if (count == 0) return 0;
+
+        var cutoff = $"now64(3) - INTERVAL {days} DAY";
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $@"ALTER TABLE custom_flow_hops DELETE
+                WHERE job_id IN (SELECT job_id FROM custom_flow_jobs FINAL WHERE updated_at < {cutoff})";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $@"ALTER TABLE custom_flow_state DELETE
+                WHERE job_id IN (SELECT job_id FROM custom_flow_jobs FINAL WHERE updated_at < {cutoff})";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $"ALTER TABLE custom_flow_jobs DELETE WHERE updated_at < {cutoff}";
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Hop record for custom flow tracking (not tied to emission_epoch).
+    /// </summary>
+    public record CustomFlowHopRecord(
+        ulong TickNumber,
+        DateTime Timestamp,
+        string TxHash,
+        string SourceAddress,
+        string DestAddress,
+        decimal Amount,
+        string OriginAddress,
+        byte HopLevel,
+        string DestType,
+        string DestLabel
+    );
+
+    // =====================================================
     // DISPOSE
     // =====================================================
 

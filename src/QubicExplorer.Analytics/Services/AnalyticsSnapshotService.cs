@@ -77,6 +77,10 @@ public class AnalyticsSnapshotService : BackgroundService
                     {
                         await Task.Delay(100, stoppingToken);
                     }
+
+                    // Process custom flow tracking jobs
+                    var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
+                    await customFlowService.ProcessPendingJobsAsync(stoppingToken);
                 }
             }
             catch (Exception ex)
@@ -165,6 +169,10 @@ public class AnalyticsSnapshotService : BackgroundService
             {
                 _logger.LogInformation("Created {Count} miner flow snapshots during catch-up", minerFlowSnapshotsCreated);
             }
+
+            // Process any pending custom flow tracking jobs
+            var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
+            await customFlowService.ProcessPendingJobsAsync(ct);
 
             if (holderSnapshotsCreated == 0 && networkSnapshotsCreated == 0 && burnSnapshotsCreated == 0 && minerFlowSnapshotsCreated == 0)
             {

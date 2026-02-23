@@ -312,6 +312,22 @@ export const useApi = () => {
   const getComputorEmission = (epoch: number, address: string) =>
     fetchApi<ComputorEmissionResponseDto>(`/api/miner-flow/emissions/${epoch}/address/${address}`)
 
+  // Custom flow tracking
+  const createCustomFlow = (request: { addresses: string[], startTick: number, balances?: number[], alias?: string, maxHops?: number }) =>
+    fetchApi<any>('/api/custom-flow', { method: 'POST', body: JSON.stringify(request) })
+
+  const getCustomFlowJob = (jobId: string) =>
+    fetchApi<any>(`/api/custom-flow/${jobId}`)
+
+  const getCustomFlowVisualization = (jobId: string) =>
+    fetchApi<any>(`/api/custom-flow/${jobId}/visualization`)
+
+  const getCustomFlowHops = (jobId: string, maxDepth = 10) =>
+    fetchApi<any>(`/api/custom-flow/${jobId}/hops?maxDepth=${maxDepth}`)
+
+  const getCustomFlowState = (jobId: string) =>
+    fetchApi<any>(`/api/custom-flow/${jobId}/state`)
+
   return {
     getTicks,
     getTick,
@@ -361,6 +377,11 @@ export const useApi = () => {
     getEmissionSummary,
     getEmissionDetails,
     getComputorEmission,
+    createCustomFlow,
+    getCustomFlowJob,
+    getCustomFlowVisualization,
+    getCustomFlowHops,
+    getCustomFlowState,
   }
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Blocks, ArrowLeftRight, Send, Calendar, Users, X, BarChart3, ChevronDown, ChevronRight, Pickaxe, Network, PanelLeftClose, PanelLeftOpen, PieChart, Building2, Cpu, TrendingUp, Flame } from 'lucide-vue-next'
+import { Blocks, ArrowLeftRight, Send, Calendar, Users, X, BarChart3, ChevronDown, ChevronRight, Pickaxe, Network, PanelLeftClose, PanelLeftOpen, PieChart, Building2, Cpu, TrendingUp, Flame, Radar } from 'lucide-vue-next'
 
 const APP_VERSION = '0.1.0'
 
@@ -45,6 +45,7 @@ const navItems: NavItem[] = [
       { label: 'Contracts', path: '/analytics/contracts', icon: Cpu },
       { label: 'Top Addresses', path: '/analytics/top', icon: TrendingUp },
       { label: 'Flow Viz', path: '/analytics/miner-flow', icon: Network },
+      { label: 'Flow Tracking', path: '/analytics/flow-tracking', icon: Radar },
     ]
   },
   { label: 'Known Addresses', path: '/addresses', icon: Users },

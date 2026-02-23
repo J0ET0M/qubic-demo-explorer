@@ -621,6 +621,75 @@ public static class ClickHouseSchema
         """,
 
         $"ALTER TABLE {DatabaseName}.flow_tracking_state ADD INDEX IF NOT EXISTS idx_fts_pending (emission_epoch, is_complete) TYPE set(2) GRANULARITY 4",
+
+        // Custom flow tracking: job registry
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.custom_flow_jobs (
+            job_id String CODEC(LZ4HC),
+            alias String DEFAULT '' CODEC(LZ4HC),
+            start_tick UInt64 CODEC(DoubleDelta, LZ4),
+            addresses Array(String),
+            balances Array(UInt64),
+            max_hops UInt8 DEFAULT 10,
+            status String DEFAULT 'pending' CODEC(LZ4),
+            last_processed_tick UInt64 DEFAULT 0 CODEC(DoubleDelta, LZ4),
+            total_hops_recorded UInt64 DEFAULT 0,
+            total_terminal_amount Decimal(38, 0) DEFAULT 0,
+            total_pending_amount Decimal(38, 0) DEFAULT 0,
+            error_message String DEFAULT '' CODEC(LZ4HC),
+            created_at DateTime64(3) DEFAULT now64(3),
+            updated_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(updated_at)
+        ORDER BY job_id
+        TTL toDateTime(updated_at) + INTERVAL 90 DAY
+        """,
+
+        // Custom flow tracking: hop records
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.custom_flow_hops (
+            job_id String CODEC(LZ4HC),
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            timestamp DateTime64(3) CODEC(Delta, LZ4),
+            tx_hash String CODEC(LZ4HC),
+            source_address String CODEC(LZ4HC),
+            dest_address String CODEC(LZ4HC),
+            amount UInt64 CODEC(T64, LZ4),
+            origin_address String CODEC(LZ4HC),
+            hop_level UInt8 CODEC(LZ4),
+            dest_type String DEFAULT '' CODEC(LZ4),
+            dest_label String DEFAULT '' CODEC(LZ4),
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        ORDER BY (job_id, origin_address, hop_level, tick_number, tx_hash, dest_address)
+        TTL toDateTime(created_at) + INTERVAL 90 DAY
+        """,
+
+        $"ALTER TABLE {DatabaseName}.custom_flow_hops ADD INDEX IF NOT EXISTS idx_cfh_job job_id TYPE bloom_filter GRANULARITY 4",
+        $"ALTER TABLE {DatabaseName}.custom_flow_hops ADD INDEX IF NOT EXISTS idx_cfh_origin origin_address TYPE bloom_filter GRANULARITY 4",
+        $"ALTER TABLE {DatabaseName}.custom_flow_hops ADD INDEX IF NOT EXISTS idx_cfh_dest dest_address TYPE bloom_filter GRANULARITY 4",
+
+        // Custom flow tracking: address tracking state
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.custom_flow_state (
+            job_id String CODEC(LZ4HC),
+            address String CODEC(LZ4HC),
+            origin_address String CODEC(LZ4HC),
+            address_type String CODEC(LZ4),
+            received_amount Decimal(38, 0),
+            sent_amount Decimal(38, 0),
+            pending_amount Decimal(38, 0),
+            hop_level UInt8,
+            last_tick UInt64,
+            is_terminal UInt8 DEFAULT 0,
+            is_complete UInt8 DEFAULT 0,
+            created_at DateTime64(3) DEFAULT now64(3),
+            updated_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(updated_at)
+        ORDER BY (job_id, address, origin_address)
+        TTL toDateTime(updated_at) + INTERVAL 90 DAY
+        """,
+
+        $"ALTER TABLE {DatabaseName}.custom_flow_state ADD INDEX IF NOT EXISTS idx_cfs_pending (job_id, is_complete) TYPE set(2) GRANULARITY 4",
     ];
 
     /// <summary>

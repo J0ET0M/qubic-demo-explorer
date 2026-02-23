@@ -312,4 +312,45 @@ public class AdminController : ControllerBase
         var result = await _flowService.ValidateFlowConservationAsync(emissionEpoch, ct);
         return Ok(result);
     }
+
+    // =====================================================
+    // CUSTOM FLOW TRACKING ADMIN
+    // =====================================================
+
+    /// <summary>
+    /// Deletes a specific custom flow tracking job and all associated data.
+    /// </summary>
+    [HttpDelete("custom-flow/{jobId}")]
+    public async Task<IActionResult> DeleteCustomFlowJob(string jobId, CancellationToken ct = default)
+    {
+        var job = await _queryService.GetCustomFlowJobAsync(jobId, ct);
+        if (job == null)
+        {
+            return NotFound(new { error = $"Custom flow job {jobId} not found" });
+        }
+
+        _logger.LogWarning("Deleting custom flow job {JobId} (alias: {Alias})", jobId, job.Alias);
+        await _queryService.DeleteCustomFlowJobAsync(jobId, ct);
+
+        return Ok(new { success = true, jobId, alias = job.Alias });
+    }
+
+    /// <summary>
+    /// Deletes all custom flow tracking jobs older than the specified number of days.
+    /// </summary>
+    [HttpDelete("custom-flow/cleanup")]
+    public async Task<IActionResult> CleanupOldCustomFlowJobs(
+        [FromQuery] int days = 30,
+        CancellationToken ct = default)
+    {
+        _logger.LogWarning("Cleaning up custom flow jobs older than {Days} days", days);
+        var count = await _queryService.DeleteOldCustomFlowJobsAsync(days, ct);
+
+        return Ok(new
+        {
+            success = true,
+            deletedCount = count,
+            message = $"Deleted {count} custom flow jobs older than {days} days"
+        });
+    }
 }
