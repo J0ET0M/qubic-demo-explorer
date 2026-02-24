@@ -126,17 +126,20 @@ public class StatsController : ControllerBase
         [FromQuery] uint epochs = 5,
         [FromQuery] ulong minAmount = 1_000_000_000,
         [FromQuery] int limit = 100,
+        [FromQuery] int depth = 1,
         CancellationToken ct = default)
     {
         if (epochs < 1) epochs = 1;
         if (epochs > 50) epochs = 50;
         if (limit < 1) limit = 1;
         if (limit > 500) limit = 500;
+        if (depth < 1) depth = 1;
+        if (depth > 2) depth = 2;
 
         var result = await _cache.GetOrSetAsync(
-            $"stats:exchange-senders:{epochs}:{minAmount}:{limit}",
+            $"stats:exchange-senders:{epochs}:{minAmount}:{limit}:{depth}",
             AnalyticsCacheService.ExchangeSendersTtl,
-            () => _queryService.GetExchangeSendersAsync(epochs, minAmount, limit, ct));
+            () => _queryService.GetExchangeSendersAsync(epochs, minAmount, limit, depth, ct));
         return Ok(result);
     }
 

@@ -3158,10 +3158,13 @@ public class ClickHouseQueryService : IDisposable
 
     /// <summary>
     /// Get source addresses that sent at least minAmount to exchange addresses in the last N epochs.
+    /// depth=1: direct senders to exchanges (deposit addresses).
+    /// depth=2: one hop before — the actual user wallets that funded deposit addresses.
     /// Includes clustering to detect addresses that likely belong to the same entity.
     /// </summary>
     public async Task<ExchangeSendersDto> GetExchangeSendersAsync(
-        uint epochs = 5, ulong minAmount = 1_000_000_000, int limit = 100, CancellationToken ct = default)
+        uint epochs = 5, ulong minAmount = 1_000_000_000, int limit = 100, int depth = 1,
+        CancellationToken ct = default)
     {
         await _labelService.EnsureFreshDataAsync();
         var exchangeAddresses = _labelService.GetAddressesByType(AddressType.Exchange);
@@ -3186,47 +3189,20 @@ public class ClickHouseQueryService : IDisposable
 
         var minEpoch = currentEpoch >= epochs ? currentEpoch - epochs + 1 : 1;
 
-        // Query 1: Get exchange senders
-        await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
-            SELECT
-                source_address,
-                sum(amount) as total_volume,
-                count() as tx_count,
-                uniq(epoch) as epoch_count
-            FROM logs FINAL
-            WHERE log_type = 0
-              AND amount >= {minAmount}
-              AND dest_address IN ('{addressList}')
-              AND epoch >= {minEpoch}
-              AND epoch <= {currentEpoch}
-              AND source_address NOT IN ('{addressList}')
-            GROUP BY source_address
-            HAVING total_volume >= {minAmount}
-            ORDER BY total_volume DESC
-            LIMIT {limit}";
+        List<ExchangeSenderDto> senders;
+        HashSet<string> senderAddresses;
 
-        var senders = new List<ExchangeSenderDto>();
-        var senderAddresses = new HashSet<string>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        if (depth >= 2)
         {
-            var address = reader.GetString(0);
-            senderAddresses.Add(address);
-            var label = _labelService.GetLabel(address);
-            var info = _labelService.GetAddressInfo(address);
-            var type = info?.Type.ToString().ToLowerInvariant();
-            var totalVolume = ToDecimal(reader.GetValue(1));
-
-            senders.Add(new ExchangeSenderDto(
-                Address: address,
-                Label: label,
-                Type: type,
-                TotalVolume: totalVolume,
-                TotalVolumeFormatted: FormatQubicAmount(totalVolume),
-                TransactionCount: Convert.ToUInt32(reader.GetValue(2)),
-                EpochCount: Convert.ToUInt32(reader.GetValue(3))
-            ));
+            // Two-hop: find deposit addresses first, then their funders
+            (senders, senderAddresses) = await GetExchangeSendersDepth2Async(
+                addressList, exchangeAddrSet, minEpoch, currentEpoch, minAmount, limit, ct);
+        }
+        else
+        {
+            // Direct senders to exchanges
+            (senders, senderAddresses) = await GetExchangeSendersDepth1Async(
+                addressList, minEpoch, currentEpoch, minAmount, limit, ct);
         }
 
         // Query 2: Clustering — only for unknown addresses (exclude exchange/known)
@@ -3327,6 +3303,132 @@ public class ClickHouseQueryService : IDisposable
         ).ToList();
 
         return new ExchangeSendersDto(clusters, senders, epochs, minAmount);
+    }
+
+    private async Task<(List<ExchangeSenderDto> Senders, HashSet<string> Addresses)> GetExchangeSendersDepth1Async(
+        string exchangeList, uint minEpoch, uint maxEpoch, ulong minAmount, int limit,
+        CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT
+                source_address,
+                sum(amount) as total_volume,
+                count() as tx_count,
+                uniq(epoch) as epoch_count
+            FROM logs FINAL
+            WHERE log_type = 0
+              AND amount >= {minAmount}
+              AND dest_address IN ('{exchangeList}')
+              AND epoch >= {minEpoch}
+              AND epoch <= {maxEpoch}
+              AND source_address NOT IN ('{exchangeList}')
+            GROUP BY source_address
+            HAVING total_volume >= {minAmount}
+            ORDER BY total_volume DESC
+            LIMIT {limit}";
+
+        var senders = new List<ExchangeSenderDto>();
+        var addresses = new HashSet<string>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var address = reader.GetString(0);
+            addresses.Add(address);
+            var label = _labelService.GetLabel(address);
+            var info = _labelService.GetAddressInfo(address);
+            var type = info?.Type.ToString().ToLowerInvariant();
+            var totalVolume = ToDecimal(reader.GetValue(1));
+
+            senders.Add(new ExchangeSenderDto(
+                Address: address,
+                Label: label,
+                Type: type,
+                TotalVolume: totalVolume,
+                TotalVolumeFormatted: FormatQubicAmount(totalVolume),
+                TransactionCount: Convert.ToUInt32(reader.GetValue(2)),
+                EpochCount: Convert.ToUInt32(reader.GetValue(3))
+            ));
+        }
+        return (senders, addresses);
+    }
+
+    private async Task<(List<ExchangeSenderDto> Senders, HashSet<string> Addresses)> GetExchangeSendersDepth2Async(
+        string exchangeList, HashSet<string> exchangeAddrSet, uint minEpoch, uint maxEpoch,
+        ulong minAmount, int limit, CancellationToken ct)
+    {
+        // Step 1: Find deposit addresses (addresses that sent to exchanges)
+        await using var depositCmd = _connection.CreateCommand();
+        depositCmd.CommandText = $@"
+            SELECT DISTINCT source_address
+            FROM logs FINAL
+            WHERE log_type = 0
+              AND amount > 0
+              AND dest_address IN ('{exchangeList}')
+              AND source_address NOT IN ('{exchangeList}')
+              AND epoch >= {minEpoch}
+              AND epoch <= {maxEpoch}";
+
+        var depositAddresses = new HashSet<string>();
+        await using var depositReader = await depositCmd.ExecuteReaderAsync(ct);
+        while (await depositReader.ReadAsync(ct))
+            depositAddresses.Add(depositReader.GetString(0));
+
+        if (depositAddresses.Count == 0)
+            return (new List<ExchangeSenderDto>(), new HashSet<string>());
+
+        var depositList = string.Join("','", depositAddresses);
+
+        // Step 2: Find addresses that funded those deposit addresses
+        // Exclude exchanges and the deposit addresses themselves
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT
+                source_address,
+                sum(amount) as total_volume,
+                count() as tx_count,
+                uniq(epoch) as epoch_count,
+                groupUniqArray(dest_address) as via_deposits
+            FROM logs FINAL
+            WHERE log_type = 0
+              AND amount > 0
+              AND dest_address IN ('{depositList}')
+              AND source_address NOT IN ('{exchangeList}')
+              AND source_address NOT IN ('{depositList}')
+              AND epoch >= {minEpoch}
+              AND epoch <= {maxEpoch}
+            GROUP BY source_address
+            HAVING total_volume >= {minAmount}
+            ORDER BY total_volume DESC
+            LIMIT {limit}";
+
+        var senders = new List<ExchangeSenderDto>();
+        var addresses = new HashSet<string>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var address = reader.GetString(0);
+            addresses.Add(address);
+            var label = _labelService.GetLabel(address);
+            var info = _labelService.GetAddressInfo(address);
+            var type = info?.Type.ToString().ToLowerInvariant();
+            var totalVolume = ToDecimal(reader.GetValue(1));
+            var viaDeposits = ((string[])reader.GetValue(4))
+                .Where(d => depositAddresses.Contains(d))
+                .ToList();
+
+            senders.Add(new ExchangeSenderDto(
+                Address: address,
+                Label: label,
+                Type: type,
+                TotalVolume: totalVolume,
+                TotalVolumeFormatted: FormatQubicAmount(totalVolume),
+                TransactionCount: Convert.ToUInt32(reader.GetValue(2)),
+                EpochCount: Convert.ToUInt32(reader.GetValue(3)),
+                ViaDepositAddresses: viaDeposits.Count > 0 ? viaDeposits : null
+            ));
+        }
+        return (senders, addresses);
     }
 
     private static List<AddressClusterDto> BuildClusters(

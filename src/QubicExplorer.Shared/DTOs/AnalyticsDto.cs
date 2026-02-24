@@ -96,7 +96,7 @@ public record ExchangeFlowDto(
 );
 
 /// <summary>
-/// Address that sent funds to an exchange
+/// Address that sent funds to an exchange (or to a deposit address when depth=2)
 /// </summary>
 public record ExchangeSenderDto(
     string Address,
@@ -106,6 +106,7 @@ public record ExchangeSenderDto(
     string TotalVolumeFormatted,
     uint TransactionCount,
     uint EpochCount,
+    List<string>? ViaDepositAddresses = null,
     int? ClusterId = null
 );
 
