@@ -3194,7 +3194,7 @@ public class ClickHouseQueryService : IDisposable
                 sum(amount) as total_volume,
                 count() as tx_count,
                 uniq(epoch) as epoch_count
-            FROM logs
+            FROM logs FINAL
             WHERE log_type = 0
               AND amount >= {minAmount}
               AND dest_address IN ('{addressList}')
@@ -3242,7 +3242,7 @@ public class ClickHouseQueryService : IDisposable
             directCmd.CommandText = $@"
                 SELECT
                     source_address, dest_address, sum(amount) as volume
-                FROM logs
+                FROM logs FINAL
                 WHERE log_type = 0
                   AND amount > 0
                   AND source_address IN ('{candidateList}')
@@ -3270,7 +3270,7 @@ public class ClickHouseQueryService : IDisposable
                     source_address as funder,
                     groupArray(dest_address) as funded_addresses,
                     sum(amount) as total_volume
-                FROM logs
+                FROM logs FINAL
                 WHERE log_type = 0
                   AND amount > 0
                   AND dest_address IN ('{candidateList}')
