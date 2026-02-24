@@ -103,8 +103,29 @@ public record ExchangeSenderDto(
     string? Label,
     string? Type,
     decimal TotalVolume,
+    string TotalVolumeFormatted,
     uint TransactionCount,
-    uint EpochCount
+    uint EpochCount,
+    int? ClusterId = null
+);
+
+/// <summary>
+/// A link between two addresses suggesting they belong to the same entity
+/// </summary>
+public record ClusterLinkDto(
+    string Address1,
+    string Address2,
+    string Reason,
+    decimal Volume
+);
+
+/// <summary>
+/// A cluster of addresses likely belonging to the same entity
+/// </summary>
+public record AddressClusterDto(
+    int ClusterId,
+    List<string> Addresses,
+    List<ClusterLinkDto> Links
 );
 
 /// <summary>
@@ -112,6 +133,7 @@ public record ExchangeSenderDto(
 /// </summary>
 public record ExchangeSendersDto(
     List<ExchangeSenderDto> Senders,
+    List<AddressClusterDto> Clusters,
     uint EpochsQueried,
     decimal MinAmount
 );

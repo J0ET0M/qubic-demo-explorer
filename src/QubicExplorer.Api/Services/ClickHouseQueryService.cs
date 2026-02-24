@@ -3158,6 +3158,7 @@ public class ClickHouseQueryService : IDisposable
 
     /// <summary>
     /// Get source addresses that sent at least minAmount to exchange addresses in the last N epochs.
+    /// Includes clustering to detect addresses that likely belong to the same entity.
     /// </summary>
     public async Task<ExchangeSendersDto> GetExchangeSendersAsync(
         uint epochs = 5, ulong minAmount = 1_000_000_000, int limit = 100, CancellationToken ct = default)
@@ -3166,7 +3167,7 @@ public class ClickHouseQueryService : IDisposable
         var exchangeAddresses = _labelService.GetAddressesByType(AddressType.Exchange);
 
         if (!exchangeAddresses.Any())
-            return new ExchangeSendersDto(new List<ExchangeSenderDto>(), epochs, minAmount);
+            return new ExchangeSendersDto(new List<ExchangeSenderDto>(), new List<AddressClusterDto>(), epochs, minAmount);
 
         var addressList = string.Join("','", exchangeAddresses.Select(e => e.Address));
 
@@ -3177,6 +3178,7 @@ public class ClickHouseQueryService : IDisposable
 
         var minEpoch = currentEpoch >= epochs ? currentEpoch - epochs + 1 : 1;
 
+        // Query 1: Get exchange senders
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
             SELECT
@@ -3197,25 +3199,191 @@ public class ClickHouseQueryService : IDisposable
             LIMIT {limit}";
 
         var senders = new List<ExchangeSenderDto>();
+        var senderAddresses = new HashSet<string>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
             var address = reader.GetString(0);
+            senderAddresses.Add(address);
             var label = _labelService.GetLabel(address);
             var info = _labelService.GetAddressInfo(address);
             var type = info?.Type.ToString().ToLowerInvariant();
+            var totalVolume = ToDecimal(reader.GetValue(1));
 
             senders.Add(new ExchangeSenderDto(
                 Address: address,
                 Label: label,
                 Type: type,
-                TotalVolume: ToDecimal(reader.GetValue(1)),
+                TotalVolume: totalVolume,
+                TotalVolumeFormatted: FormatQubicAmount(totalVolume),
                 TransactionCount: Convert.ToUInt32(reader.GetValue(2)),
                 EpochCount: Convert.ToUInt32(reader.GetValue(3))
             ));
         }
 
-        return new ExchangeSendersDto(senders, epochs, minAmount);
+        // Query 2: Clustering — find direct transfers between senders
+        var clusterLinks = new List<ClusterLinkDto>();
+
+        if (senderAddresses.Count >= 2)
+        {
+            var senderList = string.Join("','", senderAddresses);
+
+            // Direct transfers between sender addresses
+            await using var directCmd = _connection.CreateCommand();
+            directCmd.CommandText = $@"
+                SELECT
+                    source_address, dest_address, sum(amount) as volume
+                FROM logs
+                WHERE log_type = 0
+                  AND amount > 0
+                  AND source_address IN ('{senderList}')
+                  AND dest_address IN ('{senderList}')
+                  AND epoch >= {minEpoch}
+                GROUP BY source_address, dest_address
+                ORDER BY volume DESC";
+
+            await using var directReader = await directCmd.ExecuteReaderAsync(ct);
+            while (await directReader.ReadAsync(ct))
+            {
+                clusterLinks.Add(new ClusterLinkDto(
+                    Address1: directReader.GetString(0),
+                    Address2: directReader.GetString(1),
+                    Reason: "direct_transfer",
+                    Volume: ToDecimal(directReader.GetValue(2))
+                ));
+            }
+
+            // Common funding sources: addresses that funded multiple senders
+            await using var funderCmd = _connection.CreateCommand();
+            funderCmd.CommandText = $@"
+                SELECT
+                    source_address as funder,
+                    groupArray(dest_address) as funded_addresses,
+                    sum(amount) as total_volume
+                FROM logs
+                WHERE log_type = 0
+                  AND amount > 0
+                  AND dest_address IN ('{senderList}')
+                  AND source_address NOT IN ('{senderList}')
+                  AND source_address NOT IN ('{addressList}')
+                  AND epoch >= {minEpoch}
+                GROUP BY source_address
+                HAVING length(groupUniqArray(dest_address)) >= 2
+                ORDER BY total_volume DESC
+                LIMIT 50";
+
+            await using var funderReader = await funderCmd.ExecuteReaderAsync(ct);
+            while (await funderReader.ReadAsync(ct))
+            {
+                var funder = funderReader.GetString(0);
+                var fundedAddrs = ((string[])funderReader.GetValue(1)).Distinct().Where(a => senderAddresses.Contains(a)).ToList();
+                var volume = ToDecimal(funderReader.GetValue(2));
+
+                // Create pairwise links for all funded addresses
+                for (var i = 0; i < fundedAddrs.Count; i++)
+                {
+                    for (var j = i + 1; j < fundedAddrs.Count; j++)
+                    {
+                        var funderLabel = _labelService.GetLabel(funder);
+                        var reason = funderLabel != null
+                            ? $"common_funder:{funderLabel}"
+                            : $"common_funder:{funder[..8]}...{funder[^8..]}";
+                        clusterLinks.Add(new ClusterLinkDto(
+                            Address1: fundedAddrs[i],
+                            Address2: fundedAddrs[j],
+                            Reason: reason,
+                            Volume: volume
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Build clusters using union-find
+        var clusters = BuildClusters(senderAddresses, clusterLinks);
+
+        // Assign cluster IDs to senders
+        var addressToCluster = new Dictionary<string, int>();
+        foreach (var cluster in clusters)
+            foreach (var addr in cluster.Addresses)
+                addressToCluster[addr] = cluster.ClusterId;
+
+        senders = senders.Select(s =>
+            addressToCluster.TryGetValue(s.Address, out var cid)
+                ? s with { ClusterId = cid }
+                : s
+        ).ToList();
+
+        return new ExchangeSendersDto(senders, clusters, epochs, minAmount);
+    }
+
+    private static List<AddressClusterDto> BuildClusters(
+        HashSet<string> addresses, List<ClusterLinkDto> links)
+    {
+        if (links.Count == 0)
+            return new List<AddressClusterDto>();
+
+        // Union-find
+        var parent = new Dictionary<string, string>();
+        foreach (var addr in addresses)
+            parent[addr] = addr;
+
+        string Find(string x)
+        {
+            while (parent[x] != x)
+            {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            return x;
+        }
+
+        void Union(string a, string b)
+        {
+            var ra = Find(a);
+            var rb = Find(b);
+            if (ra != rb) parent[ra] = rb;
+        }
+
+        foreach (var link in links)
+        {
+            if (addresses.Contains(link.Address1) && addresses.Contains(link.Address2))
+                Union(link.Address1, link.Address2);
+        }
+
+        // Group by root
+        var groups = new Dictionary<string, List<string>>();
+        foreach (var addr in addresses)
+        {
+            var root = Find(addr);
+            if (!groups.ContainsKey(root))
+                groups[root] = new List<string>();
+            groups[root].Add(addr);
+        }
+
+        // Only return clusters with 2+ members
+        var clusterId = 1;
+        var result = new List<AddressClusterDto>();
+        foreach (var (_, members) in groups.Where(g => g.Value.Count >= 2))
+        {
+            var memberSet = members.ToHashSet();
+            var clusterLinks = links
+                .Where(l => memberSet.Contains(l.Address1) && memberSet.Contains(l.Address2))
+                .ToList();
+
+            result.Add(new AddressClusterDto(clusterId++, members, clusterLinks));
+        }
+
+        return result;
+    }
+
+    private static string FormatQubicAmount(decimal amount)
+    {
+        if (amount >= 1_000_000_000_000m) return $"{amount / 1_000_000_000_000m:0.##}T QU";
+        if (amount >= 1_000_000_000m) return $"{amount / 1_000_000_000m:0.##}B QU";
+        if (amount >= 1_000_000m) return $"{amount / 1_000_000m:0.##}M QU";
+        if (amount >= 1_000m) return $"{amount / 1_000m:0.##}K QU";
+        return $"{amount:0} QU";
     }
 
     public void Dispose()
