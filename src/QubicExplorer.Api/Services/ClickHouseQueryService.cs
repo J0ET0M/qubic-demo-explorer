@@ -3167,9 +3167,17 @@ public class ClickHouseQueryService : IDisposable
         var exchangeAddresses = _labelService.GetAddressesByType(AddressType.Exchange);
 
         if (!exchangeAddresses.Any())
-            return new ExchangeSendersDto(new List<ExchangeSenderDto>(), new List<AddressClusterDto>(), epochs, minAmount);
+            return new ExchangeSendersDto(new List<AddressClusterDto>(), new List<ExchangeSenderDto>(), epochs, minAmount);
 
-        var addressList = string.Join("','", exchangeAddresses.Select(e => e.Address));
+        var exchangeAddrSet = exchangeAddresses.Select(e => e.Address).ToHashSet();
+        var addressList = string.Join("','", exchangeAddrSet);
+
+        // Build exclude list for clustering: exchanges + known addresses
+        var knownAddresses = _labelService.GetAddressesByType(AddressType.Known);
+        var excludeFromClustering = new HashSet<string>(exchangeAddrSet);
+        foreach (var k in knownAddresses)
+            excludeFromClustering.Add(k.Address);
+        var excludeList = string.Join("','", excludeFromClustering);
 
         // Get current epoch
         await using var epochCmd = _connection.CreateCommand();
@@ -3221,14 +3229,15 @@ public class ClickHouseQueryService : IDisposable
             ));
         }
 
-        // Query 2: Clustering — find direct transfers between senders
+        // Query 2: Clustering — only for unknown addresses (exclude exchange/known)
         var clusterLinks = new List<ClusterLinkDto>();
+        var clusterCandidates = senderAddresses.Where(a => !excludeFromClustering.Contains(a)).ToHashSet();
 
-        if (senderAddresses.Count >= 2)
+        if (clusterCandidates.Count >= 2)
         {
-            var senderList = string.Join("','", senderAddresses);
+            var candidateList = string.Join("','", clusterCandidates);
 
-            // Direct transfers between sender addresses
+            // Direct transfers between candidate addresses
             await using var directCmd = _connection.CreateCommand();
             directCmd.CommandText = $@"
                 SELECT
@@ -3236,8 +3245,8 @@ public class ClickHouseQueryService : IDisposable
                 FROM logs
                 WHERE log_type = 0
                   AND amount > 0
-                  AND source_address IN ('{senderList}')
-                  AND dest_address IN ('{senderList}')
+                  AND source_address IN ('{candidateList}')
+                  AND dest_address IN ('{candidateList}')
                   AND epoch >= {minEpoch}
                 GROUP BY source_address, dest_address
                 ORDER BY volume DESC";
@@ -3253,7 +3262,8 @@ public class ClickHouseQueryService : IDisposable
                 ));
             }
 
-            // Common funding sources: addresses that funded multiple senders
+            // Common funding sources: addresses that funded multiple candidates
+            // Exclude exchange/known addresses as funders too
             await using var funderCmd = _connection.CreateCommand();
             funderCmd.CommandText = $@"
                 SELECT
@@ -3263,9 +3273,9 @@ public class ClickHouseQueryService : IDisposable
                 FROM logs
                 WHERE log_type = 0
                   AND amount > 0
-                  AND dest_address IN ('{senderList}')
-                  AND source_address NOT IN ('{senderList}')
-                  AND source_address NOT IN ('{addressList}')
+                  AND dest_address IN ('{candidateList}')
+                  AND source_address NOT IN ('{excludeList}')
+                  AND source_address NOT IN ('{candidateList}')
                   AND epoch >= {minEpoch}
                 GROUP BY source_address
                 HAVING length(groupUniqArray(dest_address)) >= 2
@@ -3276,10 +3286,9 @@ public class ClickHouseQueryService : IDisposable
             while (await funderReader.ReadAsync(ct))
             {
                 var funder = funderReader.GetString(0);
-                var fundedAddrs = ((string[])funderReader.GetValue(1)).Distinct().Where(a => senderAddresses.Contains(a)).ToList();
+                var fundedAddrs = ((string[])funderReader.GetValue(1)).Distinct().Where(a => clusterCandidates.Contains(a)).ToList();
                 var volume = ToDecimal(funderReader.GetValue(2));
 
-                // Create pairwise links for all funded addresses
                 for (var i = 0; i < fundedAddrs.Count; i++)
                 {
                     for (var j = i + 1; j < fundedAddrs.Count; j++)
@@ -3299,8 +3308,11 @@ public class ClickHouseQueryService : IDisposable
             }
         }
 
+        // Build volume lookup for cluster totals
+        var senderVolumes = senders.ToDictionary(s => s.Address, s => s.TotalVolume);
+
         // Build clusters using union-find
-        var clusters = BuildClusters(senderAddresses, clusterLinks);
+        var clusters = BuildClusters(clusterCandidates, clusterLinks, senderVolumes);
 
         // Assign cluster IDs to senders
         var addressToCluster = new Dictionary<string, int>();
@@ -3314,11 +3326,11 @@ public class ClickHouseQueryService : IDisposable
                 : s
         ).ToList();
 
-        return new ExchangeSendersDto(senders, clusters, epochs, minAmount);
+        return new ExchangeSendersDto(clusters, senders, epochs, minAmount);
     }
 
     private static List<AddressClusterDto> BuildClusters(
-        HashSet<string> addresses, List<ClusterLinkDto> links)
+        HashSet<string> addresses, List<ClusterLinkDto> links, Dictionary<string, decimal> volumes)
     {
         if (links.Count == 0)
             return new List<AddressClusterDto>();
@@ -3361,17 +3373,20 @@ public class ClickHouseQueryService : IDisposable
             groups[root].Add(addr);
         }
 
-        // Only return clusters with 2+ members
+        // Only return clusters with 2+ members, sorted by total volume desc
         var clusterId = 1;
         var result = new List<AddressClusterDto>();
-        foreach (var (_, members) in groups.Where(g => g.Value.Count >= 2))
+        foreach (var (_, members) in groups
+            .Where(g => g.Value.Count >= 2)
+            .OrderByDescending(g => g.Value.Sum(a => volumes.GetValueOrDefault(a, 0))))
         {
             var memberSet = members.ToHashSet();
             var clusterLinks = links
                 .Where(l => memberSet.Contains(l.Address1) && memberSet.Contains(l.Address2))
                 .ToList();
+            var totalVolume = members.Sum(a => volumes.GetValueOrDefault(a, 0));
 
-            result.Add(new AddressClusterDto(clusterId++, members, clusterLinks));
+            result.Add(new AddressClusterDto(clusterId++, members, clusterLinks, totalVolume, FormatQubicAmount(totalVolume)));
         }
 
         return result;

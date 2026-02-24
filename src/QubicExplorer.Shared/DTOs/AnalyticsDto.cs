@@ -125,15 +125,17 @@ public record ClusterLinkDto(
 public record AddressClusterDto(
     int ClusterId,
     List<string> Addresses,
-    List<ClusterLinkDto> Links
+    List<ClusterLinkDto> Links,
+    decimal TotalVolume,
+    string TotalVolumeFormatted
 );
 
 /// <summary>
 /// Response for exchange senders query
 /// </summary>
 public record ExchangeSendersDto(
-    List<ExchangeSenderDto> Senders,
     List<AddressClusterDto> Clusters,
+    List<ExchangeSenderDto> Senders,
     uint EpochsQueried,
     decimal MinAmount
 );
