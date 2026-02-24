@@ -96,6 +96,27 @@ public record ExchangeFlowDto(
 );
 
 /// <summary>
+/// Address that sent funds to an exchange
+/// </summary>
+public record ExchangeSenderDto(
+    string Address,
+    string? Label,
+    string? Type,
+    decimal TotalVolume,
+    uint TransactionCount,
+    uint EpochCount
+);
+
+/// <summary>
+/// Response for exchange senders query
+/// </summary>
+public record ExchangeSendersDto(
+    List<ExchangeSenderDto> Senders,
+    uint EpochsQueried,
+    decimal MinAmount
+);
+
+/// <summary>
 /// Holder bracket for distribution analysis
 /// </summary>
 public record HolderBracketDto(

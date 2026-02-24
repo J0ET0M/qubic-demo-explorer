@@ -3156,6 +3156,68 @@ public class ClickHouseQueryService : IDisposable
         return result;
     }
 
+    /// <summary>
+    /// Get source addresses that sent at least minAmount to exchange addresses in the last N epochs.
+    /// </summary>
+    public async Task<ExchangeSendersDto> GetExchangeSendersAsync(
+        uint epochs = 5, ulong minAmount = 1_000_000_000, int limit = 100, CancellationToken ct = default)
+    {
+        await _labelService.EnsureFreshDataAsync();
+        var exchangeAddresses = _labelService.GetAddressesByType(AddressType.Exchange);
+
+        if (!exchangeAddresses.Any())
+            return new ExchangeSendersDto(new List<ExchangeSenderDto>(), epochs, minAmount);
+
+        var addressList = string.Join("','", exchangeAddresses.Select(e => e.Address));
+
+        // Get current epoch
+        await using var epochCmd = _connection.CreateCommand();
+        epochCmd.CommandText = "SELECT max(epoch) FROM ticks";
+        var currentEpoch = Convert.ToUInt32(await epochCmd.ExecuteScalarAsync(ct));
+
+        var minEpoch = currentEpoch >= epochs ? currentEpoch - epochs + 1 : 1;
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT
+                source_address,
+                sum(amount) as total_volume,
+                count() as tx_count,
+                uniq(epoch) as epoch_count
+            FROM logs
+            WHERE log_type = 0
+              AND amount >= {minAmount}
+              AND dest_address IN ('{addressList}')
+              AND epoch >= {minEpoch}
+              AND epoch <= {currentEpoch}
+              AND source_address NOT IN ('{addressList}')
+            GROUP BY source_address
+            HAVING total_volume >= {minAmount}
+            ORDER BY total_volume DESC
+            LIMIT {limit}";
+
+        var senders = new List<ExchangeSenderDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var address = reader.GetString(0);
+            var label = _labelService.GetLabel(address);
+            var info = _labelService.GetAddressInfo(address);
+            var type = info?.Type.ToString().ToLowerInvariant();
+
+            senders.Add(new ExchangeSenderDto(
+                Address: address,
+                Label: label,
+                Type: type,
+                TotalVolume: ToDecimal(reader.GetValue(1)),
+                TransactionCount: Convert.ToUInt32(reader.GetValue(2)),
+                EpochCount: Convert.ToUInt32(reader.GetValue(3))
+            ));
+        }
+
+        return new ExchangeSendersDto(senders, epochs, minAmount);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

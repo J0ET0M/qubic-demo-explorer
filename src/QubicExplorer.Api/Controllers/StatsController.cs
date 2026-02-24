@@ -121,6 +121,25 @@ public class StatsController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("exchange-senders")]
+    public async Task<IActionResult> GetExchangeSenders(
+        [FromQuery] uint epochs = 5,
+        [FromQuery] ulong minAmount = 1_000_000_000,
+        [FromQuery] int limit = 100,
+        CancellationToken ct = default)
+    {
+        if (epochs < 1) epochs = 1;
+        if (epochs > 50) epochs = 50;
+        if (limit < 1) limit = 1;
+        if (limit > 500) limit = 500;
+
+        var result = await _cache.GetOrSetAsync(
+            $"stats:exchange-senders:{epochs}:{minAmount}:{limit}",
+            AnalyticsCacheService.ExchangeSendersTtl,
+            () => _queryService.GetExchangeSendersAsync(epochs, minAmount, limit, ct));
+        return Ok(result);
+    }
+
     [HttpGet("holder-distribution")]
     public async Task<IActionResult> GetHolderDistribution(CancellationToken ct = default)
     {

@@ -26,6 +26,9 @@ public class AnalyticsCacheService
     public static readonly TimeSpan SnapshotHistoryTtl = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan SnapshotExtendedTtl = TimeSpan.FromMinutes(30);
 
+    // Cache durations - exchange senders
+    public static readonly TimeSpan ExchangeSendersTtl = TimeSpan.FromMinutes(10);
+
     // Cache durations - miner flow (static per epoch)
     public static readonly TimeSpan MinerFlowStatsTtl = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan MinerFlowVisualizationTtl = TimeSpan.FromHours(1);
