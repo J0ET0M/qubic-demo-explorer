@@ -330,6 +330,10 @@ export const useApi = () => {
     return fetchApi<BurnStatsExtendedDto>(`/api/stats/burn-stats/extended?${params}`)
   }
 
+  // Qearn stats
+  const getQearnStats = () =>
+    fetchApi<QearnStatsDto>('/api/stats/qearn')
+
   // Miner/Computor Flow
   const getMinerFlowStats = (limit = 500, from?: string, to?: string) => {
     const params = new URLSearchParams({ limit: String(limit) })
@@ -432,6 +436,7 @@ export const useApi = () => {
     getNetworkStatsExtended,
     getBurnStatsHistory,
     getBurnStatsExtended,
+    getQearnStats,
     getMinerFlowStats,
     getComputors,
     getFlowVisualization,
@@ -873,6 +878,22 @@ interface BurnStatsExtendedDto {
   current: BurnStatsHistoryDto | null
   history: BurnStatsHistoryDto[]
   allTimeTotalBurned: number
+}
+
+// Qearn stats
+interface QearnEpochStatsDto {
+  epoch: number
+  totalBurned: number
+  burnCount: number
+  totalRewarded: number
+  rewardCount: number
+  uniqueRewardRecipients: number
+}
+
+interface QearnStatsDto {
+  epochs: QearnEpochStatsDto[]
+  allTimeTotalBurned: number
+  allTimeTotalRewarded: number
 }
 
 // Rich list

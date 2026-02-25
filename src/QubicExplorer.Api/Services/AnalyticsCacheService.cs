@@ -46,6 +46,9 @@ public class AnalyticsCacheService
     // Cache durations - epoch countdown
     public static readonly TimeSpan EpochCountdownTtl = TimeSpan.FromMinutes(1);
 
+    // Cache durations - qearn
+    public static readonly TimeSpan QearnStatsTtl = TimeSpan.FromMinutes(10);
+
     // Cache durations - miner flow (static per epoch)
     public static readonly TimeSpan MinerFlowStatsTtl = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan MinerFlowVisualizationTtl = TimeSpan.FromHours(1);

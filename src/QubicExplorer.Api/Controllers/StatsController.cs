@@ -293,6 +293,24 @@ public class StatsController : ControllerBase
     // BURN STATS HISTORY
     // =====================================================
 
+    // =====================================================
+    // QEARN STATS
+    // =====================================================
+
+    [HttpGet("qearn")]
+    public async Task<IActionResult> GetQearnStats(CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            "stats:qearn",
+            AnalyticsCacheService.QearnStatsTtl,
+            () => _queryService.GetQearnStatsAsync(ct));
+        return Ok(result);
+    }
+
+    // =====================================================
+    // BURN STATS HISTORY
+    // =====================================================
+
     [HttpGet("burn-stats/history")]
     public async Task<IActionResult> GetBurnStatsHistory(
         [FromQuery] int limit = 30,

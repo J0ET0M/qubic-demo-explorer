@@ -646,6 +646,31 @@ public record TransactionGraphDto(
     List<GraphLinkDto> Links
 );
 
+// =====================================================
+// QEARN STATS DTOs
+// =====================================================
+
+/// <summary>
+/// Qearn statistics per epoch (burns and rewards)
+/// </summary>
+public record QearnEpochStatsDto(
+    uint Epoch,
+    ulong TotalBurned,
+    ulong BurnCount,
+    ulong TotalRewarded,
+    ulong RewardCount,
+    ulong UniqueRewardRecipients
+);
+
+/// <summary>
+/// Qearn overall statistics with per-epoch breakdown
+/// </summary>
+public record QearnStatsDto(
+    List<QearnEpochStatsDto> Epochs,
+    ulong AllTimeTotalBurned,
+    ulong AllTimeTotalRewarded
+);
+
 /// <summary>
 /// Result of flow validation/sanity check for an emission epoch.
 /// </summary>

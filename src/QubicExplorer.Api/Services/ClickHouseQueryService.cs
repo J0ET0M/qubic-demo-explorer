@@ -4289,6 +4289,61 @@ public class ClickHouseQueryService : IDisposable
         return Convert.ToDecimal(value);
     }
 
+    // =====================================================
+    // QEARN STATS
+    // =====================================================
+
+    private const string QearnAddress = "JAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVKHO";
+
+    /// <summary>
+    /// Get Qearn burn and reward stats per epoch.
+    /// Burns: log_type=8 where source_address = Qearn
+    /// Rewards: log_type=0 (QU transfer) from Qearn at end of epoch (SC_END_EPOCH_TX)
+    /// </summary>
+    public async Task<QearnStatsDto> GetQearnStatsAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                epoch,
+                sumIf(amount, log_type = 8) AS total_burned,
+                countIf(log_type = 8) AS burn_count,
+                sumIf(amount, log_type = 0 AND tx_hash LIKE 'SC_END_EPOCH_TX_%') AS total_rewarded,
+                countIf(log_type = 0 AND tx_hash LIKE 'SC_END_EPOCH_TX_%') AS reward_count,
+                uniqIf(dest_address, log_type = 0 AND tx_hash LIKE 'SC_END_EPOCH_TX_%') AS unique_recipients
+            FROM logs FINAL
+            WHERE source_address = {qearn_addr:String}
+              AND log_type IN (0, 8)
+            GROUP BY epoch
+            ORDER BY epoch";
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "qearn_addr", Value = QearnAddress });
+
+        var epochs = new List<QearnEpochStatsDto>();
+        ulong allTimeBurned = 0;
+        ulong allTimeRewarded = 0;
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var burned = ToUInt64(reader.GetValue(1));
+            var rewarded = ToUInt64(reader.GetValue(3));
+            allTimeBurned += burned;
+            allTimeRewarded += rewarded;
+
+            epochs.Add(new QearnEpochStatsDto(
+                Epoch: reader.GetFieldValue<uint>(0),
+                TotalBurned: burned,
+                BurnCount: ToUInt64(reader.GetValue(2)),
+                TotalRewarded: rewarded,
+                RewardCount: ToUInt64(reader.GetValue(4)),
+                UniqueRewardRecipients: ToUInt64(reader.GetValue(5))
+            ));
+        }
+
+        return new QearnStatsDto(epochs, allTimeBurned, allTimeRewarded);
+    }
+
     /// <summary>
     /// Helper to safely convert to double, handling NaN/Infinity from empty aggregates
     /// </summary>
