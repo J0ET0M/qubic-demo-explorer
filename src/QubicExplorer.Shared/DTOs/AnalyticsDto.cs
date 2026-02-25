@@ -651,15 +651,19 @@ public record TransactionGraphDto(
 // =====================================================
 
 /// <summary>
-/// Qearn statistics per epoch (burns and rewards)
+/// Qearn statistics per epoch: burns, deposits (inputs), payouts (outputs)
+/// Yield = TotalOutput - TotalInput + TotalBurned
 /// </summary>
 public record QearnEpochStatsDto(
     uint Epoch,
     ulong TotalBurned,
     ulong BurnCount,
-    ulong TotalRewarded,
-    ulong RewardCount,
-    ulong UniqueRewardRecipients
+    ulong TotalInput,
+    ulong InputCount,
+    ulong TotalOutput,
+    ulong OutputCount,
+    ulong UniqueLockers,
+    ulong UniqueUnlockers
 );
 
 /// <summary>
@@ -668,7 +672,8 @@ public record QearnEpochStatsDto(
 public record QearnStatsDto(
     List<QearnEpochStatsDto> Epochs,
     ulong AllTimeTotalBurned,
-    ulong AllTimeTotalRewarded
+    ulong AllTimeTotalInput,
+    ulong AllTimeTotalOutput
 );
 
 /// <summary>

@@ -885,15 +885,19 @@ interface QearnEpochStatsDto {
   epoch: number
   totalBurned: number
   burnCount: number
-  totalRewarded: number
-  rewardCount: number
-  uniqueRewardRecipients: number
+  totalInput: number
+  inputCount: number
+  totalOutput: number
+  outputCount: number
+  uniqueLockers: number
+  uniqueUnlockers: number
 }
 
 interface QearnStatsDto {
   epochs: QearnEpochStatsDto[]
   allTimeTotalBurned: number
-  allTimeTotalRewarded: number
+  allTimeTotalInput: number
+  allTimeTotalOutput: number
 }
 
 // Rich list
