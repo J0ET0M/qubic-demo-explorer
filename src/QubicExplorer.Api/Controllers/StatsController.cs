@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using QubicExplorer.Api.Attributes;
 using QubicExplorer.Api.Services;
 
 namespace QubicExplorer.Api.Controllers;
@@ -305,6 +306,14 @@ public class StatsController : ControllerBase
             AnalyticsCacheService.QearnStatsTtl,
             () => _queryService.GetQearnStatsAsync(ct));
         return Ok(result);
+    }
+
+    [HttpPost("qearn/backfill")]
+    [AdminApiKey]
+    public async Task<IActionResult> BackfillQearnStats(CancellationToken ct = default)
+    {
+        var (backfilled, epochs) = await _queryService.BackfillQearnEpochStatsAsync(ct);
+        return Ok(new { success = true, backfilled, epochs });
     }
 
     // =====================================================

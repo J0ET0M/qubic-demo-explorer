@@ -4395,6 +4395,77 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
+    /// Backfill Qearn epoch stats for all completed epochs that are missing.
+    /// Returns the number of epochs backfilled.
+    /// </summary>
+    public async Task<(int Backfilled, List<uint> Epochs)> BackfillQearnEpochStatsAsync(CancellationToken ct = default)
+    {
+        const uint qearnInitialEpoch = 138;
+
+        var currentEpoch = await GetCurrentEpochAsync(ct);
+        if (currentEpoch == null || currentEpoch.Value <= qearnInitialEpoch)
+            return (0, new List<uint>());
+
+        // Get already-persisted epochs
+        await using var existingCmd = _connection.CreateCommand();
+        existingCmd.CommandText = "SELECT epoch FROM qearn_epoch_stats";
+        var persisted = new HashSet<uint>();
+        await using (var existingReader = await existingCmd.ExecuteReaderAsync(ct))
+        {
+            while (await existingReader.ReadAsync(ct))
+                persisted.Add(existingReader.GetFieldValue<uint>(0));
+        }
+
+        var backfilled = new List<uint>();
+
+        for (var epoch = qearnInitialEpoch; epoch < currentEpoch.Value && !ct.IsCancellationRequested; epoch++)
+        {
+            if (persisted.Contains(epoch)) continue;
+
+            await using var queryCmd = _connection.CreateCommand();
+            queryCmd.CommandText = $@"
+                SELECT
+                    sumIf(amount, log_type = 8 AND source_address = '{QearnAddress}') AS total_burned,
+                    countIf(log_type = 8 AND source_address = '{QearnAddress}') AS burn_count,
+                    sumIf(amount, log_type = 0 AND dest_address = '{QearnAddress}') AS total_input,
+                    countIf(log_type = 0 AND dest_address = '{QearnAddress}') AS input_count,
+                    sumIf(amount, log_type = 0 AND source_address = '{QearnAddress}') AS total_output,
+                    countIf(log_type = 0 AND source_address = '{QearnAddress}') AS output_count,
+                    uniqIf(source_address, log_type = 0 AND dest_address = '{QearnAddress}') AS unique_lockers,
+                    uniqIf(dest_address, log_type = 0 AND source_address = '{QearnAddress}') AS unique_unlockers
+                FROM logs FINAL
+                WHERE epoch = {epoch}
+                  AND (source_address = '{QearnAddress}' OR dest_address = '{QearnAddress}')
+                  AND log_type IN (0, 8)";
+
+            await using var reader = await queryCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct)) continue;
+
+            var totalBurned = ToUInt64(reader.GetValue(0));
+            var totalInput = ToUInt64(reader.GetValue(2));
+            var totalOutput = ToUInt64(reader.GetValue(4));
+
+            if (totalBurned == 0 && totalInput == 0 && totalOutput == 0) continue;
+
+            await using var insertCmd = _connection.CreateCommand();
+            insertCmd.CommandText = $@"
+                INSERT INTO qearn_epoch_stats
+                (epoch, total_burned, burn_count, total_input, input_count,
+                 total_output, output_count, unique_lockers, unique_unlockers)
+                VALUES
+                ({epoch}, {totalBurned}, {ToUInt64(reader.GetValue(1))},
+                 {totalInput}, {ToUInt64(reader.GetValue(3))},
+                 {totalOutput}, {ToUInt64(reader.GetValue(5))},
+                 {ToUInt64(reader.GetValue(6))}, {ToUInt64(reader.GetValue(7))})";
+
+            await insertCmd.ExecuteNonQueryAsync(ct);
+            backfilled.Add(epoch);
+        }
+
+        return (backfilled.Count, backfilled);
+    }
+
+    /// <summary>
     /// Helper to safely convert to double, handling NaN/Infinity from empty aggregates
     /// </summary>
     private static double ToSafeDouble(object value)
