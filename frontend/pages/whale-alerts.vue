@@ -5,6 +5,7 @@ import type { WhaleAlertDto } from '~/composables/useApi'
 useHead({ title: 'Whale Alerts - QLI Explorer' })
 
 const api = useApi()
+const { formatDate, getTypeClass, truncateAddress } = useFormatting()
 
 const thresholds = [
   { label: '1B', value: 1_000_000_000 },
@@ -38,17 +39,6 @@ onUnmounted(() => {
   if (refreshInterval.value) clearInterval(refreshInterval.value)
 })
 
-const formatDate = (date: string) => new Date(date).toLocaleString()
-
-const getTypeClass = (type: string | null) => {
-  if (type === 'exchange') return 'text-warning'
-  if (type === 'smartcontract') return 'text-info'
-  if (type === 'burn') return 'text-destructive'
-  return ''
-}
-
-const truncateAddress = (addr: string) =>
-  addr.length > 16 ? addr.slice(0, 8) + '...' + addr.slice(-8) : addr
 </script>
 
 <template>

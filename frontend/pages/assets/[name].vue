@@ -24,8 +24,7 @@ const { data: holders, pending: holdersPending } = await useAsyncData(
   { watch: [holdersPage] }
 )
 
-const truncateAddress = (addr: string) =>
-  addr.length > 16 ? addr.slice(0, 8) + '...' + addr.slice(-8) : addr
+const { truncateAddress } = useFormatting()
 
 const formatShares = (shares: number) => {
   if (shares >= 1_000_000_000) return (shares / 1_000_000_000).toFixed(2) + 'B'

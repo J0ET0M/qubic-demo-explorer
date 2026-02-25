@@ -26,16 +26,7 @@ const getTypeColor = (type: string | null) => {
   }
 }
 
-const truncateAddr = (addr: string) =>
-  addr.length > 12 ? addr.slice(0, 6) + '...' + addr.slice(-4) : addr
-
-const formatAmount = (amount: number) => {
-  if (amount >= 1e12) return (amount / 1e12).toFixed(1) + 'T'
-  if (amount >= 1e9) return (amount / 1e9).toFixed(1) + 'B'
-  if (amount >= 1e6) return (amount / 1e6).toFixed(1) + 'M'
-  if (amount >= 1e3) return (amount / 1e3).toFixed(1) + 'K'
-  return amount.toString()
-}
+const { truncateAddress, formatVolume } = useFormatting()
 
 const drawGraph = () => {
   if (!svgRef.value || !containerRef.value) return
@@ -128,7 +119,7 @@ const drawGraph = () => {
 
   // Node labels
   node.append('text')
-    .text((d: any) => d.label || truncateAddr(d.address))
+    .text((d: any) => d.label || truncateAddress(d.address))
     .attr('dy', (d: any) => (d.address === props.centerAddress ? 28 : 22))
     .attr('text-anchor', 'middle')
     .attr('fill', '#a0a0c0')
@@ -136,10 +127,10 @@ const drawGraph = () => {
 
   // Tooltips
   node.append('title')
-    .text((d: any) => `${d.label || d.address}\nVolume: ${formatAmount(d.totalVolume)}\nType: ${d.type || 'unknown'}`)
+    .text((d: any) => `${d.label || d.address}\nVolume: ${formatVolume(d.totalVolume)}\nType: ${d.type || 'unknown'}`)
 
   link.append('title')
-    .text((d: any) => `Amount: ${formatAmount(d.amount)}\nTxs: ${d.txCount}`)
+    .text((d: any) => `Amount: ${formatVolume(d.amount)}\nTxs: ${d.txCount}`)
 
   // Tick
   simulation.on('tick', () => {

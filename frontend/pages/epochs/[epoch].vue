@@ -82,35 +82,13 @@ const rewardsByContract = computed(() => {
   return Array.from(grouped.values())
 })
 
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(2) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(2) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(2) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(2) + 'K'
-  return volume.toLocaleString()
-}
-
-const formatDate = (dateStr: string) => {
-  return new Date(dateStr).toLocaleString()
-}
+const { formatVolume, formatDate, getLogTypeBadgeClass } = useFormatting()
 
 const formatDuration = (startStr: string, endStr: string) => {
-  const start = new Date(startStr)
-  const end = new Date(endStr)
-  const diffMs = end.getTime() - start.getTime()
+  const diffMs = new Date(endStr).getTime() - new Date(startStr).getTime()
   const days = Math.floor(diffMs / (1000 * 60 * 60 * 24))
   const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
   return `${days}d ${hours}h`
-}
-
-const getTypeBadgeClass = (logType: number) => {
-  switch (logType) {
-    case 0: return 'badge-success'
-    case 1: return 'badge-info'
-    case 2:
-    case 3: return 'badge-info'
-    default: return 'badge-warning'
-  }
 }
 </script>
 
@@ -247,7 +225,7 @@ const getTypeBadgeClass = (logType: number) => {
               <tbody>
                 <tr v-for="transfer in transfersByType" :key="transfer.logType">
                   <td>
-                    <span :class="['badge', getTypeBadgeClass(transfer.logType)]">
+                    <span :class="['badge', getLogTypeBadgeClass(transfer.logType)]">
                       {{ transfer.logTypeName }}
                     </span>
                   </td>

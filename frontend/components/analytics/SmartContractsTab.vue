@@ -21,23 +21,8 @@ const scChartData = computed(() => {
   return scUsage.value.slice(0, 10).map(sc => sc.callCount)
 })
 
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(1) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(1) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(1) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(1) + 'K'
-  return volume.toLocaleString()
-}
-
-const truncateAddress = (address: string) => {
-  if (address.length <= 16) return address
-  return address.slice(0, 8) + '...' + address.slice(-8)
-}
-
-const getAddressDisplay = (item: SmartContractUsageDto) => {
-  if (item.name) return item.name
-  return truncateAddress(item.address)
-}
+const { formatVolume, truncateAddress } = useFormatting()
+const getAddressDisplay = (item: SmartContractUsageDto) => item.name || truncateAddress(item.address)
 </script>
 
 <template>

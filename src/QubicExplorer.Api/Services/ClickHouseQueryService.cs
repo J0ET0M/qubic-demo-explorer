@@ -541,43 +541,32 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<AddressDto> GetAddressSummaryAsync(string address, CancellationToken ct = default)
     {
-        // Get transaction counts
+        // Single query: transaction count from transactions table, transfer stats from logs table
         await using var txCmd = _connection.CreateCommand();
         txCmd.CommandText = $@"
-            SELECT count(), sum(amount)
+            SELECT count()
             FROM transactions
             WHERE from_address = '{address}' OR to_address = '{address}'";
+        var txCount = Convert.ToUInt32(await txCmd.ExecuteScalarAsync(ct));
 
-        uint txCount = 0;
-        await using (var reader = await txCmd.ExecuteReaderAsync(ct))
+        await using var logCmd = _connection.CreateCommand();
+        logCmd.CommandText = $@"
+            SELECT
+                COALESCE(sumIf(amount, dest_address = '{address}' AND log_type = 0), 0) as incoming,
+                COALESCE(sumIf(amount, source_address = '{address}' AND log_type = 0), 0) as outgoing,
+                count() as transfer_count
+            FROM logs
+            PREWHERE source_address = '{address}' OR dest_address = '{address}'";
+
+        ulong incomingAmount = 0, outgoingAmount = 0;
+        uint transferCount = 0;
+        await using var reader = await logCmd.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct))
         {
-            if (await reader.ReadAsync(ct))
-                txCount = Convert.ToUInt32(reader.GetFieldValue<ulong>(0));
+            incomingAmount = Convert.ToUInt64(reader.GetValue(0));
+            outgoingAmount = Convert.ToUInt64(reader.GetValue(1));
+            transferCount = Convert.ToUInt32(reader.GetValue(2));
         }
-
-        // Get incoming amount
-        await using var inCmd = _connection.CreateCommand();
-        inCmd.CommandText = $@"
-            SELECT COALESCE(sum(amount), 0)
-            FROM logs
-            WHERE dest_address = '{address}' AND log_type = 0";
-        var incomingAmount = Convert.ToUInt64(await inCmd.ExecuteScalarAsync(ct));
-
-        // Get outgoing amount
-        await using var outCmd = _connection.CreateCommand();
-        outCmd.CommandText = $@"
-            SELECT COALESCE(sum(amount), 0)
-            FROM logs
-            WHERE source_address = '{address}' AND log_type = 0";
-        var outgoingAmount = Convert.ToUInt64(await outCmd.ExecuteScalarAsync(ct));
-
-        // Get transfer count
-        await using var transferCmd = _connection.CreateCommand();
-        transferCmd.CommandText = $@"
-            SELECT count()
-            FROM logs
-            WHERE source_address = '{address}' OR dest_address = '{address}'";
-        var transferCount = Convert.ToUInt32(await transferCmd.ExecuteScalarAsync(ct));
 
         return new AddressDto(
             address,
@@ -967,12 +956,14 @@ public class ClickHouseQueryService : IDisposable
     private async Task<List<RewardDistributionDto>> GetRewardDistributionsAsync(
         uint? epoch, string? contractAddress, CancellationToken ct)
     {
-        // Build WHERE clause for filtering START markers
-        var startConditions = new List<string> { "log_type = 255" };
+        // Build WHERE clause for filtering START markers (log_type = 255 is in PREWHERE)
+        var startConditions = new List<string>();
         if (epoch.HasValue)
             startConditions.Add($"epoch = {epoch.Value}");
 
-        var startWhereClause = string.Join(" AND ", startConditions);
+        var startWhereClause = startConditions.Count > 0
+            ? string.Join(" AND ", startConditions) + " AND"
+            : "";
 
         // Build WHERE clause for filtering by contract address (applied to transfers)
         var contractFilter = contractAddress != null
@@ -996,16 +987,16 @@ public class ClickHouseQueryService : IDisposable
                     log_id as start_log_id,
                     timestamp
                 FROM logs
-                WHERE {startWhereClause}
-                  AND JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpStartDistributeRewards}
+                PREWHERE log_type = 255
+                WHERE {startWhereClause} JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpStartDistributeRewards}
             ),
             end_markers AS (
                 SELECT
                     tick_number as end_tick_number,
                     log_id as end_log_id
                 FROM logs
-                WHERE log_type = 255
-                  AND JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpEndDistributeRewards}
+                PREWHERE log_type = 255
+                WHERE JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpEndDistributeRewards}
             ),
             reward_ranges AS (
                 SELECT
@@ -1026,7 +1017,7 @@ public class ClickHouseQueryService : IDisposable
                     source_address,
                     amount
                 FROM logs
-                WHERE log_type = 0
+                PREWHERE log_type = 0
             )
             SELECT
                 dr.epoch,
@@ -1078,16 +1069,16 @@ public class ClickHouseQueryService : IDisposable
                     log_id as start_log_id,
                     timestamp
                 FROM logs
-                WHERE log_type = 255
-                  AND JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpStartDistributeRewards}
+                PREWHERE log_type = 255
+                WHERE JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpStartDistributeRewards}
             ),
             end_markers AS (
                 SELECT
                     tick_number as end_tick_number,
                     log_id as end_log_id
                 FROM logs
-                WHERE log_type = 255
-                  AND JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpEndDistributeRewards}
+                PREWHERE log_type = 255
+                WHERE JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpEndDistributeRewards}
             ),
             reward_ranges AS (
                 SELECT
@@ -1108,7 +1099,8 @@ public class ClickHouseQueryService : IDisposable
                     source_address,
                     amount
                 FROM logs
-                WHERE log_type = 0 AND source_address = '{contractAddress}'
+                PREWHERE log_type = 0
+                WHERE source_address = '{contractAddress}'
             ),
             aggregated AS (
                 SELECT
@@ -1186,7 +1178,8 @@ public class ClickHouseQueryService : IDisposable
                     sum(amount) as sent_volume,
                     count() as sent_count
                 FROM logs
-                WHERE log_type = 0 AND source_address != '' {epochFilterAnd}
+                PREWHERE log_type = 0
+                WHERE source_address != '' {epochFilterAnd}
                 GROUP BY source_address
             ),
             received AS (
@@ -1195,7 +1188,8 @@ public class ClickHouseQueryService : IDisposable
                     sum(amount) as received_volume,
                     count() as received_count
                 FROM logs
-                WHERE log_type = 0 AND dest_address != '' {epochFilterAnd}
+                PREWHERE log_type = 0
+                WHERE dest_address != '' {epochFilterAnd}
                 GROUP BY dest_address
             )
             SELECT
@@ -1248,7 +1242,8 @@ public class ClickHouseQueryService : IDisposable
                 sum(amount) as total_amount,
                 count() as tx_count
             FROM logs
-            WHERE log_type = 0 AND dest_address = '{address}' AND source_address != ''
+            PREWHERE log_type = 0
+            WHERE dest_address = '{address}' AND source_address != ''
             GROUP BY source_address
             ORDER BY total_amount DESC
             LIMIT {limit}";
@@ -1276,7 +1271,8 @@ public class ClickHouseQueryService : IDisposable
                 sum(amount) as total_amount,
                 count() as tx_count
             FROM logs
-            WHERE log_type = 0 AND source_address = '{address}' AND dest_address != ''
+            PREWHERE log_type = 0
+            WHERE source_address = '{address}' AND dest_address != ''
             GROUP BY dest_address
             ORDER BY total_amount DESC
             LIMIT {limit}";
@@ -1395,12 +1391,14 @@ public class ClickHouseQueryService : IDisposable
                     FROM (
                         SELECT dest_address as address, toInt64(amount) as incoming, 0 as outgoing
                         FROM logs
-                        WHERE log_type = 0 AND dest_address != ''
+                        PREWHERE log_type = 0
+                        WHERE dest_address != ''
                           AND tick_number > (SELECT tick_number FROM latest_snapshot)
                         UNION ALL
                         SELECT source_address as address, 0 as incoming, toInt64(amount) as outgoing
                         FROM logs
-                        WHERE log_type = 0 AND source_address != ''
+                        PREWHERE log_type = 0
+                        WHERE source_address != ''
                           AND tick_number > (SELECT tick_number FROM latest_snapshot)
                     )
                     GROUP BY address
@@ -1423,10 +1421,10 @@ public class ClickHouseQueryService : IDisposable
                         sum(incoming) - sum(outgoing) as balance
                     FROM (
                         SELECT dest_address as address, toInt64(amount) as incoming, 0 as outgoing
-                        FROM logs WHERE log_type = 0 AND dest_address != ''
+                        FROM logs PREWHERE log_type = 0 WHERE dest_address != ''
                         UNION ALL
                         SELECT source_address as address, 0 as incoming, toInt64(amount) as outgoing
-                        FROM logs WHERE log_type = 0 AND source_address != ''
+                        FROM logs PREWHERE log_type = 0 WHERE source_address != ''
                     )
                     GROUP BY address
                     HAVING balance > 0
@@ -1724,7 +1722,7 @@ public class ClickHouseQueryService : IDisposable
                     uniq(dest_address) as unique_receivers,
                     uniq(from_address) + uniq(dest_address) as total_active
                 FROM logs
-                WHERE log_type = 0
+                PREWHERE log_type = 0
                 GROUP BY date
                 ORDER BY date DESC
                 LIMIT {limit}";
@@ -1859,7 +1857,8 @@ public class ClickHouseQueryService : IDisposable
                     sum(amount) as inflow_volume,
                     count() as inflow_count
                 FROM logs
-                WHERE log_type = 0 AND amount > 0 AND dest_address IN ('{addressList}')
+                PREWHERE log_type = 0
+                WHERE amount > 0 AND dest_address IN ('{addressList}')
                 GROUP BY epoch
             ),
             outflows AS (
@@ -1868,7 +1867,8 @@ public class ClickHouseQueryService : IDisposable
                     sum(amount) as outflow_volume,
                     count() as outflow_count
                 FROM logs
-                WHERE log_type = 0 AND amount > 0 AND source_address IN ('{addressList}')
+                PREWHERE log_type = 0
+                WHERE amount > 0 AND source_address IN ('{addressList}')
                 GROUP BY epoch
             )
             SELECT
@@ -2150,33 +2150,15 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
-    /// Get holder distribution with concentration metrics (top 10/50/100 holders)
+    /// Get holder distribution with concentration metrics (top 10/50/100 holders) in a single query pass.
     /// </summary>
     public async Task<HolderDistributionDto> GetHolderDistributionWithConcentrationAsync(CancellationToken ct = default)
-    {
-        // Get base distribution
-        var distribution = await GetHolderDistributionAsync(ct);
-
-        // Get concentration metrics
-        var concentration = await GetConcentrationMetricsAsync(ct);
-
-        return new HolderDistributionDto(
-            distribution.Brackets,
-            distribution.TotalHolders,
-            distribution.TotalBalance,
-            concentration
-        );
-    }
-
-    /// <summary>
-    /// Get concentration metrics showing balance held by top holders
-    /// </summary>
-    private async Task<ConcentrationMetricsDto> GetConcentrationMetricsAsync(CancellationToken ct)
     {
         var hasSnapshots = await HasBalanceSnapshotsAsync(ct);
 
         await using var cmd = _connection.CreateCommand();
 
+        // Single query: brackets + concentration metrics from one current_balances CTE
         if (hasSnapshots)
         {
             cmd.CommandText = @"
@@ -2197,12 +2179,14 @@ public class ClickHouseQueryService : IDisposable
                     FROM (
                         SELECT dest_address as address, toInt64(amount) as incoming, 0 as outgoing
                         FROM logs
-                        WHERE log_type = 0 AND dest_address != ''
+                        PREWHERE log_type = 0
+                        WHERE dest_address != ''
                           AND tick_number > (SELECT tick_number FROM latest_snapshot)
                         UNION ALL
                         SELECT source_address as address, 0 as incoming, toInt64(amount) as outgoing
                         FROM logs
-                        WHERE log_type = 0 AND source_address != ''
+                        PREWHERE log_type = 0
+                        WHERE source_address != ''
                           AND tick_number > (SELECT tick_number FROM latest_snapshot)
                     )
                     GROUP BY address
@@ -2218,15 +2202,27 @@ public class ClickHouseQueryService : IDisposable
                 ranked AS (
                     SELECT balance, row_number() OVER (ORDER BY balance DESC) as rank
                     FROM current_balances
-                ),
-                totals AS (
-                    SELECT sum(balance) as total FROM current_balances
                 )
                 SELECT
+                    -- Bracket counts
+                    countIf(balance >= 100000000000) as whales,
+                    countIf(balance >= 20000000000 AND balance < 100000000000) as large,
+                    countIf(balance >= 5000000000 AND balance < 20000000000) as medium,
+                    countIf(balance >= 500000000 AND balance < 5000000000) as small,
+                    countIf(balance < 500000000) as micro,
+                    -- Bracket balances
+                    sumIf(balance, balance >= 100000000000) as whale_balance,
+                    sumIf(balance, balance >= 20000000000 AND balance < 100000000000) as large_balance,
+                    sumIf(balance, balance >= 5000000000 AND balance < 20000000000) as medium_balance,
+                    sumIf(balance, balance >= 500000000 AND balance < 5000000000) as small_balance,
+                    sumIf(balance, balance < 500000000) as micro_balance,
+                    -- Totals
+                    sum(balance) as total_balance,
+                    count() as total_holders,
+                    -- Concentration metrics
                     sumIf(balance, rank <= 10) as top10,
                     sumIf(balance, rank <= 50) as top50,
-                    sumIf(balance, rank <= 100) as top100,
-                    (SELECT total FROM totals) as total
+                    sumIf(balance, rank <= 100) as top100
                 FROM ranked";
         }
         else
@@ -2238,10 +2234,10 @@ public class ClickHouseQueryService : IDisposable
                         sum(incoming) - sum(outgoing) as balance
                     FROM (
                         SELECT dest_address as address, toInt64(amount) as incoming, 0 as outgoing
-                        FROM logs WHERE log_type = 0 AND dest_address != ''
+                        FROM logs PREWHERE log_type = 0 WHERE dest_address != ''
                         UNION ALL
                         SELECT source_address as address, 0 as incoming, toInt64(amount) as outgoing
-                        FROM logs WHERE log_type = 0 AND source_address != ''
+                        FROM logs PREWHERE log_type = 0 WHERE source_address != ''
                     )
                     GROUP BY address
                     HAVING balance > 0
@@ -2249,37 +2245,69 @@ public class ClickHouseQueryService : IDisposable
                 ranked AS (
                     SELECT balance, row_number() OVER (ORDER BY balance DESC) as rank
                     FROM balances
-                ),
-                totals AS (
-                    SELECT sum(balance) as total FROM balances
                 )
                 SELECT
+                    countIf(balance >= 100000000000) as whales,
+                    countIf(balance >= 20000000000 AND balance < 100000000000) as large,
+                    countIf(balance >= 5000000000 AND balance < 20000000000) as medium,
+                    countIf(balance >= 500000000 AND balance < 5000000000) as small,
+                    countIf(balance < 500000000) as micro,
+                    sumIf(balance, balance >= 100000000000) as whale_balance,
+                    sumIf(balance, balance >= 20000000000 AND balance < 100000000000) as large_balance,
+                    sumIf(balance, balance >= 5000000000 AND balance < 20000000000) as medium_balance,
+                    sumIf(balance, balance >= 500000000 AND balance < 5000000000) as small_balance,
+                    sumIf(balance, balance < 500000000) as micro_balance,
+                    sum(balance) as total_balance,
+                    count() as total_holders,
                     sumIf(balance, rank <= 10) as top10,
                     sumIf(balance, rank <= 50) as top50,
-                    sumIf(balance, rank <= 100) as top100,
-                    (SELECT total FROM totals) as total
+                    sumIf(balance, rank <= 100) as top100
                 FROM ranked";
         }
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
         {
-            var top10 = ToDecimal(reader.GetValue(0));
-            var top50 = ToDecimal(reader.GetValue(1));
-            var top100 = ToDecimal(reader.GetValue(2));
-            var total = ToDecimal(reader.GetValue(3));
+            var totalBalance = ToDecimal(reader.GetValue(10));
+            var top10 = ToDecimal(reader.GetValue(12));
+            var top50 = ToDecimal(reader.GetValue(13));
+            var top100 = ToDecimal(reader.GetValue(14));
 
-            return new ConcentrationMetricsDto(
+            var concentration = new ConcentrationMetricsDto(
                 top10,
-                total > 0 ? top10 / total * 100 : 0,
+                totalBalance > 0 ? top10 / totalBalance * 100 : 0,
                 top50,
-                total > 0 ? top50 / total * 100 : 0,
+                totalBalance > 0 ? top50 / totalBalance * 100 : 0,
                 top100,
-                total > 0 ? top100 / total * 100 : 0
+                totalBalance > 0 ? top100 / totalBalance * 100 : 0
+            );
+
+            return new HolderDistributionDto(
+                new List<HolderBracketDto>
+                {
+                    new("Whales (≥100B)", ToUInt64(reader.GetValue(0)),
+                        ToDecimal(reader.GetValue(5)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(5)) / totalBalance * 100 : 0),
+                    new("Large (20B-100B)", ToUInt64(reader.GetValue(1)),
+                        ToDecimal(reader.GetValue(6)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(6)) / totalBalance * 100 : 0),
+                    new("Medium (5B-20B)", ToUInt64(reader.GetValue(2)),
+                        ToDecimal(reader.GetValue(7)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(7)) / totalBalance * 100 : 0),
+                    new("Small (500M-5B)", ToUInt64(reader.GetValue(3)),
+                        ToDecimal(reader.GetValue(8)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(8)) / totalBalance * 100 : 0),
+                    new("Micro (<500M)", ToUInt64(reader.GetValue(4)),
+                        ToDecimal(reader.GetValue(9)),
+                        totalBalance > 0 ? ToDecimal(reader.GetValue(9)) / totalBalance * 100 : 0)
+                },
+                ToUInt64(reader.GetValue(11)),
+                totalBalance,
+                concentration
             );
         }
 
-        return new ConcentrationMetricsDto(0, 0, 0, 0, 0, 0);
+        return new HolderDistributionDto(new List<HolderBracketDto>(), 0, 0);
     }
 
     /// <summary>

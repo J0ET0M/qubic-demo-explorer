@@ -15,31 +15,8 @@ watch(() => props.transactions, async (txs) => {
   }
 }, { immediate: true })
 
-const formatAmount = (amount: number) => {
-  // Qubic has no decimals, amount is already in QU
-  const qu = Math.floor(amount)
-  if (qu >= 1_000_000) return Math.floor(qu / 1_000_000).toLocaleString() + 'M'
-  if (qu >= 1_000) return Math.floor(qu / 1_000).toLocaleString() + 'K'
-  return qu.toLocaleString()
-}
-
-const truncateHash = (hash: string) => {
-  return hash.slice(0, 8) + '...' + hash.slice(-8)
-}
-
-const truncateHashShort = (hash: string) => {
-  return hash.slice(0, 6) + '...'
-}
-
-const formatDateTime = (dateStr: string) => {
-  const date = new Date(dateStr)
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
+const { formatVolume, truncateHash, formatDateTime } = useFormatting()
+const truncateHashShort = (hash: string) => hash.slice(0, 6) + '...'
 </script>
 
 <template>
@@ -112,7 +89,7 @@ const formatDateTime = (dateStr: string) => {
               />
             </span>
           </td>
-          <td class="amount">{{ formatAmount(tx.amount) }}</td>
+          <td class="amount">{{ formatVolume(tx.amount) }}</td>
           <td class="hide-mobile">
             <span :class="['badge', tx.executed ? 'badge-success' : 'badge-error']">
               {{ tx.executed ? 'Success' : 'Failed' }}

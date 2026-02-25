@@ -6,6 +6,7 @@ import { decodeContractInput, type DecodedInput } from '~/utils/contractInputDec
 const api = useApi()
 const route = useRoute()
 const { getLabel, fetchLabels, fetchLabelsForTransfers } = useAddressLabels()
+const { formatDate, formatAmount, copyToClipboard: doCopy } = useFormatting()
 
 const hash = computed(() => route.params.hash as string)
 const copied = ref(false)
@@ -77,36 +78,10 @@ watch(tx, async (txData) => {
   }
 }, { immediate: true })
 
-const formatDate = (date: string) => {
-  return new Date(date).toLocaleString()
-}
-
-const formatAmount = (amount: number) => {
-  // Qubic has no decimals, amount is already in QU
-  return Math.floor(amount).toLocaleString()
-}
-
-const copyToClipboard = async (text: string) => {
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text)
-    } else {
-      // Fallback for non-secure contexts
-      const textArea = document.createElement('textarea')
-      textArea.value = text
-      textArea.style.position = 'fixed'
-      textArea.style.left = '-999999px'
-      textArea.style.top = '-999999px'
-      document.body.appendChild(textArea)
-      textArea.focus()
-      textArea.select()
-      document.execCommand('copy')
-      textArea.remove()
-    }
+const handleCopy = async (text: string) => {
+  if (await doCopy(text)) {
     copied.value = true
     setTimeout(() => copied.value = false, 2000)
-  } catch (err) {
-    console.error('Failed to copy:', err)
   }
 }
 </script>
@@ -142,7 +117,7 @@ const copyToClipboard = async (text: string) => {
             <span class="detail-value flex items-center gap-2 flex-wrap">
               <span class="hash break-all">{{ specialTx.txHash }}</span>
               <button
-                @click="copyToClipboard(specialTx.txHash)"
+                @click="handleCopy(specialTx.txHash)"
                 class="btn btn-ghost p-1"
                 :title="copied ? 'Copied!' : 'Copy'"
               >
@@ -245,7 +220,7 @@ const copyToClipboard = async (text: string) => {
             <span class="detail-value flex items-center gap-2 flex-wrap">
               <span class="hash break-all">{{ regularTx.hash }}</span>
               <button
-                @click="copyToClipboard(regularTx.hash)"
+                @click="handleCopy(regularTx.hash)"
                 class="btn btn-ghost p-1"
                 :title="copied ? 'Copied!' : 'Copy'"
               >

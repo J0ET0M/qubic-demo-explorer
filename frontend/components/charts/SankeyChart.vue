@@ -43,18 +43,7 @@ const tooltipRef = ref<HTMLDivElement | null>(null)
 const chartWidth = computed(() => props.width || 1000)
 const chartHeight = computed(() => props.height || 600)
 
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(2) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(2) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(2) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(2) + 'K'
-  return volume.toLocaleString()
-}
-
-const truncateAddress = (address: string) => {
-  if (!address || address.length <= 12) return address
-  return `${address.slice(0, 6)}...${address.slice(-4)}`
-}
+const { formatVolume, truncateAddress } = useFormatting()
 
 const getNodeColor = (type: string) => {
   switch (type) {

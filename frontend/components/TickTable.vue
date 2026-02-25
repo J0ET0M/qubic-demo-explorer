@@ -5,14 +5,7 @@ defineProps<{
   ticks: TickDto[]
 }>()
 
-const formatDate = (date: string) => {
-  return new Date(date).toLocaleString()
-}
-
-const formatDateShort = (date: string) => {
-  const d = new Date(date)
-  return d.toLocaleDateString()
-}
+const { formatDate, formatDateShort } = useFormatting()
 </script>
 
 <template>

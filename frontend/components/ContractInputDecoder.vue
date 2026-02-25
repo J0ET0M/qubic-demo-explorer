@@ -19,10 +19,7 @@ const jsonOutput = computed(() => {
   return JSON.stringify(obj, null, 2)
 })
 
-const truncateAddress = (addr: string) => {
-  if (addr.length <= 16) return addr
-  return `${addr.slice(0, 8)}...${addr.slice(-8)}`
-}
+const { truncateAddress } = useFormatting()
 
 const isAddress = (value: unknown): boolean => {
   return typeof value === 'string' && value.length === 60

@@ -5,7 +5,7 @@ const api = useApi()
 
 // Only fetch summary stats for overview
 const { data: holderDistribution, pending: holderLoading } = await useAsyncData(
-  'overview-holder-distribution',
+  'holders-distribution',
   () => api.getHolderDistribution()
 )
 
@@ -24,13 +24,7 @@ const { data: avgTxSize, pending: txSizeLoading } = await useAsyncData(
   () => api.getAvgTxSizeTrends('epoch', 7)
 )
 
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(1) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(1) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(1) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(1) + 'K'
-  return volume.toLocaleString()
-}
+const { formatVolume } = useFormatting()
 
 // Calculate recent stats
 const recentSenders = computed(() => {

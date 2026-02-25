@@ -13,25 +13,28 @@ public class AnalyticsCacheService
 
     // Cache durations - real-time
     public static readonly TimeSpan NetworkStatsTtl = TimeSpan.FromSeconds(30);
-    public static readonly TimeSpan TxVolumeChartTtl = TimeSpan.FromMinutes(5);
-    public static readonly TimeSpan TopAddressesTtl = TimeSpan.FromMinutes(5);
-    public static readonly TimeSpan HolderDistributionTtl = TimeSpan.FromMinutes(5);
-    public static readonly TimeSpan ActiveAddressTtl = TimeSpan.FromMinutes(10);
-    public static readonly TimeSpan ExchangeFlowsTtl = TimeSpan.FromMinutes(10);
-    public static readonly TimeSpan AvgTxSizeTtl = TimeSpan.FromMinutes(10);
-    public static readonly TimeSpan SmartContractUsageTtl = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan TxVolumeChartTtl = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan TopAddressesTtl = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan HolderDistributionTtl = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan ActiveAddressTtl = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan ExchangeFlowsTtl = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan AvgTxSizeTtl = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan SmartContractUsageTtl = TimeSpan.FromMinutes(15);
     public static readonly TimeSpan NewVsReturningTtl = TimeSpan.FromMinutes(15);
 
     // Cache durations - snapshot-based (data changes every 4 hours)
-    public static readonly TimeSpan SnapshotHistoryTtl = TimeSpan.FromMinutes(30);
-    public static readonly TimeSpan SnapshotExtendedTtl = TimeSpan.FromMinutes(30);
+    public static readonly TimeSpan SnapshotHistoryTtl = TimeSpan.FromHours(2);
+    public static readonly TimeSpan SnapshotExtendedTtl = TimeSpan.FromHours(2);
 
     // Cache durations - exchange senders
-    public static readonly TimeSpan ExchangeSendersTtl = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan ExchangeSendersTtl = TimeSpan.FromMinutes(15);
 
     // Cache durations - rich list and supply
-    public static readonly TimeSpan RichListTtl = TimeSpan.FromMinutes(5);
-    public static readonly TimeSpan SupplyDashboardTtl = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan RichListTtl = TimeSpan.FromMinutes(30);
+    public static readonly TimeSpan SupplyDashboardTtl = TimeSpan.FromMinutes(30);
+
+    // Cache durations - address summary
+    public static readonly TimeSpan AddressSummaryTtl = TimeSpan.FromMinutes(5);
 
     // Cache durations - assets
     public static readonly TimeSpan AssetListTtl = TimeSpan.FromMinutes(10);
@@ -44,7 +47,7 @@ public class AnalyticsCacheService
     public static readonly TimeSpan AddressActivityRangeTtl = TimeSpan.FromMinutes(5);
 
     // Cache durations - epoch countdown
-    public static readonly TimeSpan EpochCountdownTtl = TimeSpan.FromMinutes(1);
+    public static readonly TimeSpan EpochCountdownTtl = TimeSpan.FromMinutes(5);
 
     // Cache durations - qearn
     public static readonly TimeSpan QearnStatsTtl = TimeSpan.FromMinutes(10);

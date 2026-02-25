@@ -21,10 +21,16 @@ public class AddressController : ControllerBase
     [HttpGet("{address}")]
     public async Task<IActionResult> GetAddress(string address, CancellationToken ct = default)
     {
-        var result = await _queryService.GetAddressSummaryAsync(address, ct);
+        // Parallel fetch: ClickHouse summary + live Bob balance
+        var summaryTask = _cache.GetOrSetAsync(
+            $"address:summary:{address}",
+            AnalyticsCacheService.AddressSummaryTtl,
+            () => _queryService.GetAddressSummaryAsync(address, ct));
+        var liveTask = _bobProxyService.GetBalanceAsync(address, ct);
+        await Task.WhenAll(summaryTask, liveTask);
 
-        // Get current balance and stats from Bob endpoint
-        var liveData = await _bobProxyService.GetBalanceAsync(address, ct);
+        var result = summaryTask.Result;
+        var liveData = liveTask.Result;
         if (liveData != null)
         {
             result = result with
@@ -167,13 +173,16 @@ public class AddressController : ControllerBase
         if (request.Addresses.Count > 20)
             return BadRequest("Maximum 20 addresses per batch request");
 
-        var results = new List<object>();
-        foreach (var addr in request.Addresses)
+        var tasks = request.Addresses.Select(async addr =>
         {
             try
             {
-                var summary = await _queryService.GetAddressSummaryAsync(addr, ct);
-                var liveData = await _bobProxyService.GetBalanceAsync(addr, ct);
+                var summaryTask = _queryService.GetAddressSummaryAsync(addr, ct);
+                var liveTask = _bobProxyService.GetBalanceAsync(addr, ct);
+                await Task.WhenAll(summaryTask, liveTask);
+
+                var summary = summaryTask.Result;
+                var liveData = liveTask.Result;
                 if (liveData != null)
                 {
                     summary = summary with
@@ -183,13 +192,17 @@ public class AddressController : ControllerBase
                         OutgoingAmount = liveData.OutgoingAmount
                     };
                 }
-                results.Add(summary);
+                return (object?)summary;
             }
             catch
             {
-                // Skip addresses that fail to fetch
+                return null;
             }
-        }
+        });
+
+        var results = (await Task.WhenAll(tasks))
+            .Where(r => r != null)
+            .ToList();
 
         return Ok(results);
     }

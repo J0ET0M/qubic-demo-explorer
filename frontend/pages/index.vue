@@ -3,6 +3,7 @@ import { Blocks, ArrowLeftRight, TrendingUp, Activity, BarChart3 } from 'lucide-
 
 const api = useApi()
 const liveUpdates = useLiveUpdates()
+const { formatNumber, formatVolume } = useFormatting()
 
 const { data: stats, pending: statsLoading } = await useAsyncData(
   'stats',
@@ -111,20 +112,6 @@ onUnmounted(async () => {
   await unsubscribeFromUpdates()
 })
 
-const formatNumber = (num: number | undefined) => {
-  if (!num) return '0'
-  return num.toLocaleString()
-}
-
-const formatVolume = (amount: number | undefined) => {
-  if (!amount) return '0'
-  // Qubic has no decimals, amount is already in QU
-  const qu = Math.floor(amount)
-  if (qu >= 1_000_000_000) return Math.floor(qu / 1_000_000_000).toLocaleString() + 'B'
-  if (qu >= 1_000_000) return Math.floor(qu / 1_000_000).toLocaleString() + 'M'
-  if (qu >= 1_000) return Math.floor(qu / 1_000).toLocaleString() + 'K'
-  return qu.toLocaleString()
-}
 </script>
 
 <template>

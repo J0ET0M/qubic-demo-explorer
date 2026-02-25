@@ -16,33 +16,7 @@ watch(() => props.transfers, async (transfers) => {
   }
 }, { immediate: true })
 
-const formatAmount = (amount: number) => {
-  // Qubic has no decimals, amount is already in QU
-  const qu = Math.floor(amount)
-  if (qu >= 1_000_000) return Math.floor(qu / 1_000_000).toLocaleString() + 'M'
-  if (qu >= 1_000) return Math.floor(qu / 1_000).toLocaleString() + 'K'
-  return qu.toLocaleString()
-}
-
-const getTypeBadgeClass = (logType: number) => {
-  switch (logType) {
-    case 0: return 'badge-success' // QU_TRANSFER
-    case 1: return 'badge-info'    // ASSET_ISSUANCE
-    case 2:
-    case 3: return 'badge-info'    // ASSET_OWNERSHIP/POSSESSION
-    default: return 'badge-warning'
-  }
-}
-
-const formatDateTime = (dateStr: string) => {
-  const date = new Date(dateStr)
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
+const { formatVolume, getLogTypeBadgeClass, formatDateTime } = useFormatting()
 </script>
 
 <template>
@@ -88,7 +62,7 @@ const formatDateTime = (dateStr: string) => {
             <span v-else class="text-foreground-muted">-</span>
           </td>
           <td>
-            <span :class="['badge', getTypeBadgeClass(transfer.logType)]">
+            <span :class="['badge', getLogTypeBadgeClass(transfer.logType)]">
               {{ transfer.logTypeName }}
             </span>
           </td>
@@ -132,7 +106,7 @@ const formatDateTime = (dateStr: string) => {
             </template>
             <span v-else class="text-foreground-muted">-</span>
           </td>
-          <td class="amount">{{ formatAmount(transfer.amount) }}</td>
+          <td class="amount">{{ formatVolume(transfer.amount) }}</td>
           <td class="hide-mobile">{{ transfer.assetName || 'QU' }}</td>
         </tr>
       </tbody>

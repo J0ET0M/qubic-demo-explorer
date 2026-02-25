@@ -10,33 +10,8 @@ const { data: topAddresses, pending: topAddressesLoading } = await useAsyncData(
   () => api.getTopAddresses(50)
 )
 
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(1) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(1) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(1) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(1) + 'K'
-  return volume.toLocaleString()
-}
-
-const truncateAddress = (address: string) => {
-  if (address.length <= 16) return address
-  return address.slice(0, 8) + '...' + address.slice(-8)
-}
-
-const getAddressDisplay = (item: TopAddressDto) => {
-  if (item.label) return item.label
-  return truncateAddress(item.address)
-}
-
-const getBadgeClass = (type: string | null | undefined) => {
-  switch (type) {
-    case 'exchange': return 'badge-warning'
-    case 'smartcontract': return 'badge-info'
-    case 'tokenissuer': return 'badge-accent'
-    case 'burn': return 'badge-error'
-    default: return 'badge-secondary'
-  }
-}
+const { formatVolume, truncateAddress, getBadgeClass } = useFormatting()
+const getAddressDisplay = (item: TopAddressDto) => item.label || truncateAddress(item.address)
 </script>
 
 <template>

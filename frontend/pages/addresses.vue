@@ -44,15 +44,7 @@ const getTypeIcon = (type: string) => {
   }
 }
 
-const getTypeBadgeClass = (type: string) => {
-  switch (type) {
-    case 'exchange': return 'badge-warning'
-    case 'smartcontract': return 'badge-info'
-    case 'tokenissuer': return 'badge-accent'
-    case 'burn': return 'badge-error'
-    default: return 'badge-success'
-  }
-}
+const { getBadgeClass: getTypeBadgeClass, truncateAddress } = useFormatting()
 
 const formatType = (type: string) => {
   switch (type) {
@@ -62,10 +54,6 @@ const formatType = (type: string) => {
     case 'burn': return 'Burn'
     default: return 'Known'
   }
-}
-
-const truncateAddress = (address: string) => {
-  return address.slice(0, 8) + '...' + address.slice(-8)
 }
 
 const filteredAddresses = computed(() => {

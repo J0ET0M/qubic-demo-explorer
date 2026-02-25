@@ -34,22 +34,10 @@ const tickCountData = computed(() => {
   return [...epochs.value].reverse().map(e => e.tickCount)
 })
 
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(1) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(1) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(1) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(1) + 'K'
-  return volume.toLocaleString()
-}
-
-const formatDate = (dateStr: string) => {
-  return new Date(dateStr).toLocaleDateString()
-}
+const { formatVolume, formatDateShort: formatDate } = useFormatting()
 
 const formatDuration = (startStr: string, endStr: string) => {
-  const start = new Date(startStr)
-  const end = new Date(endStr)
-  const days = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+  const days = Math.floor((new Date(endStr).getTime() - new Date(startStr).getTime()) / (1000 * 60 * 60 * 24))
   return `${days} days`
 }
 

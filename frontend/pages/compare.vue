@@ -5,6 +5,7 @@ useHead({ title: 'Address Comparison - QLI Explorer' })
 
 const api = useApi()
 const { getLabel, fetchLabels } = useAddressLabels()
+const { formatVolume, truncateAddress } = useFormatting()
 
 const address1 = ref('')
 const address2 = ref('')
@@ -31,21 +32,10 @@ const handleCompare = async () => {
   }
 }
 
-const formatAmount = (amount: number) => {
-  if (amount >= 1_000_000_000_000) return (amount / 1_000_000_000_000).toFixed(2) + 'T'
-  if (amount >= 1_000_000_000) return (amount / 1_000_000_000).toFixed(2) + 'B'
-  if (amount >= 1_000_000) return (amount / 1_000_000).toFixed(2) + 'M'
-  if (amount >= 1_000) return (amount / 1_000).toFixed(2) + 'K'
-  return amount.toLocaleString()
-}
-
-const truncateAddress = (addr: string) =>
-  addr.length > 16 ? addr.slice(0, 8) + '...' + addr.slice(-8) : addr
-
 const metrics = [
-  { key: 'balance', label: 'Balance', format: (v: number) => formatAmount(v) + ' QU', color: 'text-accent' },
-  { key: 'incomingAmount', label: 'Incoming', format: (v: number) => formatAmount(v) + ' QU', color: 'text-success' },
-  { key: 'outgoingAmount', label: 'Outgoing', format: (v: number) => formatAmount(v) + ' QU', color: 'text-destructive' },
+  { key: 'balance', label: 'Balance', format: (v: number) => formatVolume(v) + ' QU', color: 'text-accent' },
+  { key: 'incomingAmount', label: 'Incoming', format: (v: number) => formatVolume(v) + ' QU', color: 'text-success' },
+  { key: 'outgoingAmount', label: 'Outgoing', format: (v: number) => formatVolume(v) + ' QU', color: 'text-destructive' },
   { key: 'txCount', label: 'Transactions', format: (v: number) => v.toLocaleString(), color: 'text-accent' },
   { key: 'transferCount', label: 'Transfers', format: (v: number) => v.toLocaleString(), color: 'text-accent' },
 ]

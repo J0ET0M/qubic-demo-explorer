@@ -7,6 +7,7 @@ const router = useRouter()
 const { getLabel, fetchLabels } = useAddressLabels()
 const { isInPortfolio, addAddress: addToPortfolio, removeAddress: removeFromPortfolio } = usePortfolio()
 const { show: showToast } = useToast()
+const { formatVolume, formatDate, formatAmount, copyToClipboard: doCopy } = useFormatting()
 
 const address = route.params.id as string
 
@@ -175,54 +176,10 @@ watch(activeTab, (tab) => {
   else if (tab === 'graph') fetchGraph()
 })
 
-// Format volume for display
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(2) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(2) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(2) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(2) + 'K'
-  return volume.toLocaleString()
-}
-
-const formatDate = (dateStr: string) => {
-  return new Date(dateStr).toLocaleString()
-}
-
-const formatAmount = (amount: number) => {
-  // Qubic has no decimals, amount is already in QU
-  const qu = Math.floor(amount)
-  if (qu >= 1_000_000_000) return Math.floor(qu / 1_000_000_000).toLocaleString() + 'B'
-  if (qu >= 1_000_000) return Math.floor(qu / 1_000_000).toLocaleString() + 'M'
-  if (qu >= 1_000) return Math.floor(qu / 1_000).toLocaleString() + 'K'
-  return qu.toLocaleString()
-}
-
-const formatAmountFull = (amount: number) => {
-  // Qubic has no decimals, balance is already in QU
-  return Math.floor(amount).toLocaleString()
-}
-
 const copyToClipboard = async (text: string) => {
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text)
-    } else {
-      // Fallback for non-secure contexts
-      const textArea = document.createElement('textarea')
-      textArea.value = text
-      textArea.style.position = 'fixed'
-      textArea.style.left = '-999999px'
-      textArea.style.top = '-999999px'
-      document.body.appendChild(textArea)
-      textArea.focus()
-      textArea.select()
-      document.execCommand('copy')
-      textArea.remove()
-    }
+  if (await doCopy(text)) {
     copied.value = true
     setTimeout(() => copied.value = false, 2000)
-  } catch (err) {
-    console.error('Failed to copy:', err)
   }
 }
 
@@ -336,7 +293,7 @@ const getTypeName = (type: number) => {
           <div class="detail-row">
             <span class="detail-label">Balance</span>
             <span class="detail-value font-semibold text-accent text-lg">
-              {{ formatAmountFull(addressData.balance) }} QU
+              {{ formatAmount(addressData.balance) }} QU
             </span>
           </div>
           <div v-if="activityRange?.firstTick" class="detail-row">
@@ -370,14 +327,14 @@ const getTypeName = (type: number) => {
           <div class="card-elevated text-center">
             <div class="text-lg font-semibold text-success flex items-center justify-center gap-1">
               <ArrowDownLeft class="h-4 w-4" />
-              {{ formatAmount(addressData.incomingAmount) }}
+              {{ formatVolume(addressData.incomingAmount) }}
             </div>
             <div class="text-xs text-foreground-muted uppercase mt-1">Incoming</div>
           </div>
           <div class="card-elevated text-center">
             <div class="text-lg font-semibold text-destructive flex items-center justify-center gap-1">
               <ArrowUpRight class="h-4 w-4" />
-              {{ formatAmount(addressData.outgoingAmount) }}
+              {{ formatVolume(addressData.outgoingAmount) }}
             </div>
             <div class="text-xs text-foreground-muted uppercase mt-1">Outgoing</div>
           </div>

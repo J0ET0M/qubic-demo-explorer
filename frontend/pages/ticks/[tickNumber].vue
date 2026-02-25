@@ -3,6 +3,7 @@ import { Blocks, ArrowLeftRight, FileText, Filter, X } from 'lucide-vue-next'
 
 const api = useApi()
 const route = useRoute()
+const { formatDate } = useFormatting()
 
 const tickNumber = Number(route.params.tickNumber)
 
@@ -83,10 +84,6 @@ const { data: logs, pending: logsPending } = await useAsyncData(
     Object.keys(logsFilterOptions.value).length > 0 ? logsFilterOptions.value : undefined),
   { watch: [logsPage, logsAddress, logsDirection, logsType, logsMinAmount] }
 )
-
-const formatDate = (date: string) => {
-  return new Date(date).toLocaleString()
-}
 
 // Transaction filter functions
 const applyTxFilters = () => {

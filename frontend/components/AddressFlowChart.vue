@@ -8,32 +8,9 @@ interface Props {
 
 const props = defineProps<Props>()
 
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(1) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(1) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(1) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(1) + 'K'
-  return volume.toLocaleString()
-}
+const { formatVolume, truncateAddress, getBadgeClass } = useFormatting()
 
-const truncateAddress = (address: string) => {
-  if (address.length <= 12) return address
-  return address.slice(0, 6) + '...' + address.slice(-6)
-}
-
-const getDisplayName = (node: FlowNodeDto) => {
-  return node.label || truncateAddress(node.address)
-}
-
-const getBadgeClass = (type: string | null | undefined) => {
-  switch (type) {
-    case 'exchange': return 'badge-warning'
-    case 'smartcontract': return 'badge-info'
-    case 'tokenissuer': return 'badge-accent'
-    case 'burn': return 'badge-error'
-    default: return ''
-  }
-}
+const getDisplayName = (node: FlowNodeDto) => node.label || truncateAddress(node.address)
 
 // Calculate max values for bar widths
 const maxInbound = computed(() => {
