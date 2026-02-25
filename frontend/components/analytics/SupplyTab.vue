@@ -43,7 +43,7 @@ const burnData = computed(() => {
   <div class="space-y-6">
     <div v-if="pending" class="loading py-12">Loading supply data...</div>
 
-    <template v-else-if="supply">
+    <template v-else-if="supply && (supply.snapshotEpoch > 0 || supply.emissionHistory.length > 0 || supply.burnHistory.length > 0)">
       <!-- Summary Cards -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="card-elevated text-center">
@@ -141,5 +141,11 @@ const burnData = computed(() => {
         </div>
       </div>
     </template>
+
+    <div v-else class="card">
+      <div class="text-center py-12 text-foreground-muted text-sm">
+        No supply data available yet. Spectrum files need to be imported first.
+      </div>
+    </div>
   </div>
 </template>

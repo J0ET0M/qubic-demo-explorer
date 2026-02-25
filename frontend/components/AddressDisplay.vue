@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Copy, Check, Star } from 'lucide-vue-next'
 import type { AddressLabelDto } from '~/composables/useApi'
 
 const props = withDefaults(defineProps<{
@@ -7,9 +8,37 @@ const props = withDefaults(defineProps<{
   short?: boolean
   link?: boolean
   highlight?: 'positive' | 'negative' | null
+  actions?: boolean
 }>(), {
-  link: true
+  link: true,
+  actions: false
 })
+
+const { isInPortfolio, addAddress, removeAddress } = usePortfolio()
+const { show: showToast } = useToast()
+
+const copied = ref(false)
+
+const copyAddress = async () => {
+  try {
+    await navigator.clipboard.writeText(props.address)
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 1500)
+  } catch {}
+}
+
+const togglePortfolio = () => {
+  if (isInPortfolio(props.address)) {
+    removeAddress(props.address)
+    showToast('Removed from portfolio', { type: 'info' })
+  } else {
+    addAddress(props.address)
+    showToast('Added to portfolio', {
+      type: 'success',
+      action: { label: 'View Portfolio', to: '/portfolio' },
+    })
+  }
+}
 
 const truncateAddress = (address: string, short: boolean) => {
   if (short) {
@@ -50,24 +79,74 @@ const highlightClass = computed(() => {
 </script>
 
 <template>
-  <NuxtLink
-    v-if="link"
-    :to="`/address/${address}`"
-    :class="[badgeClass, highlightClass]"
-    :title="address"
-  >
-    {{ displayText }}
-  </NuxtLink>
-  <span
-    v-else
-    :class="[badgeClass, highlightClass]"
-    :title="address"
-  >
-    {{ displayText }}
+  <span class="address-display">
+    <NuxtLink
+      v-if="link"
+      :to="`/address/${address}`"
+      :class="[badgeClass, highlightClass]"
+      :title="address"
+    >
+      {{ displayText }}
+    </NuxtLink>
+    <span
+      v-else
+      :class="[badgeClass, highlightClass]"
+      :title="address"
+    >
+      {{ displayText }}
+    </span>
+    <span v-if="actions" class="address-actions">
+      <button
+        @click.prevent.stop="copyAddress"
+        class="action-btn"
+        :title="copied ? 'Copied!' : 'Copy address'"
+      >
+        <Check v-if="copied" class="h-3 w-3 text-success" />
+        <Copy v-else class="h-3 w-3" />
+      </button>
+      <button
+        @click.prevent.stop="togglePortfolio"
+        class="action-btn"
+        :class="{ 'text-warning': isInPortfolio(address) }"
+        :title="isInPortfolio(address) ? 'Remove from portfolio' : 'Add to portfolio'"
+      >
+        <Star class="h-3 w-3" :class="{ 'fill-current': isInPortfolio(address) }" />
+      </button>
+    </span>
   </span>
 </template>
 
 <style scoped>
+.address-display {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.address-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.address-display:hover .address-actions {
+  opacity: 1;
+}
+
+.action-btn {
+  padding: 0.125rem;
+  border-radius: 0.25rem;
+  color: var(--color-foreground-muted);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.action-btn:hover {
+  color: var(--color-foreground);
+}
+
 .address-badge-exchange {
   color: var(--color-warning);
 }

@@ -46,5 +46,8 @@ function toggleCollapse() {
         <slot />
       </main>
     </div>
+
+    <!-- Toast notifications -->
+    <ToastContainer />
   </div>
 </template>

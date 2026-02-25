@@ -1,15 +1,24 @@
 <script setup lang="ts">
-import { Star, Plus, Trash2, RefreshCw } from 'lucide-vue-next'
+import { Star, Plus, Trash2, RefreshCw, Bell, BellOff } from 'lucide-vue-next'
 
 useHead({ title: 'Portfolio - QLI Explorer' })
 
 const api = useApi()
 const { addresses, addAddress, removeAddress } = usePortfolio()
 const { getLabel, fetchLabels } = useAddressLabels()
+const { show: showToast } = useToast()
+const {
+  prefs: notifPrefs,
+  permissionState,
+  enable: enableNotifications,
+  disable: disableNotifications,
+  updatePrefs,
+} = useNotifications()
 
 const newAddress = ref('')
 const loading = ref(false)
 const portfolioData = ref<any[]>([])
+const showNotifSettings = ref(false)
 
 const fetchPortfolio = async () => {
   if (addresses.value.length === 0) {
@@ -20,7 +29,6 @@ const fetchPortfolio = async () => {
   try {
     const data = await api.getAddressesBatch([...addresses.value])
     portfolioData.value = data
-    // Fetch labels for all addresses
     await fetchLabels([...addresses.value])
   } catch (e) {
     console.error('Failed to fetch portfolio:', e)
@@ -34,6 +42,9 @@ const handleAdd = () => {
   if (addr && addr.length >= 50) {
     addAddress(addr)
     newAddress.value = ''
+    showToast('Address added to portfolio', {
+      type: 'success',
+    })
     fetchPortfolio()
   }
 }
@@ -62,16 +73,148 @@ const totalTxCount = computed(() =>
 const truncateAddress = (addr: string) =>
   addr.length > 16 ? addr.slice(0, 8) + '...' + addr.slice(-8) : addr
 
-// Fetch on mount
+const thresholdOptions = [
+  { label: '1M QU', value: 1_000_000 },
+  { label: '100M QU', value: 100_000_000 },
+  { label: '1B QU', value: 1_000_000_000 },
+  { label: '10B QU', value: 10_000_000_000 },
+  { label: '100B QU', value: 100_000_000_000 },
+]
+
+const pollOptions = [
+  { label: '30s', value: 30 },
+  { label: '1 min', value: 60 },
+  { label: '5 min', value: 300 },
+  { label: '15 min', value: 900 },
+]
+
 onMounted(() => fetchPortfolio())
 </script>
 
 <template>
   <div class="space-y-6">
-    <h1 class="page-title flex items-center gap-2">
-      <Star class="h-5 w-5 text-accent" />
-      Portfolio
-    </h1>
+    <div class="flex items-center justify-between">
+      <h1 class="page-title flex items-center gap-2">
+        <Star class="h-5 w-5 text-accent" />
+        Portfolio
+      </h1>
+      <button
+        @click="showNotifSettings = !showNotifSettings"
+        class="btn btn-ghost flex items-center gap-1.5 text-sm"
+        :class="{ 'text-accent': notifPrefs.enabled }"
+      >
+        <Bell v-if="notifPrefs.enabled" class="h-4 w-4" />
+        <BellOff v-else class="h-4 w-4" />
+        Notifications
+      </button>
+    </div>
+
+    <!-- Notification Settings -->
+    <div v-if="showNotifSettings" class="card space-y-4">
+      <h2 class="text-sm font-medium">Push Notifications</h2>
+
+      <div v-if="permissionState === 'denied'" class="text-sm text-destructive">
+        Browser notifications are blocked. Please enable them in your browser settings.
+      </div>
+
+      <template v-else>
+        <div class="flex items-center justify-between">
+          <span class="text-sm">Enable notifications for portfolio addresses</span>
+          <button
+            v-if="!notifPrefs.enabled"
+            @click="enableNotifications"
+            class="btn btn-primary btn-sm"
+          >
+            Enable
+          </button>
+          <button
+            v-else
+            @click="disableNotifications"
+            class="btn btn-ghost btn-sm text-destructive"
+          >
+            Disable
+          </button>
+        </div>
+
+        <template v-if="notifPrefs.enabled">
+          <!-- Event types -->
+          <div class="space-y-2">
+            <span class="text-xs text-foreground-muted uppercase">Notify me about</span>
+            <label class="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                :checked="notifPrefs.events.includes('incoming')"
+                @change="updatePrefs({
+                  events: ($event.target as HTMLInputElement).checked
+                    ? [...notifPrefs.events, 'incoming']
+                    : notifPrefs.events.filter(e => e !== 'incoming')
+                })"
+                class="accent-accent"
+              />
+              Incoming transfers
+            </label>
+            <label class="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                :checked="notifPrefs.events.includes('outgoing')"
+                @change="updatePrefs({
+                  events: ($event.target as HTMLInputElement).checked
+                    ? [...notifPrefs.events, 'outgoing']
+                    : notifPrefs.events.filter(e => e !== 'outgoing')
+                })"
+                class="accent-accent"
+              />
+              Outgoing transfers
+            </label>
+            <label class="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                :checked="notifPrefs.events.includes('large_transfer')"
+                @change="updatePrefs({
+                  events: ($event.target as HTMLInputElement).checked
+                    ? [...notifPrefs.events, 'large_transfer']
+                    : notifPrefs.events.filter(e => e !== 'large_transfer')
+                })"
+                class="accent-accent"
+              />
+              Large transfers (in-app toast)
+            </label>
+          </div>
+
+          <!-- Threshold -->
+          <div class="space-y-1">
+            <span class="text-xs text-foreground-muted uppercase">Large transfer threshold</span>
+            <div class="flex gap-1.5 flex-wrap">
+              <button
+                v-for="opt in thresholdOptions"
+                :key="opt.value"
+                @click="updatePrefs({ largeTransferThreshold: opt.value })"
+                class="btn btn-sm"
+                :class="notifPrefs.largeTransferThreshold === opt.value ? 'btn-primary' : 'btn-ghost'"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Poll interval -->
+          <div class="space-y-1">
+            <span class="text-xs text-foreground-muted uppercase">Check interval</span>
+            <div class="flex gap-1.5 flex-wrap">
+              <button
+                v-for="opt in pollOptions"
+                :key="opt.value"
+                @click="updatePrefs({ pollIntervalSec: opt.value })"
+                class="btn btn-sm"
+                :class="notifPrefs.pollIntervalSec === opt.value ? 'btn-primary' : 'btn-ghost'"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+        </template>
+      </template>
+    </div>
 
     <!-- Add Address -->
     <div class="card">

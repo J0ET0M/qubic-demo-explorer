@@ -6,8 +6,22 @@ const route = useRoute()
 const router = useRouter()
 const { getLabel, fetchLabels } = useAddressLabels()
 const { isInPortfolio, addAddress: addToPortfolio, removeAddress: removeFromPortfolio } = usePortfolio()
+const { show: showToast } = useToast()
 
 const address = route.params.id as string
+
+const togglePortfolio = () => {
+  if (isInPortfolio(address)) {
+    removeFromPortfolio(address)
+    showToast('Removed from portfolio', { type: 'info' })
+  } else {
+    addToPortfolio(address)
+    showToast('Added to portfolio', {
+      type: 'success',
+      action: { label: 'View Portfolio', to: '/portfolio' },
+    })
+  }
+}
 
 // Log type definitions for transfers
 const logTypes = [
@@ -307,7 +321,7 @@ const getTypeName = (type: number) => {
                 <QrCode class="h-4 w-4" />
               </button>
               <button
-                @click="isInPortfolio(address) ? removeFromPortfolio(address) : addToPortfolio(address)"
+                @click="togglePortfolio"
                 class="btn btn-ghost p-1"
                 :class="{ 'text-warning': isInPortfolio(address) }"
                 :title="isInPortfolio(address) ? 'Remove from Portfolio' : 'Add to Portfolio'"

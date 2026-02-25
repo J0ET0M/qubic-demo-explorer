@@ -69,6 +69,7 @@ builder.Services.AddSingleton<ComputorFlowService>();
 builder.Services.AddHostedService<LiveTickService>();
 builder.Services.AddHostedService<EpochMetaSyncService>();
 builder.Services.AddHostedService<EpochTransitionService>();
+builder.Services.AddHostedService<AutoImportService>();
 
 // Add controllers
 builder.Services.AddControllers();

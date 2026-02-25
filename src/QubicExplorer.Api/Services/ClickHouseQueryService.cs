@@ -1651,62 +1651,56 @@ public class ClickHouseQueryService : IDisposable
     /// </summary>
     public async Task<EpochCountdownDto?> GetEpochCountdownInfoAsync(CancellationToken ct = default)
     {
+        // Get current epoch and latest tick
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
-            SELECT
-                epoch,
-                min(timestamp) as start_time,
-                max(timestamp) as end_time,
-                max(tick_number) as max_tick
+            SELECT epoch, max(tick_number) as max_tick
             FROM ticks
             GROUP BY epoch
             ORDER BY epoch DESC
-            LIMIT 10";
+            LIMIT 1";
 
-        var epochs = new List<(uint Epoch, DateTime Start, DateTime End, ulong MaxTick)>();
+        uint currentEpoch;
+        ulong currentTick;
         await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
-            while (await reader.ReadAsync(ct))
-            {
-                epochs.Add((
-                    Convert.ToUInt32(reader.GetValue(0)),
-                    reader.GetDateTime(1),
-                    reader.GetDateTime(2),
-                    ToUInt64(reader.GetValue(3))
-                ));
-            }
+            if (!await reader.ReadAsync(ct))
+                return null;
+            currentEpoch = Convert.ToUInt32(reader.GetValue(0));
+            currentTick = ToUInt64(reader.GetValue(1));
         }
 
-        if (epochs.Count == 0)
-            return null;
-
-        var current = epochs[0]; // Most recent epoch
-
-        // Calculate average epoch duration from completed epochs (skip current)
-        double avgDurationMs;
-        if (epochs.Count >= 3)
-        {
-            var completedDurations = epochs.Skip(1)
-                .Select(e => (e.End - e.Start).TotalMilliseconds)
-                .Where(d => d > 0)
-                .ToList();
-            avgDurationMs = completedDurations.Count > 0
-                ? completedDurations.Average()
-                : TimeSpan.FromDays(7).TotalMilliseconds; // fallback
-        }
-        else
-        {
-            avgDurationMs = TimeSpan.FromDays(7).TotalMilliseconds; // default ~1 week
-        }
-
-        var estimatedEnd = current.Start.AddMilliseconds(avgDurationMs);
+        // Epochs are fixed: Wednesday 12:00 UTC to Wednesday 12:00 UTC
+        var now = DateTime.UtcNow;
+        var epochStart = GetCurrentWednesdayNoon(now);
+        var epochEnd = epochStart.AddDays(7);
+        var durationMs = TimeSpan.FromDays(7).TotalMilliseconds;
 
         return new EpochCountdownDto(
-            current.Epoch,
-            current.Start,
-            avgDurationMs,
-            estimatedEnd,
-            current.MaxTick);
+            currentEpoch,
+            epochStart,
+            durationMs,
+            epochEnd,
+            currentTick);
+    }
+
+    /// <summary>
+    /// Get the most recent Wednesday 12:00 UTC at or before the given time.
+    /// </summary>
+    private static DateTime GetCurrentWednesdayNoon(DateTime utcNow)
+    {
+        // Find the most recent Wednesday 12:00 UTC
+        var candidate = utcNow.Date.AddHours(12); // today at 12:00 UTC
+
+        // Walk back to Wednesday
+        while (candidate.DayOfWeek != DayOfWeek.Wednesday)
+            candidate = candidate.AddDays(-1);
+
+        // If that Wednesday noon is in the future, go back one week
+        if (candidate > utcNow)
+            candidate = candidate.AddDays(-7);
+
+        return candidate;
     }
 
     // =====================================================
