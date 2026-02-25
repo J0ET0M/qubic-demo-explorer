@@ -1,17 +1,21 @@
 const PREFS_KEY = 'qli-notification-prefs'
 
-export type NotificationEventType = 'incoming' | 'outgoing' | 'large_transfer'
+export type NotificationEventType = 'incoming' | 'outgoing' | 'large_transfer' | 'balance_threshold'
 
 export interface NotificationPrefs {
   enabled: boolean
   events: NotificationEventType[]
   largeTransferThreshold: number // in QU
+  balanceMinThreshold: number // in QU, 0 = disabled
+  balanceMaxThreshold: number // in QU, 0 = disabled
 }
 
 const defaultPrefs: NotificationPrefs = {
   enabled: false,
   events: ['incoming', 'outgoing', 'large_transfer'],
   largeTransferThreshold: 1_000_000_000, // 1B QU
+  balanceMinThreshold: 0,
+  balanceMaxThreshold: 0,
 }
 
 const prefs = ref<NotificationPrefs>({ ...defaultPrefs })
@@ -97,8 +101,7 @@ async function subscribeToPush(
 async function sendSubscriptionToServer(
   sub: PushSubscription,
   addresses: string[],
-  events: string[],
-  threshold: number
+  notifPrefs: NotificationPrefs
 ) {
   try {
     const config = useRuntimeConfig()
@@ -116,8 +119,10 @@ async function sendSubscriptionToServer(
           },
         },
         addresses,
-        events,
-        largeTransferThreshold: threshold,
+        events: notifPrefs.events,
+        largeTransferThreshold: notifPrefs.largeTransferThreshold,
+        balanceMinThreshold: notifPrefs.balanceMinThreshold,
+        balanceMaxThreshold: notifPrefs.balanceMaxThreshold,
       }),
     })
   } catch (err) {
@@ -160,8 +165,7 @@ export const useNotifications = () => {
         await sendSubscriptionToServer(
           existingSub,
           [...addresses.value],
-          prefs.value.events,
-          prefs.value.largeTransferThreshold
+          prefs.value
         )
       }
     }
@@ -207,8 +211,7 @@ export const useNotifications = () => {
       await sendSubscriptionToServer(
         sub,
         [...addresses.value],
-        prefs.value.events,
-        prefs.value.largeTransferThreshold
+        prefs.value
       )
     }
 
@@ -242,8 +245,7 @@ export const useNotifications = () => {
     await sendSubscriptionToServer(
       sub,
       [...addresses.value],
-      prefs.value.events,
-      prefs.value.largeTransferThreshold
+      prefs.value
     )
   }
 

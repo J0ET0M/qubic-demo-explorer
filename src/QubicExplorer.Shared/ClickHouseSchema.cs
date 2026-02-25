@@ -734,12 +734,17 @@ public static class ClickHouseSchema
             addresses Array(String),
             events Array(String),
             large_transfer_threshold UInt64 DEFAULT 1000000000,
+            balance_min_threshold UInt64 DEFAULT 0,
+            balance_max_threshold UInt64 DEFAULT 0,
             created_at DateTime64(3) DEFAULT now64(3),
             updated_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(updated_at)
         ORDER BY subscription_id
         TTL toDateTime(updated_at) + INTERVAL 90 DAY
         """,
+
+        $"ALTER TABLE {DatabaseName}.push_subscriptions ADD COLUMN IF NOT EXISTS balance_min_threshold UInt64 DEFAULT 0",
+        $"ALTER TABLE {DatabaseName}.push_subscriptions ADD COLUMN IF NOT EXISTS balance_max_threshold UInt64 DEFAULT 0",
 
         $"ALTER TABLE {DatabaseName}.push_subscriptions ADD INDEX IF NOT EXISTS idx_push_endpoint endpoint TYPE bloom_filter GRANULARITY 4",
 

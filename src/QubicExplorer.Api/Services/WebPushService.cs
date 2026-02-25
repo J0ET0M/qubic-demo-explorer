@@ -60,6 +60,8 @@ public class WebPushService : IDisposable
         string[] addresses,
         string[] events,
         ulong largeTransferThreshold,
+        ulong balanceMinThreshold = 0,
+        ulong balanceMaxThreshold = 0,
         CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
@@ -67,10 +69,10 @@ public class WebPushService : IDisposable
         var evtArray = "[" + string.Join(",", events.Select(e => $"'{e}'")) + "]";
         cmd.CommandText = $@"
             INSERT INTO push_subscriptions
-            (subscription_id, endpoint, p256dh, auth, addresses, events, large_transfer_threshold)
+            (subscription_id, endpoint, p256dh, auth, addresses, events, large_transfer_threshold, balance_min_threshold, balance_max_threshold)
             VALUES
             ('{EscapeSql(subscriptionId)}', '{EscapeSql(endpoint)}', '{EscapeSql(p256dh)}',
-             '{EscapeSql(auth)}', {addrArray}, {evtArray}, {largeTransferThreshold})";
+             '{EscapeSql(auth)}', {addrArray}, {evtArray}, {largeTransferThreshold}, {balanceMinThreshold}, {balanceMaxThreshold})";
         await cmd.ExecuteNonQueryAsync(ct);
 
         _logger.LogInformation("Saved push subscription {Id} watching {Count} addresses",
@@ -95,7 +97,8 @@ public class WebPushService : IDisposable
     {
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            SELECT subscription_id, endpoint, p256dh, auth, events, large_transfer_threshold
+            SELECT subscription_id, endpoint, p256dh, auth, events, large_transfer_threshold,
+                   balance_min_threshold, balance_max_threshold
             FROM push_subscriptions FINAL
             WHERE has(addresses, '{EscapeSql(address)}')";
 
@@ -109,7 +112,9 @@ public class WebPushService : IDisposable
                 P256dh: reader.GetString(2),
                 Auth: reader.GetString(3),
                 Events: ((string[])reader.GetValue(4)).ToList(),
-                LargeTransferThreshold: Convert.ToUInt64(reader.GetValue(5))
+                LargeTransferThreshold: Convert.ToUInt64(reader.GetValue(5)),
+                BalanceMinThreshold: Convert.ToUInt64(reader.GetValue(6)),
+                BalanceMaxThreshold: Convert.ToUInt64(reader.GetValue(7))
             ));
         }
         return results;
@@ -205,5 +210,7 @@ public record PushSubscriptionRecord(
     string P256dh,
     string Auth,
     List<string> Events,
-    ulong LargeTransferThreshold
+    ulong LargeTransferThreshold,
+    ulong BalanceMinThreshold = 0,
+    ulong BalanceMaxThreshold = 0
 );

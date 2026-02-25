@@ -20,6 +20,9 @@ public class AddressMonitorService : BackgroundService
     // Track the last processed tick per address to detect new transfers
     private readonly Dictionary<string, ulong> _lastProcessedTick = new();
 
+    // Track last known balance per address for threshold crossing detection
+    private readonly Dictionary<string, ulong> _lastKnownBalance = new();
+
     public AddressMonitorService(
         IServiceProvider serviceProvider,
         ILogger<AddressMonitorService> logger)
@@ -124,63 +127,137 @@ public class AddressMonitorService : BackgroundService
         if (!_lastProcessedTick.TryGetValue(address, out var lastTick))
         {
             _lastProcessedTick[address] = latestTick;
+            // Also initialize balance baseline
+            await InitializeBalanceBaselineAsync(address, queryService, ct);
             return;
         }
-
-        // No new transfers
-        if (latestTick <= lastTick) return;
-
-        _lastProcessedTick[address] = latestTick;
 
         // Get subscriptions for this address
         var subscriptions = await pushService.GetSubscriptionsForAddressAsync(address, ct);
         if (subscriptions.Count == 0) return;
 
         // Process new transfers
-        var newTransfers = transfers.Items
-            .Where(t => t.TickNumber > lastTick)
-            .ToList();
-
-        foreach (var transfer in newTransfers)
+        if (latestTick > lastTick)
         {
-            var isIncoming = transfer.DestAddress == address;
-            var eventType = isIncoming ? "incoming" : "outgoing";
-            var amount = transfer.Amount;
-            var tickNumber = transfer.TickNumber;
+            _lastProcessedTick[address] = latestTick;
 
-            foreach (var sub in subscriptions)
+            var newTransfers = transfers.Items
+                .Where(t => t.TickNumber > lastTick)
+                .ToList();
+
+            foreach (var transfer in newTransfers)
             {
-                // Check if subscription wants this event type
-                var isLarge = amount >= sub.LargeTransferThreshold;
-                var wantsEvent = sub.Events.Contains(eventType) ||
-                                 (isLarge && sub.Events.Contains("large_transfer"));
+                var isIncoming = transfer.DestAddress == address;
+                var eventType = isIncoming ? "incoming" : "outgoing";
+                var amount = transfer.Amount;
+                var tickNumber = transfer.TickNumber;
 
-                if (!wantsEvent) continue;
+                foreach (var sub in subscriptions)
+                {
+                    // Check if subscription wants this event type
+                    var isLarge = amount >= sub.LargeTransferThreshold;
+                    var wantsEvent = sub.Events.Contains(eventType) ||
+                                     (isLarge && sub.Events.Contains("large_transfer"));
 
-                // Deduplication check
-                if (await pushService.WasNotificationSentAsync(sub.SubscriptionId, address, tickNumber, ct))
-                    continue;
+                    if (!wantsEvent) continue;
 
-                // Build notification
-                var counterparty = isIncoming ? transfer.SourceAddress : transfer.DestAddress;
-                var counterDisplay = labelService.GetLabel(counterparty) ?? TruncateAddress(counterparty);
-                var addrDisplay = labelService.GetLabel(address) ?? TruncateAddress(address);
+                    // Deduplication check
+                    if (await pushService.WasNotificationSentAsync(sub.SubscriptionId, address, tickNumber, ct))
+                        continue;
 
-                var title = isLarge ? "Large Transfer Detected" :
-                            isIncoming ? "Incoming Transfer" : "Outgoing Transfer";
+                    // Build notification
+                    var counterparty = isIncoming ? transfer.SourceAddress : transfer.DestAddress;
+                    var counterDisplay = labelService.GetLabel(counterparty) ?? TruncateAddress(counterparty);
+                    var addrDisplay = labelService.GetLabel(address) ?? TruncateAddress(address);
 
-                var body = isIncoming
-                    ? $"{FormatAmount(amount)} QU received by {addrDisplay} from {counterDisplay}"
-                    : $"{FormatAmount(amount)} QU sent from {addrDisplay} to {counterDisplay}";
+                    var title = isLarge ? "Large Transfer Detected" :
+                                isIncoming ? "Incoming Transfer" : "Outgoing Transfer";
 
+                    var body = isIncoming
+                        ? $"{FormatAmount(amount)} QU received by {addrDisplay} from {counterDisplay}"
+                        : $"{FormatAmount(amount)} QU sent from {addrDisplay} to {counterDisplay}";
+
+                    var url = $"/address/{address}";
+
+                    var sent = await pushService.SendNotificationAsync(sub, title, body, url, ct);
+                    if (sent)
+                    {
+                        await pushService.RecordNotificationAsync(
+                            sub.SubscriptionId, address, tickNumber, eventType, amount, ct);
+                    }
+                }
+            }
+        }
+
+        // Check balance thresholds
+        await CheckBalanceThresholdsAsync(address, subscriptions, pushService, queryService, labelService, ct);
+    }
+
+    private async Task InitializeBalanceBaselineAsync(
+        string address, ClickHouseQueryService queryService, CancellationToken ct)
+    {
+        try
+        {
+            var summary = await queryService.GetAddressSummaryAsync(address, ct);
+            _lastKnownBalance[address] = summary.Balance;
+        }
+        catch
+        {
+            _lastKnownBalance[address] = 0;
+        }
+    }
+
+    private async Task CheckBalanceThresholdsAsync(
+        string address,
+        List<PushSubscriptionRecord> subscriptions,
+        WebPushService pushService,
+        ClickHouseQueryService queryService,
+        AddressLabelService labelService,
+        CancellationToken ct)
+    {
+        // Only check if any subscription cares about balance thresholds
+        var hasBalanceWatchers = subscriptions.Any(s =>
+            s.Events.Contains("balance_threshold") &&
+            (s.BalanceMinThreshold > 0 || s.BalanceMaxThreshold > 0));
+        if (!hasBalanceWatchers) return;
+
+        // Fetch current balance
+        var summary = await queryService.GetAddressSummaryAsync(address, ct);
+        var currentBalance = summary.Balance;
+        _lastKnownBalance.TryGetValue(address, out var previousBalance);
+        _lastKnownBalance[address] = currentBalance;
+
+        // Skip if balance hasn't changed
+        if (currentBalance == previousBalance) return;
+
+        var addrDisplay = labelService.GetLabel(address) ?? TruncateAddress(address);
+
+        foreach (var sub in subscriptions)
+        {
+            if (!sub.Events.Contains("balance_threshold")) continue;
+
+            // Check minimum threshold crossing (balance dropped below min)
+            if (sub.BalanceMinThreshold > 0 &&
+                currentBalance < sub.BalanceMinThreshold &&
+                previousBalance >= sub.BalanceMinThreshold)
+            {
+                var title = "Balance Below Minimum";
+                var body = $"{addrDisplay} balance dropped to {FormatAmount(currentBalance)} QU (below {FormatAmount(sub.BalanceMinThreshold)} QU threshold)";
                 var url = $"/address/{address}";
 
-                var sent = await pushService.SendNotificationAsync(sub, title, body, url, ct);
-                if (sent)
-                {
-                    await pushService.RecordNotificationAsync(
-                        sub.SubscriptionId, address, tickNumber, eventType, amount, ct);
-                }
+                await pushService.SendNotificationAsync(sub, title, body, url, ct);
+            }
+
+            // Check maximum threshold crossing (balance rose above max)
+            if (sub.BalanceMaxThreshold > 0 &&
+                currentBalance > sub.BalanceMaxThreshold &&
+                previousBalance <= sub.BalanceMaxThreshold)
+            {
+                var title = "Balance Above Maximum";
+                var body = $"{addrDisplay} balance reached {FormatAmount(currentBalance)} QU (above {FormatAmount(sub.BalanceMaxThreshold)} QU threshold)";
+                var url = $"/address/{address}";
+
+                await pushService.SendNotificationAsync(sub, title, body, url, ct);
             }
         }
     }

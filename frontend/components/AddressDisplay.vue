@@ -11,7 +11,7 @@ const props = withDefaults(defineProps<{
   actions?: boolean
 }>(), {
   link: true,
-  actions: false
+  actions: true
 })
 
 const { isInPortfolio, addAddress, removeAddress } = usePortfolio()
@@ -145,6 +145,20 @@ const highlightClass = computed(() => {
 
 .action-btn:hover {
   color: var(--color-foreground);
+}
+
+/* Compact icons inside table cells */
+:global(td) .address-actions {
+  gap: 0;
+}
+
+:global(td) .action-btn {
+  padding: 0.0625rem;
+}
+
+:global(td) .action-btn :deep(svg) {
+  width: 0.625rem;
+  height: 0.625rem;
 }
 
 .address-badge-exchange {

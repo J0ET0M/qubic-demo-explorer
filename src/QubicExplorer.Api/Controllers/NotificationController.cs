@@ -51,6 +51,8 @@ public class NotificationController : ControllerBase
             request.Addresses,
             request.Events ?? ["incoming", "outgoing", "large_transfer"],
             request.LargeTransferThreshold > 0 ? request.LargeTransferThreshold : 1_000_000_000,
+            request.BalanceMinThreshold,
+            request.BalanceMaxThreshold,
             ct);
 
         return Ok(new { subscriptionId });
@@ -85,7 +87,9 @@ public record PushSubscribeRequest(
     PushSubscriptionData Subscription,
     string[] Addresses,
     string[]? Events = null,
-    ulong LargeTransferThreshold = 1_000_000_000
+    ulong LargeTransferThreshold = 1_000_000_000,
+    ulong BalanceMinThreshold = 0,
+    ulong BalanceMaxThreshold = 0
 );
 
 public record PushSubscriptionData(

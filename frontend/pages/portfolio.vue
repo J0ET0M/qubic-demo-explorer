@@ -83,6 +83,14 @@ const thresholdOptions = [
   { label: '100B QU', value: 100_000_000_000 },
 ]
 
+const balanceThresholdOptions = [
+  { label: '100M', value: 100_000_000 },
+  { label: '1B', value: 1_000_000_000 },
+  { label: '10B', value: 10_000_000_000 },
+  { label: '100B', value: 100_000_000_000 },
+  { label: '1T', value: 1_000_000_000_000 },
+]
+
 onMounted(() => fetchPortfolio())
 </script>
 
@@ -184,9 +192,22 @@ onMounted(() => fetchPortfolio())
               />
               Large transfers
             </label>
+            <label class="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                :checked="notifPrefs.events.includes('balance_threshold')"
+                @change="updatePrefs({
+                  events: ($event.target as HTMLInputElement).checked
+                    ? [...notifPrefs.events, 'balance_threshold']
+                    : notifPrefs.events.filter(e => e !== 'balance_threshold')
+                })"
+                class="accent-accent"
+              />
+              Balance threshold alerts
+            </label>
           </div>
 
-          <!-- Threshold -->
+          <!-- Large transfer threshold -->
           <div class="space-y-1">
             <span class="text-xs text-foreground-muted uppercase">Large transfer threshold</span>
             <div class="flex gap-1.5 flex-wrap">
@@ -199,6 +220,41 @@ onMounted(() => fetchPortfolio())
               >
                 {{ opt.label }}
               </button>
+            </div>
+          </div>
+
+          <!-- Balance thresholds -->
+          <div v-if="notifPrefs.events.includes('balance_threshold')" class="space-y-2">
+            <span class="text-xs text-foreground-muted uppercase">Balance thresholds</span>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="space-y-1">
+                <label class="text-xs text-foreground-muted">Notify when below (min)</label>
+                <div class="flex gap-1.5 flex-wrap">
+                  <button
+                    v-for="opt in balanceThresholdOptions"
+                    :key="'min-' + opt.value"
+                    @click="updatePrefs({ balanceMinThreshold: notifPrefs.balanceMinThreshold === opt.value ? 0 : opt.value })"
+                    class="btn btn-sm"
+                    :class="notifPrefs.balanceMinThreshold === opt.value ? 'btn-primary' : 'btn-ghost'"
+                  >
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
+              <div class="space-y-1">
+                <label class="text-xs text-foreground-muted">Notify when above (max)</label>
+                <div class="flex gap-1.5 flex-wrap">
+                  <button
+                    v-for="opt in balanceThresholdOptions"
+                    :key="'max-' + opt.value"
+                    @click="updatePrefs({ balanceMaxThreshold: notifPrefs.balanceMaxThreshold === opt.value ? 0 : opt.value })"
+                    class="btn btn-sm"
+                    :class="notifPrefs.balanceMaxThreshold === opt.value ? 'btn-primary' : 'btn-ghost'"
+                  >
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </template>
