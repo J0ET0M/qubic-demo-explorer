@@ -50,6 +50,70 @@ public record SmartContractUsageDto(
 );
 
 // =====================================================
+// RICH LIST DTOs
+// =====================================================
+
+/// <summary>
+/// Single entry in the rich list
+/// </summary>
+public record RichListEntryDto(
+    int Rank,
+    string Address,
+    string? Label,
+    string? Type,
+    decimal Balance,
+    string BalanceFormatted,
+    decimal PercentageOfSupply
+);
+
+/// <summary>
+/// Rich list response with pagination
+/// </summary>
+public record RichListDto(
+    List<RichListEntryDto> Entries,
+    int Page,
+    int Limit,
+    ulong TotalCount,
+    int TotalPages,
+    decimal TotalBalance,
+    uint SnapshotEpoch
+);
+
+// =====================================================
+// SUPPLY DASHBOARD DTOs
+// =====================================================
+
+/// <summary>
+/// Epoch emission data point
+/// </summary>
+public record EmissionDataPointDto(
+    uint Epoch,
+    decimal TotalEmission,
+    int ComputorCount
+);
+
+/// <summary>
+/// Epoch burn data point
+/// </summary>
+public record BurnDataPointDto(
+    uint Epoch,
+    ulong BurnAmount,
+    ulong BurnCount
+);
+
+/// <summary>
+/// Supply dashboard overview
+/// </summary>
+public record SupplyDashboardDto(
+    decimal CirculatingSupply,
+    ulong TotalBurned,
+    decimal LatestEpochEmission,
+    uint SnapshotEpoch,
+    List<EmissionDataPointDto> EmissionHistory,
+    List<BurnDataPointDto> BurnHistory
+);
+
+// =====================================================
 // GLASSNODE-STYLE ANALYTICS DTOs
 // =====================================================
 
@@ -284,6 +348,21 @@ public record BurnStatsExtendedDto(
 );
 
 // =====================================================
+// EPOCH COUNTDOWN DTOs
+// =====================================================
+
+/// <summary>
+/// Epoch countdown data for displaying time remaining in current epoch
+/// </summary>
+public record EpochCountdownDto(
+    uint CurrentEpoch,
+    DateTime CurrentEpochStart,
+    double AverageEpochDurationMs,
+    DateTime EstimatedEpochEnd,
+    ulong CurrentTick
+);
+
+// =====================================================
 // EPOCH METADATA DTOs
 // =====================================================
 
@@ -510,6 +589,61 @@ public record FlowTrackingUpdateDto(
     byte HopLevel,
     bool IsTerminal,
     bool IsComplete
+);
+
+// =====================================================
+// WHALE ALERT DTOs
+// =====================================================
+
+/// <summary>
+/// Large transfer alert entry
+/// </summary>
+public record WhaleAlertDto(
+    ulong TickNumber,
+    uint Epoch,
+    string TxHash,
+    string SourceAddress,
+    string? SourceLabel,
+    string? SourceType,
+    string DestAddress,
+    string? DestLabel,
+    string? DestType,
+    decimal Amount,
+    string AmountFormatted,
+    DateTime Timestamp
+);
+
+// =====================================================
+// TRANSACTION GRAPH DTOs
+// =====================================================
+
+/// <summary>
+/// Graph node representing an address
+/// </summary>
+public record GraphNodeDto(
+    string Address,
+    string? Label,
+    string? Type,
+    decimal TotalVolume,
+    int Depth
+);
+
+/// <summary>
+/// Graph link between two addresses
+/// </summary>
+public record GraphLinkDto(
+    string Source,
+    string Target,
+    decimal Amount,
+    uint TxCount
+);
+
+/// <summary>
+/// Transaction graph for visualization
+/// </summary>
+public record TransactionGraphDto(
+    List<GraphNodeDto> Nodes,
+    List<GraphLinkDto> Links
 );
 
 /// <summary>

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { Wallet, Copy, Check, ArrowDownLeft, ArrowUpRight, Gift, GitBranch, Filter, X } from 'lucide-vue-next'
+import { Wallet, Copy, Check, ArrowDownLeft, ArrowUpRight, Gift, GitBranch, Filter, X, QrCode, Clock, Download, Star, Network } from 'lucide-vue-next'
 
 const api = useApi()
 const route = useRoute()
 const router = useRouter()
 const { getLabel, fetchLabels } = useAddressLabels()
+const { isInPortfolio, addAddress: addToPortfolio, removeAddress: removeFromPortfolio } = usePortfolio()
 
 const address = route.params.id as string
 
@@ -17,8 +18,8 @@ const logTypes = [
 ]
 
 // Initialize state from URL query params
-const activeTab = ref<'transactions' | 'transfers' | 'rewards' | 'flow'>(
-  (route.query.tab as 'transactions' | 'transfers' | 'rewards' | 'flow') || 'transactions'
+const activeTab = ref<'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph'>(
+  (route.query.tab as 'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph') || 'transactions'
 )
 const direction = ref<string>((route.query.direction as string) || '')
 const page = ref(Number(route.query.page) || 1)
@@ -66,6 +67,29 @@ const { data: addressData, pending: addressLoading } = await useAsyncData(
   `address-${address}`,
   () => api.getAddress(address)
 )
+
+// Activity range (first/last seen)
+const { data: activityRange } = await useAsyncData(
+  `address-activity-range-${address}`,
+  () => api.getAddressActivityRange(address),
+  { lazy: true }
+)
+
+// QR code
+const showQr = ref(false)
+const qrDataUrl = ref<string | null>(null)
+
+const toggleQr = async () => {
+  showQr.value = !showQr.value
+  if (showQr.value && !qrDataUrl.value) {
+    try {
+      const QRCode = await import('qrcode')
+      qrDataUrl.value = await QRCode.toDataURL(address, { width: 200, margin: 2 })
+    } catch (e) {
+      console.error('QR generation failed:', e)
+    }
+  }
+}
 
 // Transaction filters
 const txFilterOptions = computed(() => {
@@ -118,6 +142,14 @@ const { data: flowData, pending: flowLoading, execute: fetchFlow } = await useAs
   { lazy: activeTab.value !== 'flow' }
 )
 
+// Fetch graph data
+const graphHops = ref(1)
+const { data: graphData, pending: graphLoading, execute: fetchGraph } = await useAsyncData(
+  () => `address-graph-${address}-${graphHops.value}`,
+  () => api.getAddressGraph(address, graphHops.value, 20),
+  { lazy: activeTab.value !== 'graph', watch: [graphHops] }
+)
+
 // Lazy-load tab data on first visit
 watch(activeTab, (tab) => {
   if (loadedTabs.value.has(tab)) return
@@ -126,6 +158,7 @@ watch(activeTab, (tab) => {
   else if (tab === 'transfers') fetchTransfers()
   else if (tab === 'rewards') fetchRewards()
   else if (tab === 'flow') fetchFlow()
+  else if (tab === 'graph') fetchGraph()
 })
 
 // Format volume for display
@@ -179,7 +212,7 @@ const copyToClipboard = async (text: string) => {
   }
 }
 
-const switchTab = (tab: 'transactions' | 'transfers' | 'rewards' | 'flow') => {
+const switchTab = (tab: 'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph') => {
   activeTab.value = tab
   page.value = 1
   rewardsPage.value = 1
@@ -265,12 +298,55 @@ const getTypeName = (type: number) => {
                 <Check v-if="copied" class="h-4 w-4 text-success" />
                 <Copy v-else class="h-4 w-4" />
               </button>
+              <button
+                @click="toggleQr"
+                class="btn btn-ghost p-1"
+                :class="{ 'text-accent': showQr }"
+                title="Show QR Code"
+              >
+                <QrCode class="h-4 w-4" />
+              </button>
+              <button
+                @click="isInPortfolio(address) ? removeFromPortfolio(address) : addToPortfolio(address)"
+                class="btn btn-ghost p-1"
+                :class="{ 'text-warning': isInPortfolio(address) }"
+                :title="isInPortfolio(address) ? 'Remove from Portfolio' : 'Add to Portfolio'"
+              >
+                <Star class="h-4 w-4" :class="{ 'fill-current': isInPortfolio(address) }" />
+              </button>
             </span>
+            <div v-if="showQr && qrDataUrl" class="mt-2">
+              <img :src="qrDataUrl" alt="QR Code" class="rounded-lg bg-white p-1" />
+            </div>
           </div>
           <div class="detail-row">
             <span class="detail-label">Balance</span>
             <span class="detail-value font-semibold text-accent text-lg">
               {{ formatAmountFull(addressData.balance) }} QU
+            </span>
+          </div>
+          <div v-if="activityRange?.firstTick" class="detail-row">
+            <span class="detail-label">
+              <Clock class="h-3.5 w-3.5 inline mr-1" />First Seen
+            </span>
+            <span class="detail-value text-sm">
+              Epoch {{ activityRange.firstEpoch }} &middot;
+              Tick <NuxtLink :to="`/ticks/${activityRange.firstTick}`" class="text-accent">{{ activityRange.firstTick?.toLocaleString() }}</NuxtLink>
+              <span v-if="activityRange.firstTimestamp" class="text-foreground-muted ml-1">
+                ({{ formatDate(activityRange.firstTimestamp) }})
+              </span>
+            </span>
+          </div>
+          <div v-if="activityRange?.lastTick" class="detail-row">
+            <span class="detail-label">
+              <Clock class="h-3.5 w-3.5 inline mr-1" />Last Seen
+            </span>
+            <span class="detail-value text-sm">
+              Epoch {{ activityRange.lastEpoch }} &middot;
+              Tick <NuxtLink :to="`/ticks/${activityRange.lastTick}`" class="text-accent">{{ activityRange.lastTick?.toLocaleString() }}</NuxtLink>
+              <span v-if="activityRange.lastTimestamp" class="text-foreground-muted ml-1">
+                ({{ formatDate(activityRange.lastTimestamp) }})
+              </span>
             </span>
           </div>
         </div>
@@ -305,33 +381,50 @@ const getTypeName = (type: number) => {
 
     <!-- Activity Card -->
     <div class="card">
-      <div class="tabs">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div class="tabs">
+          <button
+            :class="{ active: activeTab === 'transactions' }"
+            @click="switchTab('transactions')"
+          >
+            Transactions
+          </button>
+          <button
+            :class="{ active: activeTab === 'transfers' }"
+            @click="switchTab('transfers')"
+          >
+            Transfers
+          </button>
+          <button
+            v-if="isSmartContract"
+            :class="{ active: activeTab === 'rewards' }"
+            @click="switchTab('rewards')"
+          >
+            <Gift class="h-4 w-4 inline mr-1" />
+            Rewards
+          </button>
+          <button
+            :class="{ active: activeTab === 'flow' }"
+            @click="switchTab('flow')"
+          >
+            <GitBranch class="h-4 w-4 inline mr-1" />
+            Flow
+          </button>
+          <button
+            :class="{ active: activeTab === 'graph' }"
+            @click="switchTab('graph')"
+          >
+            <Network class="h-4 w-4 inline mr-1" />
+            Graph
+          </button>
+        </div>
         <button
-          :class="{ active: activeTab === 'transactions' }"
-          @click="switchTab('transactions')"
+          @click="api.exportAddressData(address, 'transfers')"
+          class="btn btn-sm btn-ghost flex items-center gap-1.5"
+          title="Export transfers as CSV"
         >
-          Transactions
-        </button>
-        <button
-          :class="{ active: activeTab === 'transfers' }"
-          @click="switchTab('transfers')"
-        >
-          Transfers
-        </button>
-        <button
-          v-if="isSmartContract"
-          :class="{ active: activeTab === 'rewards' }"
-          @click="switchTab('rewards')"
-        >
-          <Gift class="h-4 w-4 inline mr-1" />
-          Rewards
-        </button>
-        <button
-          :class="{ active: activeTab === 'flow' }"
-          @click="switchTab('flow')"
-        >
-          <GitBranch class="h-4 w-4 inline mr-1" />
-          Flow
+          <Download class="h-4 w-4" />
+          <span class="hidden sm:inline text-xs">CSV</span>
         </button>
       </div>
 
@@ -616,6 +709,42 @@ const getTypeName = (type: number) => {
         </template>
         <div v-else class="text-center py-8 text-foreground-muted">
           No flow data available for this address.
+        </div>
+      </template>
+
+      <!-- Graph tab -->
+      <template v-if="activeTab === 'graph'">
+        <div class="flex items-center gap-3 mb-4">
+          <span class="text-xs text-foreground-muted">Hops:</span>
+          <button
+            v-for="h in [1, 2]"
+            :key="h"
+            class="px-2.5 py-1 text-xs rounded-md font-medium transition-colors"
+            :class="graphHops === h ? 'bg-accent text-white' : 'bg-surface-elevated text-foreground-muted hover:text-foreground'"
+            @click="graphHops = h"
+          >
+            {{ h }}
+          </button>
+        </div>
+        <div v-if="graphLoading" class="loading py-12">Loading graph...</div>
+        <template v-else-if="graphData && graphData.nodes.length > 0">
+          <ClientOnly>
+            <TransactionGraph
+              :nodes="graphData.nodes"
+              :links="graphData.links"
+              :center-address="address"
+              :height="500"
+              @node-click="(addr: string) => navigateTo(`/address/${addr}`)"
+            />
+            <template #fallback>
+              <div class="h-[500px] flex items-center justify-center text-foreground-muted text-sm">
+                Loading graph...
+              </div>
+            </template>
+          </ClientOnly>
+        </template>
+        <div v-else class="text-center py-8 text-foreground-muted">
+          No graph data available for this address.
         </div>
       </template>
     </div>

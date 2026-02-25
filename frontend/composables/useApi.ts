@@ -215,8 +215,59 @@ export const useApi = () => {
     return fetchApi<SmartContractUsageDto[]>(`/api/stats/smart-contract-usage${params}`)
   }
 
+  const getAddressActivityRange = (address: string) =>
+    fetchApi<AddressActivityRangeDto>(`/api/address/${address}/activity-range`)
+
   const getAddressFlow = (address: string, limit = 10) =>
     fetchApi<AddressFlowDto>(`/api/address/${address}/flow?limit=${limit}`)
+
+  // Rich list
+  const getRichList = (page = 1, limit = 50) =>
+    fetchApi<RichListDto>(`/api/stats/rich-list?page=${page}&limit=${limit}`)
+
+  // Supply dashboard
+  const getSupplyDashboard = () =>
+    fetchApi<SupplyDashboardDto>('/api/stats/supply')
+
+  // Whale alerts
+  const getWhaleAlerts = (threshold = 10_000_000_000, limit = 50) =>
+    fetchApi<WhaleAlertDto[]>(`/api/stats/whale-alerts?threshold=${threshold}&limit=${limit}`)
+
+  // CSV export helper (opens download in new tab)
+  const exportAddressData = (address: string, type = 'transfers', epoch?: number) => {
+    const baseUrl = getBaseUrl()
+    const epochParam = epoch ? `&epoch=${epoch}` : ''
+    window.open(`${baseUrl}/api/address/${address}/export?format=csv&type=${type}${epochParam}`, '_blank')
+  }
+
+  // Address batch (for portfolio)
+  const getAddressesBatch = (addresses: string[]) =>
+    fetchApi<AddressDto[]>('/api/address/batch', {
+      method: 'POST',
+      body: JSON.stringify({ addresses }),
+    })
+
+  // Assets
+  const getAssets = () =>
+    fetchApi<AssetSummaryDto[]>('/api/assets')
+
+  const getAsset = (name: string, issuer?: string) => {
+    const issuerParam = issuer ? `?issuer=${issuer}` : ''
+    return fetchApi<AssetDetailDto>(`/api/assets/${name}${issuerParam}`)
+  }
+
+  const getAssetHolders = (name: string, page = 1, limit = 50, issuer?: string) => {
+    const issuerParam = issuer ? `&issuer=${issuer}` : ''
+    return fetchApi<AssetHoldersPageDto>(`/api/assets/${name}/holders?page=${page}&limit=${limit}${issuerParam}`)
+  }
+
+  // Transaction graph
+  const getAddressGraph = (address: string, hops = 1, limit = 20) =>
+    fetchApi<TransactionGraphDto>(`/api/address/${address}/graph?hops=${hops}&limit=${limit}`)
+
+  // Epoch countdown
+  const getEpochCountdown = () =>
+    fetchApi<EpochCountdownDto>('/api/epoch/countdown')
 
   // Glassnode-style Analytics
   const getActiveAddressTrends = (period = 'epoch', limit = 50) =>
@@ -339,6 +390,7 @@ export const useApi = () => {
     getAddress,
     getAddressTransactions,
     getAddressTransfers,
+    getAddressActivityRange,
     search,
     getStats,
     getTxVolumeChart,
@@ -346,6 +398,7 @@ export const useApi = () => {
     getEpoch,
     getEpochTransfersByType,
     getEpochRewards,
+    getEpochCountdown,
     getEpochMeta,
     getAllEpochMeta,
     getCurrentEpochMeta,
@@ -356,6 +409,15 @@ export const useApi = () => {
     getAllKnownAddresses,
     getLabelStats,
     getProcedureName,
+    getRichList,
+    getSupplyDashboard,
+    getWhaleAlerts,
+    exportAddressData,
+    getAddressesBatch,
+    getAddressGraph,
+    getAssets,
+    getAsset,
+    getAssetHolders,
     getTopAddresses,
     getSmartContractUsage,
     getAddressFlow,
@@ -813,6 +875,142 @@ interface BurnStatsExtendedDto {
   allTimeTotalBurned: number
 }
 
+// Rich list
+interface RichListEntryDto {
+  rank: number
+  address: string
+  label: string | null
+  type: string | null
+  balance: number
+  balanceFormatted: string
+  percentageOfSupply: number
+}
+
+interface RichListDto {
+  entries: RichListEntryDto[]
+  page: number
+  limit: number
+  totalCount: number
+  totalPages: number
+  totalBalance: number
+  snapshotEpoch: number
+}
+
+// Supply dashboard
+interface EmissionDataPointDto {
+  epoch: number
+  totalEmission: number
+  computorCount: number
+}
+
+interface BurnDataPointDto {
+  epoch: number
+  burnAmount: number
+  burnCount: number
+}
+
+interface SupplyDashboardDto {
+  circulatingSupply: number
+  totalBurned: number
+  latestEpochEmission: number
+  snapshotEpoch: number
+  emissionHistory: EmissionDataPointDto[]
+  burnHistory: BurnDataPointDto[]
+}
+
+// Whale alerts
+interface WhaleAlertDto {
+  tickNumber: number
+  epoch: number
+  txHash: string
+  sourceAddress: string
+  sourceLabel: string | null
+  sourceType: string | null
+  destAddress: string
+  destLabel: string | null
+  destType: string | null
+  amount: number
+  amountFormatted: string
+  timestamp: string
+}
+
+// Assets
+interface AssetSummaryDto {
+  assetName: string
+  issuerAddress: string
+  issuerLabel: string | null
+  numberOfDecimalPlaces: number
+  totalSupply: number
+  holderCount: number
+}
+
+interface AssetHolderDetailDto {
+  address: string
+  label: string | null
+  type: string | null
+  ownedShares: number
+  possessedShares: number
+}
+
+interface AssetDetailDto {
+  assetName: string
+  issuerAddress: string
+  issuerLabel: string | null
+  numberOfDecimalPlaces: number
+  totalSupply: number
+  holderCount: number
+  snapshotEpoch: number
+  topHolders: AssetHolderDetailDto[]
+}
+
+interface AssetHoldersPageDto {
+  holders: AssetHolderDetailDto[]
+  page: number
+  limit: number
+  totalCount: number
+  totalPages: number
+}
+
+// Transaction graph
+interface GraphNodeDto {
+  address: string
+  label: string | null
+  type: string | null
+  totalVolume: number
+  depth: number
+}
+
+interface GraphLinkDto {
+  source: string
+  target: string
+  amount: number
+  txCount: number
+}
+
+interface TransactionGraphDto {
+  nodes: GraphNodeDto[]
+  links: GraphLinkDto[]
+}
+
+// Address activity range (first/last seen)
+interface AddressActivityRangeDto {
+  firstTick: number | null
+  firstTimestamp: string | null
+  firstEpoch: number | null
+  lastTick: number | null
+  lastTimestamp: string | null
+  lastEpoch: number | null
+}
+
+// Epoch countdown
+interface EpochCountdownDto {
+  currentEpoch: number
+  currentEpochStart: string
+  averageEpochDurationMs: number
+  estimatedEpochEnd: string
+  currentTick: number
+}
+
 // Epoch metadata
 interface EpochMetaDto {
   epoch: number
@@ -998,6 +1196,11 @@ export type {
   HolderDistributionExtendedDto,
   NetworkStatsHistoryDto,
   NetworkStatsExtendedDto,
+  RichListEntryDto,
+  RichListDto,
+  SupplyDashboardDto,
+  AddressActivityRangeDto,
+  EpochCountdownDto,
   EpochMetaDto,
   ComputorDto,
   ComputorListDto,
@@ -1013,4 +1216,12 @@ export type {
   EmissionDetailsDto,
   ComputorEmissionResponseDto,
   ParsedInputData,
+  WhaleAlertDto,
+  AssetSummaryDto,
+  AssetDetailDto,
+  AssetHolderDetailDto,
+  AssetHoldersPageDto,
+  GraphNodeDto,
+  GraphLinkDto,
+  TransactionGraphDto,
 }

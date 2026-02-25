@@ -57,6 +57,49 @@ public class StatsController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("rich-list")]
+    public async Task<IActionResult> GetRichList(
+        [FromQuery] int page = 1,
+        [FromQuery] int limit = 50,
+        CancellationToken ct = default)
+    {
+        if (page < 1) page = 1;
+        if (limit < 1) limit = 1;
+        if (limit > 100) limit = 100;
+
+        var result = await _cache.GetOrSetAsync(
+            $"stats:rich-list:{page}:{limit}",
+            AnalyticsCacheService.RichListTtl,
+            () => _queryService.GetRichListAsync(page, limit, ct));
+        return Ok(result);
+    }
+
+    [HttpGet("supply")]
+    public async Task<IActionResult> GetSupplyDashboard(CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            "stats:supply",
+            AnalyticsCacheService.SupplyDashboardTtl,
+            () => _queryService.GetSupplyDashboardAsync(ct));
+        return Ok(result);
+    }
+
+    [HttpGet("whale-alerts")]
+    public async Task<IActionResult> GetWhaleAlerts(
+        [FromQuery] ulong threshold = 10_000_000_000,
+        [FromQuery] int limit = 50,
+        CancellationToken ct = default)
+    {
+        if (limit < 1) limit = 1;
+        if (limit > 200) limit = 200;
+
+        var result = await _cache.GetOrSetAsync(
+            $"stats:whale-alerts:{threshold}:{limit}",
+            AnalyticsCacheService.WhaleAlertsTtl,
+            () => _queryService.GetWhaleAlertsAsync(threshold, limit, ct));
+        return Ok(result);
+    }
+
     [HttpGet("smart-contract-usage")]
     public async Task<IActionResult> GetSmartContractUsage(
         [FromQuery] uint? epoch = null,

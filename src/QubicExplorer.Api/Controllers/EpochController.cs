@@ -11,18 +11,35 @@ public class EpochController : ControllerBase
     private readonly ClickHouseQueryService _queryService;
     private readonly BobProxyService _bobProxy;
     private readonly ComputorFlowService _flowService;
+    private readonly AnalyticsCacheService _cache;
     private readonly ILogger<EpochController> _logger;
 
     public EpochController(
         ClickHouseQueryService queryService,
         BobProxyService bobProxy,
         ComputorFlowService flowService,
+        AnalyticsCacheService cache,
         ILogger<EpochController> logger)
     {
         _queryService = queryService;
         _bobProxy = bobProxy;
         _flowService = flowService;
+        _cache = cache;
         _logger = logger;
+    }
+
+    [HttpGet("countdown")]
+    public async Task<IActionResult> GetEpochCountdown(CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            "epoch:countdown",
+            AnalyticsCacheService.EpochCountdownTtl,
+            () => _queryService.GetEpochCountdownInfoAsync(ct));
+
+        if (result == null)
+            return NotFound();
+
+        return Ok(result);
     }
 
     [HttpGet]

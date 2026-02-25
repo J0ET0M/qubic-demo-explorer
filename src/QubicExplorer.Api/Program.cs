@@ -38,6 +38,7 @@ builder.Services.AddHttpClient();
 builder.Services.AddSingleton<AnalyticsCacheService>();
 builder.Services.AddSingleton<ClickHouseQueryService>();
 builder.Services.AddSingleton<SpectrumImportService>();
+builder.Services.AddSingleton<UniverseImportService>();
 
 // AddressLabelService - fetches and caches address labels
 builder.Services.AddSingleton<AddressLabelService>(sp =>

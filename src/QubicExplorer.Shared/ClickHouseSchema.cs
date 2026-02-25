@@ -368,6 +368,39 @@ public static class ClickHouseSchema
         ORDER BY epoch
         """,
 
+        // Asset snapshots (from universe file imports)
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.asset_snapshots (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            asset_name String CODEC(LZ4),
+            issuer_address String CODEC(LZ4),
+            holder_address String CODEC(LZ4),
+            record_type String CODEC(LZ4),
+            managing_contract_index UInt16 CODEC(LZ4),
+            issuance_index UInt32 CODEC(LZ4),
+            number_of_shares Int64 CODEC(T64, LZ4),
+            number_of_decimal_places Int8 CODEC(LZ4),
+            imported_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(imported_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, asset_name, issuer_address, holder_address, record_type)
+        """,
+
+        // Universe imports tracking
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.universe_imports (
+            epoch UInt32,
+            tick_number UInt64,
+            issuance_count UInt64,
+            ownership_count UInt64,
+            possession_count UInt64,
+            file_size UInt64,
+            import_duration_ms UInt32,
+            imported_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(imported_at)
+        ORDER BY epoch
+        """,
+
         // Holder distribution history
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.holder_distribution_history (

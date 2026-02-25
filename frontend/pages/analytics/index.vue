@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Users, PieChart, Building2, Pickaxe, Flame, Cpu, TrendingUp, Network } from 'lucide-vue-next'
+import { BarChart3, Users, PieChart, Building2, Pickaxe, Flame, Cpu, TrendingUp, Network, Crown, Coins } from 'lucide-vue-next'
 import OverviewTab from '~/components/analytics/OverviewTab.vue'
 
 useHead({ title: 'Analytics - QLI Explorer' })
@@ -11,6 +11,8 @@ const subPages = [
   { label: 'Miner Flows', description: 'Computor emission analysis and exchange sell pressure', path: '/analytics/miners', icon: Pickaxe },
   { label: 'Burns', description: 'Burn volume history, categories, and cumulative totals', path: '/analytics/burns', icon: Flame },
   { label: 'Smart Contracts', description: 'Contract usage, call counts, and volume', path: '/analytics/contracts', icon: Cpu },
+  { label: 'Rich List', description: 'Top holders ranked by balance from spectrum snapshots', path: '/analytics/richlist', icon: Crown },
+  { label: 'Supply', description: 'Circulating supply, emissions, and burn tracking', path: '/analytics/supply', icon: Coins },
   { label: 'Top Addresses', description: 'Highest volume addresses and activity rankings', path: '/analytics/top', icon: TrendingUp },
   { label: 'Flow Visualization', description: 'Sankey diagrams of miner emission flow paths', path: '/analytics/miner-flow', icon: Network },
 ]

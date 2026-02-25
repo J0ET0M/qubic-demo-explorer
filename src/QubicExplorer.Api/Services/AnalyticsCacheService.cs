@@ -29,6 +29,23 @@ public class AnalyticsCacheService
     // Cache durations - exchange senders
     public static readonly TimeSpan ExchangeSendersTtl = TimeSpan.FromMinutes(10);
 
+    // Cache durations - rich list and supply
+    public static readonly TimeSpan RichListTtl = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan SupplyDashboardTtl = TimeSpan.FromMinutes(10);
+
+    // Cache durations - assets
+    public static readonly TimeSpan AssetListTtl = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan AssetDetailTtl = TimeSpan.FromMinutes(5);
+
+    // Cache durations - whale alerts
+    public static readonly TimeSpan WhaleAlertsTtl = TimeSpan.FromSeconds(30);
+
+    // Cache durations - address activity range
+    public static readonly TimeSpan AddressActivityRangeTtl = TimeSpan.FromMinutes(5);
+
+    // Cache durations - epoch countdown
+    public static readonly TimeSpan EpochCountdownTtl = TimeSpan.FromMinutes(1);
+
     // Cache durations - miner flow (static per epoch)
     public static readonly TimeSpan MinerFlowStatsTtl = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan MinerFlowVisualizationTtl = TimeSpan.FromHours(1);

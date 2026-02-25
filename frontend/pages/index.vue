@@ -178,6 +178,9 @@ const formatVolume = (amount: number | undefined) => {
       </div>
     </div>
 
+    <!-- Epoch Countdown -->
+    <EpochCountdown />
+
     <!-- Charts Section -->
     <div v-if="!epochsLoading && epochs?.length" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- Transactions Chart -->

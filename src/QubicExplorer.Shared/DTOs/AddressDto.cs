@@ -19,3 +19,12 @@ public record AddressBalanceDto(
     uint LatestIncomingTransferTick,
     uint LatestOutgoingTransferTick
 );
+
+public record AddressActivityRangeDto(
+    ulong? FirstTick,
+    DateTime? FirstTimestamp,
+    uint? FirstEpoch,
+    ulong? LastTick,
+    DateTime? LastTimestamp,
+    uint? LastEpoch
+);

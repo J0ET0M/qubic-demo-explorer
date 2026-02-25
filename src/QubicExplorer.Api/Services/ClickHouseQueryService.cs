@@ -1352,6 +1352,364 @@ public class ClickHouseQueryService : IDisposable
     }
 
     // =====================================================
+    // RICH LIST & SUPPLY DASHBOARD
+    // =====================================================
+
+    /// <summary>
+    /// Get rich list (top holders by balance) using spectrum snapshot + transfer deltas
+    /// </summary>
+    public async Task<RichListDto> GetRichListAsync(int page = 1, int limit = 50, CancellationToken ct = default)
+    {
+        var hasSnapshots = await HasBalanceSnapshotsAsync(ct);
+        var offset = (page - 1) * limit;
+
+        // Get snapshot epoch
+        uint snapshotEpoch = 0;
+        if (hasSnapshots)
+        {
+            await using var epochCmd = _connection.CreateCommand();
+            epochCmd.CommandText = "SELECT max(epoch) FROM spectrum_imports";
+            var epochResult = await epochCmd.ExecuteScalarAsync(ct);
+            if (epochResult != null && epochResult != DBNull.Value)
+                snapshotEpoch = Convert.ToUInt32(epochResult);
+        }
+
+        string balanceCte;
+        if (hasSnapshots)
+        {
+            balanceCte = @"
+                WITH
+                latest_snapshot AS (
+                    SELECT max(epoch) as epoch, max(tick_number) as tick_number
+                    FROM spectrum_imports
+                ),
+                snapshot_balances AS (
+                    SELECT address, balance as snapshot_balance
+                    FROM balance_snapshots
+                    WHERE epoch = (SELECT epoch FROM latest_snapshot)
+                ),
+                transfer_deltas AS (
+                    SELECT
+                        address,
+                        sum(incoming) - sum(outgoing) as delta
+                    FROM (
+                        SELECT dest_address as address, toInt64(amount) as incoming, 0 as outgoing
+                        FROM logs
+                        WHERE log_type = 0 AND dest_address != ''
+                          AND tick_number > (SELECT tick_number FROM latest_snapshot)
+                        UNION ALL
+                        SELECT source_address as address, 0 as incoming, toInt64(amount) as outgoing
+                        FROM logs
+                        WHERE log_type = 0 AND source_address != ''
+                          AND tick_number > (SELECT tick_number FROM latest_snapshot)
+                    )
+                    GROUP BY address
+                ),
+                current_balances AS (
+                    SELECT
+                        coalesce(s.address, d.address) as address,
+                        coalesce(s.snapshot_balance, 0) + coalesce(d.delta, 0) as balance
+                    FROM snapshot_balances s
+                    FULL OUTER JOIN transfer_deltas d ON s.address = d.address
+                    HAVING balance > 0
+                )";
+        }
+        else
+        {
+            balanceCte = @"
+                WITH current_balances AS (
+                    SELECT
+                        address,
+                        sum(incoming) - sum(outgoing) as balance
+                    FROM (
+                        SELECT dest_address as address, toInt64(amount) as incoming, 0 as outgoing
+                        FROM logs WHERE log_type = 0 AND dest_address != ''
+                        UNION ALL
+                        SELECT source_address as address, 0 as incoming, toInt64(amount) as outgoing
+                        FROM logs WHERE log_type = 0 AND source_address != ''
+                    )
+                    GROUP BY address
+                    HAVING balance > 0
+                )";
+        }
+
+        // Get total count and balance
+        await using var countCmd = _connection.CreateCommand();
+        countCmd.CommandText = $@"
+            {balanceCte}
+            SELECT count() as total_count, sum(balance) as total_balance
+            FROM current_balances";
+
+        ulong totalCount = 0;
+        decimal totalBalance = 0;
+        await using (var reader = await countCmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct))
+            {
+                totalCount = ToUInt64(reader.GetValue(0));
+                totalBalance = ToDecimal(reader.GetValue(1));
+            }
+        }
+
+        // Get paginated entries
+        await using var listCmd = _connection.CreateCommand();
+        listCmd.CommandText = $@"
+            {balanceCte}
+            SELECT address, balance
+            FROM current_balances
+            ORDER BY balance DESC
+            LIMIT {limit} OFFSET {offset}";
+
+        var entries = new List<RichListEntryDto>();
+        var rank = offset + 1;
+        await using (var reader = await listCmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                var addr = reader.GetString(0);
+                var balance = ToDecimal(reader.GetValue(1));
+                var info = _labelService.GetAddressInfo(addr);
+                var pct = totalBalance > 0 ? balance / totalBalance * 100 : 0;
+
+                entries.Add(new RichListEntryDto(
+                    rank++,
+                    addr,
+                    info?.Label,
+                    info?.Type.ToString().ToLowerInvariant(),
+                    balance,
+                    FormatQubicAmount(balance),
+                    Math.Round(pct, 4)
+                ));
+            }
+        }
+
+        var totalPages = totalCount > 0 ? (int)Math.Ceiling((double)totalCount / limit) : 1;
+
+        return new RichListDto(entries, page, limit, totalCount, totalPages, totalBalance, snapshotEpoch);
+    }
+
+    /// <summary>
+    /// Get supply dashboard data (circulating supply, burns, emissions)
+    /// </summary>
+    public async Task<SupplyDashboardDto> GetSupplyDashboardAsync(CancellationToken ct = default)
+    {
+        // Get circulating supply from latest spectrum import
+        decimal circulatingSupply = 0;
+        uint snapshotEpoch = 0;
+
+        await using var supplyCmd = _connection.CreateCommand();
+        supplyCmd.CommandText = @"
+            SELECT epoch, total_balance
+            FROM spectrum_imports
+            ORDER BY epoch DESC
+            LIMIT 1";
+
+        await using (var reader = await supplyCmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct))
+            {
+                snapshotEpoch = Convert.ToUInt32(reader.GetValue(0));
+                circulatingSupply = Convert.ToDecimal(reader.GetValue(1));
+            }
+        }
+
+        // Get total burned
+        ulong totalBurned = 0;
+        await using var burnCmd = _connection.CreateCommand();
+        burnCmd.CommandText = @"
+            SELECT max(cumulative_burned)
+            FROM burn_stats_history FINAL";
+
+        await using (var reader = await burnCmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct) && !reader.IsDBNull(0))
+                totalBurned = ToUInt64(reader.GetValue(0));
+        }
+
+        // Get emission history (per epoch)
+        await using var emissionCmd = _connection.CreateCommand();
+        emissionCmd.CommandText = @"
+            SELECT epoch, sum(emission_amount) as total_emission, count() as computor_count
+            FROM computor_emissions
+            GROUP BY epoch
+            ORDER BY epoch DESC
+            LIMIT 50";
+
+        var emissionHistory = new List<EmissionDataPointDto>();
+        decimal latestEpochEmission = 0;
+        await using (var reader = await emissionCmd.ExecuteReaderAsync(ct))
+        {
+            var first = true;
+            while (await reader.ReadAsync(ct))
+            {
+                var emission = ToDecimal(reader.GetValue(1));
+                emissionHistory.Add(new EmissionDataPointDto(
+                    Convert.ToUInt32(reader.GetValue(0)),
+                    emission,
+                    Convert.ToInt32(reader.GetValue(2))
+                ));
+                if (first) { latestEpochEmission = emission; first = false; }
+            }
+        }
+
+        // Get burn history (per epoch)
+        await using var burnHistCmd = _connection.CreateCommand();
+        burnHistCmd.CommandText = @"
+            SELECT epoch, burn_amount, burn_count
+            FROM burn_stats_history FINAL
+            ORDER BY epoch DESC
+            LIMIT 50";
+
+        var burnHistory = new List<BurnDataPointDto>();
+        await using (var reader = await burnHistCmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                burnHistory.Add(new BurnDataPointDto(
+                    Convert.ToUInt32(reader.GetValue(0)),
+                    ToUInt64(reader.GetValue(1)),
+                    ToUInt64(reader.GetValue(2))
+                ));
+            }
+        }
+
+        return new SupplyDashboardDto(
+            circulatingSupply,
+            totalBurned,
+            latestEpochEmission,
+            snapshotEpoch,
+            emissionHistory,
+            burnHistory
+        );
+    }
+
+    /// <summary>
+    /// Get address activity range (first seen / last seen)
+    /// </summary>
+    public async Task<AddressActivityRangeDto> GetAddressActivityRangeAsync(
+        string address, CancellationToken ct = default)
+    {
+        // First seen from address_first_seen table (populated by MVs)
+        await using var firstCmd = _connection.CreateCommand();
+        firstCmd.CommandText = $@"
+            SELECT
+                min(first_tick) as first_tick,
+                min(first_timestamp) as first_timestamp,
+                min(first_epoch) as first_epoch
+            FROM address_first_seen FINAL
+            WHERE address = '{address}'";
+
+        ulong? firstTick = null;
+        DateTime? firstTimestamp = null;
+        uint? firstEpoch = null;
+
+        await using (var reader = await firstCmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct) && !reader.IsDBNull(0))
+            {
+                firstTick = ToUInt64(reader.GetValue(0));
+                firstTimestamp = reader.GetDateTime(1);
+                firstEpoch = Convert.ToUInt32(reader.GetValue(2));
+            }
+        }
+
+        // Last seen from logs table
+        await using var lastCmd = _connection.CreateCommand();
+        lastCmd.CommandText = $@"
+            SELECT
+                max(tick_number) as last_tick,
+                max(timestamp) as last_timestamp,
+                max(epoch) as last_epoch
+            FROM logs FINAL
+            WHERE source_address = '{address}' OR dest_address = '{address}'";
+
+        ulong? lastTick = null;
+        DateTime? lastTimestamp = null;
+        uint? lastEpoch = null;
+
+        await using (var reader = await lastCmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct) && !reader.IsDBNull(0))
+            {
+                var tick = ToUInt64(reader.GetValue(0));
+                if (tick > 0)
+                {
+                    lastTick = tick;
+                    lastTimestamp = reader.GetDateTime(1);
+                    lastEpoch = Convert.ToUInt32(reader.GetValue(2));
+                }
+            }
+        }
+
+        return new AddressActivityRangeDto(
+            firstTick, firstTimestamp, firstEpoch,
+            lastTick, lastTimestamp, lastEpoch);
+    }
+
+    /// <summary>
+    /// Get epoch countdown information (current epoch, average duration, estimated end)
+    /// </summary>
+    public async Task<EpochCountdownDto?> GetEpochCountdownInfoAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                epoch,
+                min(timestamp) as start_time,
+                max(timestamp) as end_time,
+                max(tick_number) as max_tick
+            FROM ticks
+            GROUP BY epoch
+            ORDER BY epoch DESC
+            LIMIT 10";
+
+        var epochs = new List<(uint Epoch, DateTime Start, DateTime End, ulong MaxTick)>();
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                epochs.Add((
+                    Convert.ToUInt32(reader.GetValue(0)),
+                    reader.GetDateTime(1),
+                    reader.GetDateTime(2),
+                    ToUInt64(reader.GetValue(3))
+                ));
+            }
+        }
+
+        if (epochs.Count == 0)
+            return null;
+
+        var current = epochs[0]; // Most recent epoch
+
+        // Calculate average epoch duration from completed epochs (skip current)
+        double avgDurationMs;
+        if (epochs.Count >= 3)
+        {
+            var completedDurations = epochs.Skip(1)
+                .Select(e => (e.End - e.Start).TotalMilliseconds)
+                .Where(d => d > 0)
+                .ToList();
+            avgDurationMs = completedDurations.Count > 0
+                ? completedDurations.Average()
+                : TimeSpan.FromDays(7).TotalMilliseconds; // fallback
+        }
+        else
+        {
+            avgDurationMs = TimeSpan.FromDays(7).TotalMilliseconds; // default ~1 week
+        }
+
+        var estimatedEnd = current.Start.AddMilliseconds(avgDurationMs);
+
+        return new EpochCountdownDto(
+            current.Epoch,
+            current.Start,
+            avgDurationMs,
+            estimatedEnd,
+            current.MaxTick);
+    }
+
+    // =====================================================
     // GLASSNODE-STYLE ANALYTICS
     // =====================================================
 
@@ -3492,6 +3850,419 @@ public class ClickHouseQueryService : IDisposable
         }
 
         return result;
+    }
+
+    // =====================================================
+    // TRANSACTION GRAPH
+    // =====================================================
+
+    public async Task<TransactionGraphDto> GetAddressGraphAsync(
+        string address, int hops = 1, int limit = 20, CancellationToken ct = default)
+    {
+        var nodes = new Dictionary<string, GraphNodeDto>();
+        var links = new List<GraphLinkDto>();
+        var addressInfo = _labelService.GetAddressInfo(address);
+
+        // Add center node
+        nodes[address] = new GraphNodeDto(
+            Address: address,
+            Label: addressInfo?.Label,
+            Type: addressInfo?.Type.ToString().ToLowerInvariant(),
+            TotalVolume: 0,
+            Depth: 0
+        );
+
+        // Fetch hop-1 counterparties
+        var hop1Addresses = await FetchCounterpartiesAsync(address, limit, ct);
+        foreach (var (counterparty, amount, txCount) in hop1Addresses)
+        {
+            var info = _labelService.GetAddressInfo(counterparty);
+            nodes.TryAdd(counterparty, new GraphNodeDto(
+                Address: counterparty,
+                Label: info?.Label,
+                Type: info?.Type.ToString().ToLowerInvariant(),
+                TotalVolume: amount,
+                Depth: 1
+            ));
+            links.Add(new GraphLinkDto(address, counterparty, amount, txCount));
+        }
+
+        // Fetch hop-2 if requested
+        if (hops >= 2)
+        {
+            var hop1Addrs = hop1Addresses.Select(h => h.address).Take(10).ToList();
+            foreach (var hop1Addr in hop1Addrs)
+            {
+                var hop2 = await FetchCounterpartiesAsync(hop1Addr, 5, ct);
+                foreach (var (counterparty, amount, txCount) in hop2)
+                {
+                    if (counterparty == address) continue; // Skip center node
+                    var info = _labelService.GetAddressInfo(counterparty);
+                    nodes.TryAdd(counterparty, new GraphNodeDto(
+                        Address: counterparty,
+                        Label: info?.Label,
+                        Type: info?.Type.ToString().ToLowerInvariant(),
+                        TotalVolume: amount,
+                        Depth: 2
+                    ));
+                    links.Add(new GraphLinkDto(hop1Addr, counterparty, amount, txCount));
+                }
+            }
+        }
+
+        return new TransactionGraphDto(nodes.Values.ToList(), links);
+    }
+
+    private async Task<List<(string address, decimal amount, uint txCount)>> FetchCounterpartiesAsync(
+        string address, int limit, CancellationToken ct)
+    {
+        var results = new List<(string, decimal, uint)>();
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT counterparty, sum(amount) AS total_amount, count() AS tx_count
+            FROM (
+                SELECT dest_address AS counterparty, amount
+                FROM logs FINAL
+                WHERE source_address = {{address:String}} AND log_type = 0 AND amount > 0
+                UNION ALL
+                SELECT source_address AS counterparty, amount
+                FROM logs FINAL
+                WHERE dest_address = {{address:String}} AND log_type = 0 AND amount > 0
+            )
+            GROUP BY counterparty
+            ORDER BY total_amount DESC
+            LIMIT {{limit:UInt32}}";
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "address", Value = address });
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "limit", Value = (uint)limit });
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add((
+                reader.GetString(0),
+                ToDecimal(reader.GetValue(1)),
+                Convert.ToUInt32(reader.GetValue(2))
+            ));
+        }
+        return results;
+    }
+
+    // =====================================================
+    // ASSET EXPLORER
+    // =====================================================
+
+    public async Task<List<AssetSummaryDto>> GetAssetsAsync(CancellationToken ct = default)
+    {
+        // Get latest universe epoch
+        await using var epochCmd = _connection.CreateCommand();
+        epochCmd.CommandText = "SELECT max(epoch) FROM universe_imports";
+        var epochResult = await epochCmd.ExecuteScalarAsync(ct);
+        if (epochResult == null || epochResult == DBNull.Value)
+            return new List<AssetSummaryDto>();
+
+        var latestEpoch = Convert.ToUInt32(epochResult);
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT
+                asset_name,
+                issuer_address,
+                number_of_decimal_places,
+                sumIf(number_of_shares, record_type = 'ownership') AS total_supply,
+                countDistinctIf(holder_address, record_type = 'possession' AND number_of_shares > 0) AS holder_count
+            FROM asset_snapshots FINAL
+            WHERE epoch = {{epoch:UInt32}}
+              AND record_type IN ('issuance', 'ownership', 'possession')
+            GROUP BY asset_name, issuer_address, number_of_decimal_places
+            HAVING asset_name != ''
+            ORDER BY total_supply DESC";
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "epoch", Value = latestEpoch });
+
+        var results = new List<AssetSummaryDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var issuerAddress = reader.GetString(1);
+            var issuerInfo = _labelService.GetAddressInfo(issuerAddress);
+
+            results.Add(new AssetSummaryDto(
+                AssetName: reader.GetString(0),
+                IssuerAddress: issuerAddress,
+                IssuerLabel: issuerInfo?.Label,
+                NumberOfDecimalPlaces: Convert.ToInt32(reader.GetValue(2)),
+                TotalSupply: Convert.ToInt64(reader.GetValue(3)),
+                HolderCount: Convert.ToInt32(reader.GetValue(4))
+            ));
+        }
+        return results;
+    }
+
+    public async Task<AssetDetailDto?> GetAssetDetailAsync(string assetName, string? issuer = null, CancellationToken ct = default)
+    {
+        // Get latest universe epoch
+        await using var epochCmd = _connection.CreateCommand();
+        epochCmd.CommandText = "SELECT max(epoch) FROM universe_imports";
+        var epochResult = await epochCmd.ExecuteScalarAsync(ct);
+        if (epochResult == null || epochResult == DBNull.Value)
+            return null;
+
+        var latestEpoch = Convert.ToUInt32(epochResult);
+
+        // Get asset info
+        var issuerFilter = issuer != null ? "AND issuer_address = {issuer:String}" : "";
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT
+                asset_name,
+                issuer_address,
+                number_of_decimal_places,
+                sumIf(number_of_shares, record_type = 'ownership') AS total_supply,
+                countDistinctIf(holder_address, record_type = 'possession' AND number_of_shares > 0) AS holder_count
+            FROM asset_snapshots FINAL
+            WHERE epoch = {{epoch:UInt32}}
+              AND asset_name = {{name:String}}
+              {issuerFilter}
+              AND record_type IN ('issuance', 'ownership', 'possession')
+            GROUP BY asset_name, issuer_address, number_of_decimal_places
+            LIMIT 1";
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "epoch", Value = latestEpoch });
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "name", Value = assetName });
+        if (issuer != null)
+            cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+                { ParameterName = "issuer", Value = issuer });
+
+        string? issuerAddress = null;
+        int numberOfDecimalPlaces = 0;
+        long totalSupply = 0;
+        int holderCount = 0;
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return null;
+
+        issuerAddress = reader.GetString(1);
+        numberOfDecimalPlaces = Convert.ToInt32(reader.GetValue(2));
+        totalSupply = Convert.ToInt64(reader.GetValue(3));
+        holderCount = Convert.ToInt32(reader.GetValue(4));
+
+        var issuerInfo = _labelService.GetAddressInfo(issuerAddress);
+
+        // Get top holders (by possession)
+        var topHolders = await GetAssetHoldersInternalAsync(latestEpoch, assetName, issuerAddress, 1, 20, ct);
+
+        return new AssetDetailDto(
+            AssetName: assetName,
+            IssuerAddress: issuerAddress,
+            IssuerLabel: issuerInfo?.Label,
+            NumberOfDecimalPlaces: numberOfDecimalPlaces,
+            TotalSupply: totalSupply,
+            HolderCount: holderCount,
+            SnapshotEpoch: latestEpoch,
+            TopHolders: topHolders.Holders
+        );
+    }
+
+    public async Task<AssetHoldersPageDto> GetAssetHoldersAsync(
+        string assetName, string? issuer, int page, int limit, CancellationToken ct = default)
+    {
+        // Get latest universe epoch
+        await using var epochCmd = _connection.CreateCommand();
+        epochCmd.CommandText = "SELECT max(epoch) FROM universe_imports";
+        var epochResult = await epochCmd.ExecuteScalarAsync(ct);
+        if (epochResult == null || epochResult == DBNull.Value)
+            return new AssetHoldersPageDto(new List<AssetHolderDetailDto>(), page, limit, 0, 0);
+
+        var latestEpoch = Convert.ToUInt32(epochResult);
+
+        // If no issuer specified, find it
+        if (issuer == null)
+        {
+            await using var issuerCmd = _connection.CreateCommand();
+            issuerCmd.CommandText = $@"
+                SELECT DISTINCT issuer_address FROM asset_snapshots FINAL
+                WHERE epoch = {{epoch:UInt32}} AND asset_name = {{name:String}} AND record_type = 'issuance'
+                LIMIT 1";
+            issuerCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+                { ParameterName = "epoch", Value = latestEpoch });
+            issuerCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+                { ParameterName = "name", Value = assetName });
+            var issuerResult = await issuerCmd.ExecuteScalarAsync(ct);
+            issuer = issuerResult?.ToString() ?? "";
+        }
+
+        return await GetAssetHoldersInternalAsync(latestEpoch, assetName, issuer, page, limit, ct);
+    }
+
+    private async Task<AssetHoldersPageDto> GetAssetHoldersInternalAsync(
+        uint epoch, string assetName, string issuerAddress, int page, int limit, CancellationToken ct)
+    {
+        var offset = (page - 1) * limit;
+
+        // Count total holders
+        await using var countCmd = _connection.CreateCommand();
+        countCmd.CommandText = $@"
+            SELECT count(DISTINCT holder_address)
+            FROM asset_snapshots FINAL
+            WHERE epoch = {{epoch:UInt32}}
+              AND asset_name = {{name:String}}
+              AND issuer_address = {{issuer:String}}
+              AND record_type = 'possession'
+              AND number_of_shares > 0";
+        countCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "epoch", Value = epoch });
+        countCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "name", Value = assetName });
+        countCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "issuer", Value = issuerAddress });
+        var totalCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct));
+
+        // Get holders with both ownership and possession shares
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT
+                holder_address,
+                sumIf(number_of_shares, record_type = 'ownership') AS owned,
+                sumIf(number_of_shares, record_type = 'possession') AS possessed
+            FROM asset_snapshots FINAL
+            WHERE epoch = {{epoch:UInt32}}
+              AND asset_name = {{name:String}}
+              AND issuer_address = {{issuer:String}}
+              AND record_type IN ('ownership', 'possession')
+              AND number_of_shares > 0
+            GROUP BY holder_address
+            HAVING possessed > 0
+            ORDER BY possessed DESC
+            LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}";
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "epoch", Value = epoch });
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "name", Value = assetName });
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "issuer", Value = issuerAddress });
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "limit", Value = (uint)limit });
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "offset", Value = (uint)offset });
+
+        var holders = new List<AssetHolderDetailDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var address = reader.GetString(0);
+            var info = _labelService.GetAddressInfo(address);
+
+            holders.Add(new AssetHolderDetailDto(
+                Address: address,
+                Label: info?.Label,
+                Type: info?.Type.ToString().ToLowerInvariant(),
+                OwnedShares: Convert.ToInt64(reader.GetValue(1)),
+                PossessedShares: Convert.ToInt64(reader.GetValue(2))
+            ));
+        }
+
+        var totalPages = totalCount > 0 ? (int)Math.Ceiling((double)totalCount / limit) : 0;
+        return new AssetHoldersPageDto(holders, page, limit, totalCount, totalPages);
+    }
+
+    // =====================================================
+    // WHALE ALERTS
+    // =====================================================
+
+    public async Task<List<WhaleAlertDto>> GetWhaleAlertsAsync(
+        ulong threshold = 10_000_000_000,
+        int limit = 50,
+        CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT tick_number, epoch, tx_hash, source_address, dest_address, amount, timestamp
+            FROM logs FINAL
+            WHERE log_type = 0
+              AND amount >= {{threshold:UInt64}}
+            ORDER BY tick_number DESC
+            LIMIT {{limit:UInt32}}";
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "threshold", Value = threshold });
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "limit", Value = (uint)limit });
+
+        var results = new List<WhaleAlertDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var sourceAddress = reader.GetString(3);
+            var destAddress = reader.GetString(4);
+            var amount = ToDecimal(reader.GetValue(5));
+            var sourceInfo = _labelService.GetAddressInfo(sourceAddress);
+            var destInfo = _labelService.GetAddressInfo(destAddress);
+
+            results.Add(new WhaleAlertDto(
+                TickNumber: ToUInt64(reader.GetValue(0)),
+                Epoch: Convert.ToUInt32(reader.GetValue(1)),
+                TxHash: reader.GetString(2),
+                SourceAddress: sourceAddress,
+                SourceLabel: sourceInfo?.Label,
+                SourceType: sourceInfo?.Type.ToString().ToLowerInvariant(),
+                DestAddress: destAddress,
+                DestLabel: destInfo?.Label,
+                DestType: destInfo?.Type.ToString().ToLowerInvariant(),
+                Amount: amount,
+                AmountFormatted: FormatQubicAmount(amount),
+                Timestamp: reader.GetDateTime(6)
+            ));
+        }
+        return results;
+    }
+
+    // =====================================================
+    // CSV EXPORT
+    // =====================================================
+
+    public async Task StreamAddressTransfersAsCsvAsync(
+        string address,
+        uint? epoch,
+        StreamWriter writer,
+        CancellationToken ct = default)
+    {
+        await writer.WriteLineAsync("Tick,Epoch,LogType,TxHash,Source,Dest,Amount,AssetName,Timestamp");
+
+        await using var cmd = _connection.CreateCommand();
+        var epochFilter = epoch.HasValue ? "AND epoch = {epoch:UInt32}" : "";
+        cmd.CommandText = $@"
+            SELECT tick_number, epoch, log_type, tx_hash, source_address, dest_address, amount, asset_name, timestamp
+            FROM logs FINAL
+            WHERE (source_address = {{address:String}} OR dest_address = {{address:String}})
+              {epochFilter}
+            ORDER BY tick_number DESC
+            LIMIT 100000";
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "address", Value = address });
+        if (epoch.HasValue)
+            cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+                { ParameterName = "epoch", Value = epoch.Value });
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var tick = ToUInt64(reader.GetValue(0));
+            var ep = Convert.ToUInt32(reader.GetValue(1));
+            var logType = Convert.ToByte(reader.GetValue(2));
+            var txHash = reader.GetString(3);
+            var source = reader.GetString(4);
+            var dest = reader.GetString(5);
+            var amount = ToDecimal(reader.GetValue(6));
+            var assetName = reader.IsDBNull(7) ? "" : reader.GetString(7);
+            var timestamp = reader.GetDateTime(8);
+
+            await writer.WriteLineAsync(
+                $"{tick},{ep},{logType},\"{txHash}\",\"{source}\",\"{dest}\",{amount},\"{assetName}\",{timestamp:yyyy-MM-ddTHH:mm:ssZ}");
+        }
     }
 
     private static string FormatQubicAmount(decimal amount)

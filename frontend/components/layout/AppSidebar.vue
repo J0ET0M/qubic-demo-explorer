@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Blocks, ArrowLeftRight, Send, Calendar, Users, X, BarChart3, ChevronDown, ChevronRight, Pickaxe, Network, PanelLeftClose, PanelLeftOpen, PieChart, Building2, Cpu, TrendingUp, Flame, Radar } from 'lucide-vue-next'
+import { Blocks, ArrowLeftRight, Send, Calendar, Users, X, BarChart3, ChevronDown, ChevronRight, Pickaxe, Network, PanelLeftClose, PanelLeftOpen, PieChart, Building2, Cpu, TrendingUp, Flame, Radar, Crown, Coins, Fish, Gem, Star } from 'lucide-vue-next'
 
 const APP_VERSION = '0.1.0'
 
@@ -31,6 +31,7 @@ const navItems: NavItem[] = [
   { label: 'Ticks', path: '/ticks', icon: Blocks },
   { label: 'Transactions', path: '/transactions', icon: ArrowLeftRight },
   { label: 'Transfers', path: '/transfers', icon: Send },
+  { label: 'Whale Alerts', path: '/whale-alerts', icon: Fish },
   {
     label: 'Analytics',
     path: '/analytics',
@@ -43,11 +44,15 @@ const navItems: NavItem[] = [
       { label: 'Miner Flows', path: '/analytics/miners', icon: Pickaxe },
       { label: 'Burns', path: '/analytics/burns', icon: Flame },
       { label: 'Contracts', path: '/analytics/contracts', icon: Cpu },
+      { label: 'Rich List', path: '/analytics/richlist', icon: Crown },
+      { label: 'Supply', path: '/analytics/supply', icon: Coins },
       { label: 'Top Addresses', path: '/analytics/top', icon: TrendingUp },
       { label: 'Flow Viz', path: '/analytics/miner-flow', icon: Network },
       { label: 'Flow Tracking', path: '/analytics/flow-tracking', icon: Radar },
     ]
   },
+  { label: 'Assets', path: '/assets', icon: Gem },
+  { label: 'Portfolio', path: '/portfolio', icon: Star },
   { label: 'Known Addresses', path: '/addresses', icon: Users },
 ]
 
