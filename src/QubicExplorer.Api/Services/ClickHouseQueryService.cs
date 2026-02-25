@@ -264,16 +264,19 @@ public class ClickHouseQueryService : IDisposable
         string? toAddress = null, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
+
+        // Build PREWHERE for address (uses bloom filter index) and WHERE for other filters
+        var prewhereClause = "";
         var conditions = new List<string>();
 
         if (!string.IsNullOrEmpty(address))
         {
             if (direction == "from")
-                conditions.Add($"from_address = '{address}'");
+                prewhereClause = $"PREWHERE from_address = '{address}'";
             else if (direction == "to")
-                conditions.Add($"to_address = '{address}'");
+                prewhereClause = $"PREWHERE to_address = '{address}'";
             else
-                conditions.Add($"(from_address = '{address}' OR to_address = '{address}')");
+                prewhereClause = $"PREWHERE from_address = '{address}' OR to_address = '{address}'";
         }
 
         if (minAmount.HasValue)
@@ -292,14 +295,19 @@ public class ClickHouseQueryService : IDisposable
             ? "WHERE " + string.Join(" AND ", conditions)
             : "";
 
-        await using var countCmd = _connection.CreateCommand();
-        countCmd.CommandText = $"SELECT count() FROM transactions {whereClause}";
-        var totalCount = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
+        // Run count and data queries in parallel
+        var countTask = Task.Run(async () =>
+        {
+            await using var countCmd = _connection.CreateCommand();
+            countCmd.CommandText = $"SELECT count() FROM transactions {prewhereClause} {whereClause}";
+            return Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
+        }, ct);
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
             SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
             FROM transactions
+            {prewhereClause}
             {whereClause}
             ORDER BY tick_number DESC, hash
             LIMIT {limit} OFFSET {offset}";
@@ -325,6 +333,7 @@ public class ClickHouseQueryService : IDisposable
             ));
         }
 
+        var totalCount = await countTask;
         return new PaginatedResponse<TransactionDto>(
             items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
     }
@@ -471,6 +480,9 @@ public class ClickHouseQueryService : IDisposable
         uint? epoch = null, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
+
+        // Build PREWHERE for address (uses bloom/minmax index) and WHERE for other filters
+        var prewhereClause = "";
         var conditions = new List<string>();
 
         // Epoch filter (enables partition pruning)
@@ -480,11 +492,11 @@ public class ClickHouseQueryService : IDisposable
         if (!string.IsNullOrEmpty(address))
         {
             if (direction == "in")
-                conditions.Add($"dest_address = '{address}'");
+                prewhereClause = $"PREWHERE dest_address = '{address}'";
             else if (direction == "out")
-                conditions.Add($"source_address = '{address}'");
+                prewhereClause = $"PREWHERE source_address = '{address}'";
             else
-                conditions.Add($"(source_address = '{address}' OR dest_address = '{address}')");
+                prewhereClause = $"PREWHERE source_address = '{address}' OR dest_address = '{address}'";
         }
 
         // Single log type filter (for backwards compatibility)
@@ -502,15 +514,20 @@ public class ClickHouseQueryService : IDisposable
             ? "WHERE " + string.Join(" AND ", conditions)
             : "";
 
-        await using var countCmd = _connection.CreateCommand();
-        countCmd.CommandText = $"SELECT count() FROM logs {whereClause}";
-        var totalCount = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
+        // Run count and data queries in parallel
+        var countTask = Task.Run(async () =>
+        {
+            await using var countCmd = _connection.CreateCommand();
+            countCmd.CommandText = $"SELECT count() FROM logs {prewhereClause} {whereClause}";
+            return Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
+        }, ct);
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
             SELECT tick_number, epoch, log_id, log_type, tx_hash, source_address,
                    dest_address, amount, asset_name, timestamp
             FROM logs
+            {prewhereClause}
             {whereClause}
             ORDER BY tick_number DESC, log_id DESC
             LIMIT {limit} OFFSET {offset}";
@@ -535,6 +552,7 @@ public class ClickHouseQueryService : IDisposable
             ));
         }
 
+        var totalCount = await countTask;
         return new PaginatedResponse<TransferDto>(
             items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
     }
