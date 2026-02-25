@@ -130,24 +130,30 @@ const highlightClass = computed(() => {
 .address-display {
   display: inline-flex;
   align-items: center;
+  position: relative;
+  white-space: nowrap;
 }
 
-.address-text {
-  display: inline;
+/* Text stays in flow to maintain size */
+.address-display:hover .address-text {
+  visibility: hidden;
 }
 
+/* Icons overlay on top of the text area */
 .address-actions {
-  display: none;
+  display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-}
-
-.address-display:hover .address-text {
-  display: none;
+  position: absolute;
+  inset: 0;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .address-display:hover .address-actions {
-  display: inline-flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .icon {
@@ -168,10 +174,6 @@ const highlightClass = computed(() => {
 }
 
 /* Compact icons inside table cells */
-:global(td) .address-actions {
-  gap: 0.125rem;
-}
-
 :global(td) .icon {
   width: 0.75rem;
   height: 0.75rem;
