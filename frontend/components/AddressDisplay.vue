@@ -157,8 +157,8 @@ const highlightClass = computed(() => {
 }
 
 .icon {
-  width: 0.875rem;
-  height: 0.875rem;
+  width: 0.75rem;
+  height: 0.75rem;
 }
 
 .action-btn {
@@ -171,16 +171,6 @@ const highlightClass = computed(() => {
 
 .action-btn:hover {
   color: var(--color-foreground);
-}
-
-/* Compact icons inside table cells */
-:global(td) .icon {
-  width: 0.75rem;
-  height: 0.75rem;
-}
-
-:global(td) .action-btn {
-  padding: 0.0625rem;
 }
 
 .address-badge-exchange {
