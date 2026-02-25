@@ -78,6 +78,9 @@ public class AnalyticsSnapshotService : BackgroundService
                         await Task.Delay(100, stoppingToken);
                     }
 
+                    // Compute Qearn stats for completed epochs
+                    await CreateQearnEpochStatsAsync(queryService, currentEpoch.Value, stoppingToken);
+
                     // Process custom flow tracking jobs
                     var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
                     await customFlowService.ProcessPendingJobsAsync(stoppingToken);
@@ -169,6 +172,9 @@ public class AnalyticsSnapshotService : BackgroundService
             {
                 _logger.LogInformation("Created {Count} miner flow snapshots during catch-up", minerFlowSnapshotsCreated);
             }
+
+            // Catch up on Qearn epoch stats
+            await CreateQearnEpochStatsAsync(queryService, currentEpoch.Value, ct);
 
             // Process any pending custom flow tracking jobs
             var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
@@ -440,6 +446,42 @@ public class AnalyticsSnapshotService : BackgroundService
         {
             _logger.LogError(ex, "Failed to save miner flow snapshot for epoch {Epoch}", currentEpoch);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Compute Qearn per-epoch stats for all completed epochs that are missing.
+    /// Qearn was active from epoch 138 onwards. Stats are immutable once an epoch ends.
+    /// </summary>
+    private async Task CreateQearnEpochStatsAsync(
+        AnalyticsQueryService queryService, uint currentEpoch, CancellationToken ct)
+    {
+        const uint qearnInitialEpoch = 138;
+        if (currentEpoch <= qearnInitialEpoch) return;
+
+        try
+        {
+            var persisted = await queryService.GetPersistedQearnEpochsAsync(ct);
+            var created = 0;
+
+            // Process completed epochs (up to current - 1)
+            for (var epoch = qearnInitialEpoch; epoch < currentEpoch && !ct.IsCancellationRequested; epoch++)
+            {
+                if (persisted.Contains(epoch)) continue;
+
+                var saved = await queryService.SaveQearnEpochStatsAsync(epoch, ct);
+                if (saved) created++;
+                await Task.Delay(50, ct);
+            }
+
+            if (created > 0)
+            {
+                _logger.LogInformation("Computed Qearn stats for {Count} epochs", created);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error computing Qearn epoch stats");
         }
     }
 

@@ -2961,6 +2961,82 @@ public class AnalyticsQueryService : IDisposable
     );
 
     // =====================================================
+    // QEARN STATS (PER-EPOCH, IMMUTABLE)
+    // =====================================================
+
+    private const string QearnAddress = "JAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVKHO";
+    private const uint QearnInitialEpoch = 138;
+
+    /// <summary>
+    /// Get epochs that already have persisted Qearn stats.
+    /// </summary>
+    public async Task<HashSet<uint>> GetPersistedQearnEpochsAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT epoch FROM qearn_epoch_stats";
+        var epochs = new HashSet<uint>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            epochs.Add(reader.GetFieldValue<uint>(0));
+        return epochs;
+    }
+
+    /// <summary>
+    /// Compute and save Qearn stats for a single epoch.
+    /// Uses a per-epoch partition scan (no FINAL needed since we filter by epoch partition).
+    /// </summary>
+    public async Task<bool> SaveQearnEpochStatsAsync(uint epoch, CancellationToken ct = default)
+    {
+        await using var queryCmd = _connection.CreateCommand();
+        queryCmd.CommandText = $@"
+            SELECT
+                sumIf(amount, log_type = 8 AND source_address = '{QearnAddress}') AS total_burned,
+                countIf(log_type = 8 AND source_address = '{QearnAddress}') AS burn_count,
+                sumIf(amount, log_type = 0 AND dest_address = '{QearnAddress}') AS total_input,
+                countIf(log_type = 0 AND dest_address = '{QearnAddress}') AS input_count,
+                sumIf(amount, log_type = 0 AND source_address = '{QearnAddress}') AS total_output,
+                countIf(log_type = 0 AND source_address = '{QearnAddress}') AS output_count,
+                uniqIf(source_address, log_type = 0 AND dest_address = '{QearnAddress}') AS unique_lockers,
+                uniqIf(dest_address, log_type = 0 AND source_address = '{QearnAddress}') AS unique_unlockers
+            FROM logs FINAL
+            WHERE epoch = {epoch}
+              AND (source_address = '{QearnAddress}' OR dest_address = '{QearnAddress}')
+              AND log_type IN (0, 8)";
+
+        await using var reader = await queryCmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return false;
+
+        var totalBurned = Convert.ToUInt64(reader.GetValue(0));
+        var burnCount = Convert.ToUInt64(reader.GetValue(1));
+        var totalInput = Convert.ToUInt64(reader.GetValue(2));
+        var inputCount = Convert.ToUInt64(reader.GetValue(3));
+        var totalOutput = Convert.ToUInt64(reader.GetValue(4));
+        var outputCount = Convert.ToUInt64(reader.GetValue(5));
+        var uniqueLockers = Convert.ToUInt64(reader.GetValue(6));
+        var uniqueUnlockers = Convert.ToUInt64(reader.GetValue(7));
+
+        // Skip epochs with no Qearn activity
+        if (totalBurned == 0 && totalInput == 0 && totalOutput == 0)
+            return false;
+
+        await using var insertCmd = _connection.CreateCommand();
+        insertCmd.CommandText = $@"
+            INSERT INTO qearn_epoch_stats
+            (epoch, total_burned, burn_count, total_input, input_count,
+             total_output, output_count, unique_lockers, unique_unlockers)
+            VALUES
+            ({epoch}, {totalBurned}, {burnCount}, {totalInput}, {inputCount},
+             {totalOutput}, {outputCount}, {uniqueLockers}, {uniqueUnlockers})";
+
+        await insertCmd.ExecuteNonQueryAsync(ct);
+        _logger.LogInformation(
+            "Saved Qearn stats for epoch {Epoch}: burned={Burned}, in={Input}, out={Output}",
+            epoch, totalBurned, totalInput, totalOutput);
+        return true;
+    }
+
+    // =====================================================
     // DISPOSE
     // =====================================================
 

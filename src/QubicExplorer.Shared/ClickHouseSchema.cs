@@ -761,6 +761,23 @@ public static class ClickHouseSchema
         ORDER BY (subscription_id, address, tick_number)
         TTL toDateTime(sent_at) + INTERVAL 7 DAY
         """,
+
+        // Qearn per-epoch stats (computed once per epoch, immutable)
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.qearn_epoch_stats (
+            epoch UInt32,
+            total_burned UInt64,
+            burn_count UInt64,
+            total_input UInt64,
+            input_count UInt64,
+            total_output UInt64,
+            output_count UInt64,
+            unique_lockers UInt64,
+            unique_unlockers UInt64,
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        ORDER BY epoch
+        """,
     ];
 
     /// <summary>

@@ -4296,57 +4296,99 @@ public class ClickHouseQueryService : IDisposable
     private const string QearnAddress = "JAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVKHO";
 
     /// <summary>
-    /// Get Qearn stats per epoch: burns, inputs (deposits to Qearn), outputs (payouts from Qearn).
-    /// Yield = outputs - inputs + burns (since payouts include principal + yield).
+    /// Get Qearn stats per epoch.
+    /// Completed epochs: read from pre-computed qearn_epoch_stats (no FINAL).
+    /// Current epoch: computed live from logs FINAL (cached via API cache TTL).
     /// </summary>
     public async Task<QearnStatsDto> GetQearnStatsAsync(CancellationToken ct = default)
     {
-        await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = @"
-            SELECT
-                epoch,
-                sumIf(amount, log_type = 8 AND source_address = {qearn_addr:String}) AS total_burned,
-                countIf(log_type = 8 AND source_address = {qearn_addr:String}) AS burn_count,
-                sumIf(amount, log_type = 0 AND dest_address = {qearn_addr:String}) AS total_input,
-                countIf(log_type = 0 AND dest_address = {qearn_addr:String}) AS input_count,
-                sumIf(amount, log_type = 0 AND source_address = {qearn_addr:String}) AS total_output,
-                countIf(log_type = 0 AND source_address = {qearn_addr:String}) AS output_count,
-                uniqIf(source_address, log_type = 0 AND dest_address = {qearn_addr:String}) AS unique_lockers,
-                uniqIf(dest_address, log_type = 0 AND source_address = {qearn_addr:String}) AS unique_unlockers
-            FROM logs FINAL
-            WHERE (source_address = {qearn_addr:String} OR dest_address = {qearn_addr:String})
-              AND log_type IN (0, 8)
-            GROUP BY epoch
-            ORDER BY epoch";
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "qearn_addr", Value = QearnAddress });
-
         var epochs = new List<QearnEpochStatsDto>();
         ulong allTimeBurned = 0;
         ulong allTimeInput = 0;
         ulong allTimeOutput = 0;
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            var burned = ToUInt64(reader.GetValue(1));
-            var input = ToUInt64(reader.GetValue(3));
-            var output = ToUInt64(reader.GetValue(5));
-            allTimeBurned += burned;
-            allTimeInput += input;
-            allTimeOutput += output;
+        // 1. Read persisted completed epochs
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                epoch, total_burned, burn_count,
+                total_input, input_count,
+                total_output, output_count,
+                unique_lockers, unique_unlockers
+            FROM qearn_epoch_stats
+            ORDER BY epoch";
 
-            epochs.Add(new QearnEpochStatsDto(
-                Epoch: reader.GetFieldValue<uint>(0),
-                TotalBurned: burned,
-                BurnCount: ToUInt64(reader.GetValue(2)),
-                TotalInput: input,
-                InputCount: ToUInt64(reader.GetValue(4)),
-                TotalOutput: output,
-                OutputCount: ToUInt64(reader.GetValue(6)),
-                UniqueLockers: ToUInt64(reader.GetValue(7)),
-                UniqueUnlockers: ToUInt64(reader.GetValue(8))
-            ));
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                var burned = ToUInt64(reader.GetValue(1));
+                var input = ToUInt64(reader.GetValue(3));
+                var output = ToUInt64(reader.GetValue(5));
+                allTimeBurned += burned;
+                allTimeInput += input;
+                allTimeOutput += output;
+
+                epochs.Add(new QearnEpochStatsDto(
+                    Epoch: reader.GetFieldValue<uint>(0),
+                    TotalBurned: burned,
+                    BurnCount: ToUInt64(reader.GetValue(2)),
+                    TotalInput: input,
+                    InputCount: ToUInt64(reader.GetValue(4)),
+                    TotalOutput: output,
+                    OutputCount: ToUInt64(reader.GetValue(6)),
+                    UniqueLockers: ToUInt64(reader.GetValue(7)),
+                    UniqueUnlockers: ToUInt64(reader.GetValue(8))
+                ));
+            }
+        }
+
+        // 2. Compute current epoch live from logs
+        var currentEpoch = await GetCurrentEpochAsync(ct);
+        if (currentEpoch != null)
+        {
+            await using var liveCmd = _connection.CreateCommand();
+            liveCmd.CommandText = $@"
+                SELECT
+                    sumIf(amount, log_type = 8 AND source_address = '{QearnAddress}') AS total_burned,
+                    countIf(log_type = 8 AND source_address = '{QearnAddress}') AS burn_count,
+                    sumIf(amount, log_type = 0 AND dest_address = '{QearnAddress}') AS total_input,
+                    countIf(log_type = 0 AND dest_address = '{QearnAddress}') AS input_count,
+                    sumIf(amount, log_type = 0 AND source_address = '{QearnAddress}') AS total_output,
+                    countIf(log_type = 0 AND source_address = '{QearnAddress}') AS output_count,
+                    uniqIf(source_address, log_type = 0 AND dest_address = '{QearnAddress}') AS unique_lockers,
+                    uniqIf(dest_address, log_type = 0 AND source_address = '{QearnAddress}') AS unique_unlockers
+                FROM logs FINAL
+                WHERE epoch = {currentEpoch.Value}
+                  AND (source_address = '{QearnAddress}' OR dest_address = '{QearnAddress}')
+                  AND log_type IN (0, 8)";
+
+            await using var liveReader = await liveCmd.ExecuteReaderAsync(ct);
+            if (await liveReader.ReadAsync(ct))
+            {
+                var burned = ToUInt64(liveReader.GetValue(0));
+                var input = ToUInt64(liveReader.GetValue(2));
+                var output = ToUInt64(liveReader.GetValue(4));
+
+                if (burned > 0 || input > 0 || output > 0)
+                {
+                    allTimeBurned += burned;
+                    allTimeInput += input;
+                    allTimeOutput += output;
+
+                    epochs.Add(new QearnEpochStatsDto(
+                        Epoch: currentEpoch.Value,
+                        TotalBurned: burned,
+                        BurnCount: ToUInt64(liveReader.GetValue(1)),
+                        TotalInput: input,
+                        InputCount: ToUInt64(liveReader.GetValue(3)),
+                        TotalOutput: output,
+                        OutputCount: ToUInt64(liveReader.GetValue(5)),
+                        UniqueLockers: ToUInt64(liveReader.GetValue(6)),
+                        UniqueUnlockers: ToUInt64(liveReader.GetValue(7))
+                    ));
+                }
+            }
         }
 
         return new QearnStatsDto(epochs, allTimeBurned, allTimeInput, allTimeOutput);
