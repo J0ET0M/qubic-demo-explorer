@@ -192,6 +192,20 @@ onMounted(() => fetchPortfolio())
               />
               Large transfers
             </label>
+            <div v-if="notifPrefs.events.includes('large_transfer')" class="ml-6 space-y-1">
+              <span class="text-xs text-foreground-muted">Minimum amount</span>
+              <div class="flex gap-1.5 flex-wrap">
+                <button
+                  v-for="opt in thresholdOptions"
+                  :key="opt.value"
+                  @click="updatePrefs({ largeTransferThreshold: opt.value })"
+                  class="btn btn-sm"
+                  :class="notifPrefs.largeTransferThreshold === opt.value ? 'btn-primary' : 'btn-ghost'"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
+            </div>
             <label class="flex items-center gap-2 text-sm cursor-pointer">
               <input
                 type="checkbox"
@@ -207,24 +221,8 @@ onMounted(() => fetchPortfolio())
             </label>
           </div>
 
-          <!-- Large transfer threshold -->
-          <div class="space-y-1">
-            <span class="text-xs text-foreground-muted uppercase">Large transfer threshold</span>
-            <div class="flex gap-1.5 flex-wrap">
-              <button
-                v-for="opt in thresholdOptions"
-                :key="opt.value"
-                @click="updatePrefs({ largeTransferThreshold: opt.value })"
-                class="btn btn-sm"
-                :class="notifPrefs.largeTransferThreshold === opt.value ? 'btn-primary' : 'btn-ghost'"
-              >
-                {{ opt.label }}
-              </button>
-            </div>
-          </div>
-
           <!-- Balance thresholds -->
-          <div v-if="notifPrefs.events.includes('balance_threshold')" class="space-y-2">
+          <div v-if="notifPrefs.events.includes('balance_threshold')" class="ml-6 space-y-2">
             <span class="text-xs text-foreground-muted uppercase">Balance thresholds</span>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div class="space-y-1">

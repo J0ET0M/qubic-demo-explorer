@@ -120,7 +120,7 @@ const highlightClass = computed(() => {
 .address-display {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
+  position: relative;
 }
 
 .address-actions {
@@ -128,11 +128,16 @@ const highlightClass = computed(() => {
   align-items: center;
   gap: 0.125rem;
   opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  left: 100%;
+  margin-left: 0.25rem;
   transition: opacity 0.15s;
 }
 
 .address-display:hover .address-actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .action-btn {
