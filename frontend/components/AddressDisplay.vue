@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, Check, Star } from 'lucide-vue-next'
+import { Copy, Check, Star, ExternalLink } from 'lucide-vue-next'
 import type { AddressLabelDto } from '~/composables/useApi'
 
 const props = withDefaults(defineProps<{
@@ -16,6 +16,7 @@ const props = withDefaults(defineProps<{
 
 const { isInPortfolio, addAddress, removeAddress } = usePortfolio()
 const { show: showToast } = useToast()
+const router = useRouter()
 
 const copied = ref(false)
 
@@ -38,6 +39,10 @@ const togglePortfolio = () => {
       action: { label: 'View Portfolio', to: '/portfolio' },
     })
   }
+}
+
+const goToAddress = () => {
+  router.push(`/address/${props.address}`)
 }
 
 const truncateAddress = (address: string, short: boolean) => {
@@ -79,19 +84,17 @@ const highlightClass = computed(() => {
 </script>
 
 <template>
-  <span class="address-display">
+  <span class="address-display" :title="address">
     <NuxtLink
       v-if="link"
       :to="`/address/${address}`"
-      :class="[badgeClass, highlightClass]"
-      :title="address"
+      :class="['address-text', badgeClass, highlightClass]"
     >
       {{ displayText }}
     </NuxtLink>
     <span
       v-else
-      :class="[badgeClass, highlightClass]"
-      :title="address"
+      :class="['address-text', badgeClass, highlightClass]"
     >
       {{ displayText }}
     </span>
@@ -101,8 +104,8 @@ const highlightClass = computed(() => {
         class="action-btn"
         :title="copied ? 'Copied!' : 'Copy address'"
       >
-        <Check v-if="copied" class="h-3 w-3 text-success" />
-        <Copy v-else class="h-3 w-3" />
+        <Check v-if="copied" class="icon text-success" />
+        <Copy v-else class="icon" />
       </button>
       <button
         @click.prevent.stop="togglePortfolio"
@@ -110,7 +113,14 @@ const highlightClass = computed(() => {
         :class="{ 'text-warning': isInPortfolio(address) }"
         :title="isInPortfolio(address) ? 'Remove from portfolio' : 'Add to portfolio'"
       >
-        <Star class="h-3 w-3" :class="{ 'fill-current': isInPortfolio(address) }" />
+        <Star class="icon" :class="{ 'fill-current': isInPortfolio(address) }" />
+      </button>
+      <button
+        @click.prevent.stop="goToAddress"
+        class="action-btn"
+        title="Go to address"
+      >
+        <ExternalLink class="icon" />
       </button>
     </span>
   </span>
@@ -120,24 +130,29 @@ const highlightClass = computed(() => {
 .address-display {
   display: inline-flex;
   align-items: center;
-  position: relative;
+}
+
+.address-text {
+  display: inline;
 }
 
 .address-actions {
-  display: inline-flex;
+  display: none;
   align-items: center;
-  gap: 0.125rem;
-  opacity: 0;
-  pointer-events: none;
-  position: absolute;
-  left: 100%;
-  margin-left: 0.25rem;
-  transition: opacity 0.15s;
+  gap: 0.25rem;
+}
+
+.address-display:hover .address-text {
+  display: none;
 }
 
 .address-display:hover .address-actions {
-  opacity: 1;
-  pointer-events: auto;
+  display: inline-flex;
+}
+
+.icon {
+  width: 0.875rem;
+  height: 0.875rem;
 }
 
 .action-btn {
@@ -154,16 +169,16 @@ const highlightClass = computed(() => {
 
 /* Compact icons inside table cells */
 :global(td) .address-actions {
-  gap: 0;
+  gap: 0.125rem;
+}
+
+:global(td) .icon {
+  width: 0.75rem;
+  height: 0.75rem;
 }
 
 :global(td) .action-btn {
   padding: 0.0625rem;
-}
-
-:global(td) .action-btn :deep(svg) {
-  width: 0.625rem;
-  height: 0.625rem;
 }
 
 .address-badge-exchange {
