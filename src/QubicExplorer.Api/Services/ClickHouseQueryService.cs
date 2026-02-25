@@ -1106,8 +1106,8 @@ public class ClickHouseQueryService : IDisposable
                     s.timestamp,
                     min(e.end_log_id) as end_log_id
                 FROM start_markers s
-                CROSS JOIN end_markers e
-                WHERE e.end_tick_number = s.tick_number AND e.end_log_id > s.start_log_id
+                INNER JOIN end_markers e ON e.end_tick_number = s.tick_number
+                WHERE e.end_log_id > s.start_log_id
                 GROUP BY s.epoch, s.tick_number, s.start_log_id, s.timestamp
             ),
             transfers AS (
@@ -1117,8 +1117,7 @@ public class ClickHouseQueryService : IDisposable
                     source_address,
                     amount
                 FROM logs
-                PREWHERE log_type = 0
-                WHERE source_address = '{contractAddress}'
+                PREWHERE source_address = '{contractAddress}' AND log_type = 0
             ),
             aggregated AS (
                 SELECT
@@ -1605,57 +1604,48 @@ public class ClickHouseQueryService : IDisposable
     public async Task<AddressActivityRangeDto> GetAddressActivityRangeAsync(
         string address, CancellationToken ct = default)
     {
-        // First seen from address_first_seen table (populated by MVs)
-        await using var firstCmd = _connection.CreateCommand();
-        firstCmd.CommandText = $@"
-            SELECT
-                min(first_tick) as first_tick,
-                min(first_timestamp) as first_timestamp,
-                min(first_epoch) as first_epoch
-            FROM address_first_seen FINAL
-            WHERE address = '{address}'";
-
-        ulong? firstTick = null;
-        DateTime? firstTimestamp = null;
-        uint? firstEpoch = null;
-
-        await using (var reader = await firstCmd.ExecuteReaderAsync(ct))
+        // Run first-seen and last-seen queries in parallel
+        var firstTask = Task.Run(async () =>
         {
+            await using var firstCmd = _connection.CreateCommand();
+            firstCmd.CommandText = $@"
+                SELECT
+                    min(first_tick) as first_tick,
+                    min(first_timestamp) as first_timestamp,
+                    min(first_epoch) as first_epoch
+                FROM address_first_seen FINAL
+                WHERE address = '{address}'";
+
+            await using var reader = await firstCmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct) && !reader.IsDBNull(0))
-            {
-                firstTick = ToUInt64(reader.GetValue(0));
-                firstTimestamp = reader.GetDateTime(1);
-                firstEpoch = Convert.ToUInt32(reader.GetValue(2));
-            }
-        }
+                return (ToUInt64(reader.GetValue(0)), (DateTime?)reader.GetDateTime(1), (uint?)Convert.ToUInt32(reader.GetValue(2)));
+            return ((ulong?)null, (DateTime?)null, (uint?)null);
+        }, ct);
 
-        // Last seen from logs table
-        await using var lastCmd = _connection.CreateCommand();
-        lastCmd.CommandText = $@"
-            SELECT
-                max(tick_number) as last_tick,
-                max(timestamp) as last_timestamp,
-                max(epoch) as last_epoch
-            FROM logs FINAL
-            WHERE source_address = '{address}' OR dest_address = '{address}'";
-
-        ulong? lastTick = null;
-        DateTime? lastTimestamp = null;
-        uint? lastEpoch = null;
-
-        await using (var reader = await lastCmd.ExecuteReaderAsync(ct))
+        var lastTask = Task.Run(async () =>
         {
+            await using var lastCmd = _connection.CreateCommand();
+            lastCmd.CommandText = $@"
+                SELECT
+                    max(tick_number) as last_tick,
+                    max(timestamp) as last_timestamp,
+                    max(epoch) as last_epoch
+                FROM logs
+                PREWHERE source_address = '{address}' OR dest_address = '{address}'";
+
+            await using var reader = await lastCmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct) && !reader.IsDBNull(0))
             {
                 var tick = ToUInt64(reader.GetValue(0));
                 if (tick > 0)
-                {
-                    lastTick = tick;
-                    lastTimestamp = reader.GetDateTime(1);
-                    lastEpoch = Convert.ToUInt32(reader.GetValue(2));
-                }
+                    return (tick, (DateTime?)reader.GetDateTime(1), (uint?)Convert.ToUInt32(reader.GetValue(2)));
             }
-        }
+            return ((ulong?)null, (DateTime?)null, (uint?)null);
+        }, ct);
+
+        await Task.WhenAll(firstTask, lastTask);
+        var (firstTick, firstTimestamp, firstEpoch) = firstTask.Result;
+        var (lastTick, lastTimestamp, lastEpoch) = lastTask.Result;
 
         return new AddressActivityRangeDto(
             firstTick, firstTimestamp, firstEpoch,
@@ -3927,13 +3917,19 @@ public class ClickHouseQueryService : IDisposable
             links.Add(new GraphLinkDto(address, counterparty, amount, txCount));
         }
 
-        // Fetch hop-2 if requested
+        // Fetch hop-2 if requested — parallelize all hop-2 queries
         if (hops >= 2)
         {
             var hop1Addrs = hop1Addresses.Select(h => h.address).Take(10).ToList();
-            foreach (var hop1Addr in hop1Addrs)
+            var hop2Tasks = hop1Addrs.Select(async hop1Addr =>
             {
                 var hop2 = await FetchCounterpartiesAsync(hop1Addr, 5, ct);
+                return (hop1Addr, hop2);
+            });
+            var hop2Results = await Task.WhenAll(hop2Tasks);
+
+            foreach (var (hop1Addr, hop2) in hop2Results)
+            {
                 foreach (var (counterparty, amount, txCount) in hop2)
                 {
                     if (counterparty == address) continue; // Skip center node
@@ -3963,12 +3959,14 @@ public class ClickHouseQueryService : IDisposable
             SELECT counterparty, sum(amount) AS total_amount, count() AS tx_count
             FROM (
                 SELECT dest_address AS counterparty, amount
-                FROM logs FINAL
-                WHERE source_address = {{address:String}} AND log_type = 0 AND amount > 0
+                FROM logs
+                PREWHERE source_address = {{address:String}} AND log_type = 0
+                WHERE amount > 0
                 UNION ALL
                 SELECT source_address AS counterparty, amount
-                FROM logs FINAL
-                WHERE dest_address = {{address:String}} AND log_type = 0 AND amount > 0
+                FROM logs
+                PREWHERE dest_address = {{address:String}} AND log_type = 0
+                WHERE amount > 0
             )
             GROUP BY counterparty
             ORDER BY total_amount DESC

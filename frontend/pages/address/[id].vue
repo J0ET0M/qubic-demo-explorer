@@ -117,11 +117,13 @@ const txFilterOptions = computed(() => {
 // Track which tabs have been loaded
 const loadedTabs = ref<Set<string>>(new Set([activeTab.value]))
 
+// Data fetching per tab — only the active tab fetches immediately,
+// others use immediate: false so they don't fire until execute() is called.
 const { data: transactions, pending: txLoading, execute: fetchTransactions } = await useAsyncData(
   () => `address-tx-${address}-${page.value}-${minAmount.value}-${txExecuted.value}`,
   () => api.getAddressTransactions(address, page.value, limit,
     Object.keys(txFilterOptions.value).length > 0 ? txFilterOptions.value : undefined),
-  { lazy: activeTab.value !== 'transactions', watch: [page, minAmount, txExecuted] }
+  { immediate: activeTab.value === 'transactions' }
 )
 
 // Transfer filters
@@ -137,24 +139,23 @@ const { data: transfers, pending: transfersLoading, execute: fetchTransfers } = 
   () => `address-transfers-${address}-${page.value}-${direction.value}-${transferType.value}-${minAmount.value}`,
   () => api.getAddressTransfers(address, page.value, limit,
     Object.keys(transferFilterOptions.value).length > 0 ? transferFilterOptions.value : undefined),
-  { lazy: activeTab.value !== 'transfers', watch: [page, direction, transferType, minAmount] }
+  { immediate: activeTab.value === 'transfers' }
 )
 
 // Rewards pagination (separate from tx/transfers)
 const rewardsPage = ref(1)
 
-// Fetch rewards only for smart contract addresses
 const { data: rewards, pending: rewardsLoading, execute: fetchRewards } = await useAsyncData(
   () => `address-rewards-${address}-${rewardsPage.value}`,
   () => api.getAddressRewards(address, rewardsPage.value, limit),
-  { lazy: activeTab.value !== 'rewards', watch: [rewardsPage] }
+  { immediate: activeTab.value === 'rewards' }
 )
 
 // Fetch flow data (top counterparties)
 const { data: flowData, pending: flowLoading, execute: fetchFlow } = await useAsyncData(
   `address-flow-${address}`,
   () => api.getAddressFlow(address, 10),
-  { lazy: activeTab.value !== 'flow' }
+  { immediate: activeTab.value === 'flow' }
 )
 
 // Fetch graph data
@@ -162,7 +163,7 @@ const graphHops = ref(1)
 const { data: graphData, pending: graphLoading, execute: fetchGraph } = await useAsyncData(
   () => `address-graph-${address}-${graphHops.value}`,
   () => api.getAddressGraph(address, graphHops.value, 20),
-  { lazy: activeTab.value !== 'graph', watch: [graphHops] }
+  { immediate: activeTab.value === 'graph' }
 )
 
 // Lazy-load tab data on first visit
@@ -174,6 +175,20 @@ watch(activeTab, (tab) => {
   else if (tab === 'rewards') fetchRewards()
   else if (tab === 'flow') fetchFlow()
   else if (tab === 'graph') fetchGraph()
+})
+
+// Watch filter/pagination changes — only refetch the currently active tab
+watch([page, minAmount, txExecuted], () => {
+  if (activeTab.value === 'transactions' && loadedTabs.value.has('transactions')) fetchTransactions()
+})
+watch([page, direction, transferType, minAmount], () => {
+  if (activeTab.value === 'transfers' && loadedTabs.value.has('transfers')) fetchTransfers()
+})
+watch(rewardsPage, () => {
+  if (activeTab.value === 'rewards' && loadedTabs.value.has('rewards')) fetchRewards()
+})
+watch(graphHops, () => {
+  if (activeTab.value === 'graph' && loadedTabs.value.has('graph')) fetchGraph()
 })
 
 const copyToClipboard = async (text: string) => {

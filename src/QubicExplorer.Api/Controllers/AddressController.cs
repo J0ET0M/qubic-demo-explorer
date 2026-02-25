@@ -89,7 +89,10 @@ public class AddressController : ControllerBase
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetContractRewardsAsync(address, page, limit, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"address:rewards:{address}:{page}:{limit}",
+            AnalyticsCacheService.AddressSummaryTtl,
+            () => _queryService.GetContractRewardsAsync(address, page, limit, ct));
         return Ok(result);
     }
 
@@ -155,7 +158,10 @@ public class AddressController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 50) limit = 50;
 
-        var result = await _queryService.GetAddressGraphAsync(address, hops, limit, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"address:graph:{address}:{hops}:{limit}",
+            AnalyticsCacheService.AddressSummaryTtl,
+            () => _queryService.GetAddressGraphAsync(address, hops, limit, ct));
         return Ok(result);
     }
 
