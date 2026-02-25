@@ -10,6 +10,8 @@ const { show: showToast } = useToast()
 const {
   prefs: notifPrefs,
   permissionState,
+  pushSupported,
+  subscriptionActive,
   enable: enableNotifications,
   disable: disableNotifications,
   updatePrefs,
@@ -81,13 +83,6 @@ const thresholdOptions = [
   { label: '100B QU', value: 100_000_000_000 },
 ]
 
-const pollOptions = [
-  { label: '30s', value: 30 },
-  { label: '1 min', value: 60 },
-  { label: '5 min', value: 300 },
-  { label: '15 min', value: 900 },
-]
-
 onMounted(() => fetchPortfolio())
 </script>
 
@@ -112,14 +107,24 @@ onMounted(() => fetchPortfolio())
     <!-- Notification Settings -->
     <div v-if="showNotifSettings" class="card space-y-4">
       <h2 class="text-sm font-medium">Push Notifications</h2>
+      <p class="text-xs text-foreground-muted">
+        Receive browser notifications for portfolio address activity, even when this tab is closed.
+      </p>
 
-      <div v-if="permissionState === 'denied'" class="text-sm text-destructive">
+      <div v-if="!pushSupported" class="text-sm text-foreground-muted">
+        Push notifications are not supported in this browser.
+      </div>
+
+      <div v-else-if="permissionState === 'denied'" class="text-sm text-destructive">
         Browser notifications are blocked. Please enable them in your browser settings.
       </div>
 
       <template v-else>
         <div class="flex items-center justify-between">
-          <span class="text-sm">Enable notifications for portfolio addresses</span>
+          <div>
+            <span class="text-sm">Enable push notifications</span>
+            <span v-if="subscriptionActive" class="ml-2 text-xs text-success">Active</span>
+          </div>
           <button
             v-if="!notifPrefs.enabled"
             @click="enableNotifications"
@@ -177,7 +182,7 @@ onMounted(() => fetchPortfolio())
                 })"
                 class="accent-accent"
               />
-              Large transfers (in-app toast)
+              Large transfers
             </label>
           </div>
 
@@ -191,22 +196,6 @@ onMounted(() => fetchPortfolio())
                 @click="updatePrefs({ largeTransferThreshold: opt.value })"
                 class="btn btn-sm"
                 :class="notifPrefs.largeTransferThreshold === opt.value ? 'btn-primary' : 'btn-ghost'"
-              >
-                {{ opt.label }}
-              </button>
-            </div>
-          </div>
-
-          <!-- Poll interval -->
-          <div class="space-y-1">
-            <span class="text-xs text-foreground-muted uppercase">Check interval</span>
-            <div class="flex gap-1.5 flex-wrap">
-              <button
-                v-for="opt in pollOptions"
-                :key="opt.value"
-                @click="updatePrefs({ pollIntervalSec: opt.value })"
-                class="btn btn-sm"
-                :class="notifPrefs.pollIntervalSec === opt.value ? 'btn-primary' : 'btn-ghost'"
               >
                 {{ opt.label }}
               </button>

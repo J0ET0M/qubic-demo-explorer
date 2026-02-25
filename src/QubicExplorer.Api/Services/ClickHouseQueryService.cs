@@ -1509,7 +1509,7 @@ public class ClickHouseQueryService : IDisposable
             if (await reader.ReadAsync(ct))
             {
                 snapshotEpoch = Convert.ToUInt32(reader.GetValue(0));
-                circulatingSupply = Convert.ToDecimal(reader.GetValue(1));
+                circulatingSupply = ToDecimal(reader.GetValue(1));
             }
         }
 

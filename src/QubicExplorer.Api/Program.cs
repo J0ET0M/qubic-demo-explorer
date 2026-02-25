@@ -27,6 +27,7 @@ if (!string.IsNullOrEmpty(seqUrl))
 builder.Services.Configure<ClickHouseOptions>(builder.Configuration.GetSection(ClickHouseOptions.SectionName));
 builder.Services.Configure<BobOptions>(builder.Configuration.GetSection(BobOptions.SectionName));
 builder.Services.Configure<AddressLabelOptions>(builder.Configuration.GetSection(AddressLabelOptions.SectionName));
+builder.Services.Configure<VapidOptions>(builder.Configuration.GetSection(VapidOptions.SectionName));
 
 // Add memory cache for BobProxyService
 builder.Services.AddMemoryCache();
@@ -39,6 +40,7 @@ builder.Services.AddSingleton<AnalyticsCacheService>();
 builder.Services.AddSingleton<ClickHouseQueryService>();
 builder.Services.AddSingleton<SpectrumImportService>();
 builder.Services.AddSingleton<UniverseImportService>();
+builder.Services.AddSingleton<WebPushService>();
 
 // AddressLabelService - fetches and caches address labels
 builder.Services.AddSingleton<AddressLabelService>(sp =>
@@ -70,6 +72,7 @@ builder.Services.AddHostedService<LiveTickService>();
 builder.Services.AddHostedService<EpochMetaSyncService>();
 builder.Services.AddHostedService<EpochTransitionService>();
 builder.Services.AddHostedService<AutoImportService>();
+builder.Services.AddHostedService<AddressMonitorService>();
 
 // Add controllers
 builder.Services.AddControllers();

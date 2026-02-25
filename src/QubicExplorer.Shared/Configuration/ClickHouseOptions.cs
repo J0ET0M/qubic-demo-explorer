@@ -49,3 +49,11 @@ public class AddressLabelOptions
     public const string SectionName = "AddressLabels";
     public string BundleUrl { get; set; } = "https://static.qubic.org/v1/general/data/bundle.min.json";
 }
+
+public class VapidOptions
+{
+    public const string SectionName = "Vapid";
+    public string Subject { get; set; } = "mailto:admin@qubic.li";
+    public string PublicKey { get; set; } = "";
+    public string PrivateKey { get; set; } = "";
+}

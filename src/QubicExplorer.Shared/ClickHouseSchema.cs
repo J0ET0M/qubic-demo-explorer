@@ -723,6 +723,39 @@ public static class ClickHouseSchema
         """,
 
         $"ALTER TABLE {DatabaseName}.custom_flow_state ADD INDEX IF NOT EXISTS idx_cfs_pending (job_id, is_complete) TYPE set(2) GRANULARITY 4",
+
+        // Push notification subscriptions
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.push_subscriptions (
+            subscription_id String CODEC(LZ4HC),
+            endpoint String CODEC(LZ4HC),
+            p256dh String CODEC(LZ4HC),
+            auth String CODEC(LZ4HC),
+            addresses Array(String),
+            events Array(String),
+            large_transfer_threshold UInt64 DEFAULT 1000000000,
+            created_at DateTime64(3) DEFAULT now64(3),
+            updated_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(updated_at)
+        ORDER BY subscription_id
+        TTL toDateTime(updated_at) + INTERVAL 90 DAY
+        """,
+
+        $"ALTER TABLE {DatabaseName}.push_subscriptions ADD INDEX IF NOT EXISTS idx_push_endpoint endpoint TYPE bloom_filter GRANULARITY 4",
+
+        // Notification log (tracks what was sent to avoid duplicates)
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.notification_log (
+            subscription_id String CODEC(LZ4HC),
+            address String CODEC(LZ4HC),
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            event_type String CODEC(LZ4),
+            amount UInt64 CODEC(T64, LZ4),
+            sent_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = MergeTree
+        ORDER BY (subscription_id, address, tick_number)
+        TTL toDateTime(sent_at) + INTERVAL 7 DAY
+        """,
     ];
 
     /// <summary>

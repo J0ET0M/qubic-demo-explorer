@@ -6,21 +6,20 @@ export interface NotificationPrefs {
   enabled: boolean
   events: NotificationEventType[]
   largeTransferThreshold: number // in QU
-  pollIntervalSec: number
 }
 
 const defaultPrefs: NotificationPrefs = {
   enabled: false,
   events: ['incoming', 'outgoing', 'large_transfer'],
   largeTransferThreshold: 1_000_000_000, // 1B QU
-  pollIntervalSec: 60,
 }
 
 const prefs = ref<NotificationPrefs>({ ...defaultPrefs })
 const permissionState = ref<NotificationPermission>('default')
-const lastCheckedTick = ref<Record<string, number>>({})
-let pollTimer: ReturnType<typeof setInterval> | null = null
+const pushSupported = ref(false)
+const subscriptionActive = ref(false)
 let initialized = false
+let swRegistration: ServiceWorkerRegistration | null = null
 
 function loadPrefs() {
   if (typeof window === 'undefined') return
@@ -35,6 +34,7 @@ function loadPrefs() {
   if ('Notification' in window) {
     permissionState.value = Notification.permission
   }
+  pushSupported.value = 'serviceWorker' in navigator && 'PushManager' in window
 }
 
 function savePrefs() {
@@ -42,42 +42,102 @@ function savePrefs() {
   localStorage.setItem(PREFS_KEY, JSON.stringify(prefs.value))
 }
 
-async function requestPermission(): Promise<boolean> {
-  if (typeof window === 'undefined' || !('Notification' in window)) return false
-  const result = await Notification.requestPermission()
-  permissionState.value = result
-  return result === 'granted'
-}
-
-function showBrowserNotification(title: string, body: string, url?: string) {
-  if (typeof window === 'undefined' || !('Notification' in window)) return
-  if (Notification.permission !== 'granted') return
-
-  const notification = new Notification(title, {
-    body,
-    icon: '/favicon.ico',
-    tag: 'qli-explorer',
-  })
-
-  if (url) {
-    notification.onclick = () => {
-      window.focus()
-      window.location.href = url
-      notification.close()
-    }
+async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+  if (!('serviceWorker' in navigator)) return null
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js')
+    swRegistration = reg
+    return reg
+  } catch (err) {
+    console.error('SW registration failed:', err)
+    return null
   }
 }
 
-const formatAmount = (amount: number) => {
-  if (amount >= 1e12) return (amount / 1e12).toFixed(1) + 'T'
-  if (amount >= 1e9) return (amount / 1e9).toFixed(1) + 'B'
-  if (amount >= 1e6) return (amount / 1e6).toFixed(1) + 'M'
-  if (amount >= 1e3) return (amount / 1e3).toFixed(1) + 'K'
-  return amount.toLocaleString()
+async function getVapidKey(): Promise<string | null> {
+  try {
+    const config = useRuntimeConfig()
+    const baseUrl = config.public.apiBase || '/api'
+    const res = await fetch(`${baseUrl}/notifications/vapid-key`)
+    if (!res.ok) return null
+    const data = await res.json()
+    return data.publicKey || null
+  } catch {
+    return null
+  }
 }
 
-const truncateAddr = (addr: string) =>
-  addr.length > 16 ? addr.slice(0, 6) + '...' + addr.slice(-6) : addr
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const raw = atob(base64)
+  const arr = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) {
+    arr[i] = raw.charCodeAt(i)
+  }
+  return arr
+}
+
+async function subscribeToPush(
+  reg: ServiceWorkerRegistration,
+  vapidKey: string
+): Promise<PushSubscription | null> {
+  try {
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidKey),
+    })
+    return sub
+  } catch (err) {
+    console.error('Push subscription failed:', err)
+    return null
+  }
+}
+
+async function sendSubscriptionToServer(
+  sub: PushSubscription,
+  addresses: string[],
+  events: string[],
+  threshold: number
+) {
+  try {
+    const config = useRuntimeConfig()
+    const baseUrl = config.public.apiBase || '/api'
+    const subJson = sub.toJSON()
+    await fetch(`${baseUrl}/notifications/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subscription: {
+          endpoint: sub.endpoint,
+          keys: {
+            p256dh: subJson.keys?.p256dh || '',
+            auth: subJson.keys?.auth || '',
+          },
+        },
+        addresses,
+        events,
+        largeTransferThreshold: threshold,
+      }),
+    })
+  } catch (err) {
+    console.error('Failed to send subscription to server:', err)
+  }
+}
+
+async function removeSubscriptionFromServer(endpoint: string) {
+  try {
+    const config = useRuntimeConfig()
+    const baseUrl = config.public.apiBase || '/api'
+    await fetch(`${baseUrl}/notifications/unsubscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint }),
+    })
+  } catch {
+    // Ignore errors during unsubscribe
+  }
+}
 
 export const useNotifications = () => {
   if (!initialized) {
@@ -87,124 +147,135 @@ export const useNotifications = () => {
 
   const { addresses } = usePortfolio()
   const { show: showToast } = useToast()
-  const api = useApi()
+  const router = useRouter()
 
-  const updatePrefs = (update: Partial<NotificationPrefs>) => {
+  const updatePrefs = async (update: Partial<NotificationPrefs>) => {
     prefs.value = { ...prefs.value, ...update }
     savePrefs()
-  }
 
-  const enable = async () => {
-    const granted = await requestPermission()
-    if (granted) {
-      updatePrefs({ enabled: true })
-      startPolling()
-      showToast('Notifications enabled', { type: 'success' })
-    } else {
-      showToast('Notification permission denied', { type: 'error' })
-    }
-  }
-
-  const disable = () => {
-    updatePrefs({ enabled: false })
-    stopPolling()
-  }
-
-  const checkAddressesForUpdates = async () => {
-    if (!prefs.value.enabled || addresses.value.length === 0) return
-
-    for (const address of addresses.value) {
-      try {
-        // Fetch latest transfers for this address
-        const data = await api.getAddressTransfers(address, 1, 5)
-        if (!data?.transfers?.length) continue
-
-        const lastTick = lastCheckedTick.value[address] || 0
-        const newTransfers = data.transfers.filter(
-          (t: any) => t.tickNumber > lastTick
+    // Re-sync subscription with server when prefs change
+    if (prefs.value.enabled && swRegistration) {
+      const existingSub = await swRegistration.pushManager.getSubscription()
+      if (existingSub && addresses.value.length > 0) {
+        await sendSubscriptionToServer(
+          existingSub,
+          [...addresses.value],
+          prefs.value.events,
+          prefs.value.largeTransferThreshold
         )
-
-        if (newTransfers.length === 0) continue
-
-        // Update last checked tick
-        lastCheckedTick.value[address] = Math.max(
-          ...data.transfers.map((t: any) => t.tickNumber)
-        )
-
-        // Don't notify on first check (just set baseline)
-        if (lastTick === 0) continue
-
-        for (const transfer of newTransfers) {
-          const isIncoming = transfer.destAddress === address
-          const isOutgoing = transfer.sourceAddress === address
-          const isLarge = transfer.amount >= prefs.value.largeTransferThreshold
-
-          if (isLarge && prefs.value.events.includes('large_transfer')) {
-            showBrowserNotification(
-              'Large Transfer Detected',
-              `${formatAmount(transfer.amount)} QU ${isIncoming ? 'received by' : 'sent from'} ${truncateAddr(address)}`,
-              `/address/${address}`
-            )
-            showToast(
-              `Large transfer: ${formatAmount(transfer.amount)} QU`,
-              {
-                type: 'info',
-                action: { label: 'View Address', to: `/address/${address}` },
-              }
-            )
-          } else if (isIncoming && prefs.value.events.includes('incoming')) {
-            showBrowserNotification(
-              'Incoming Transfer',
-              `${formatAmount(transfer.amount)} QU received by ${truncateAddr(address)}`,
-              `/address/${address}`
-            )
-          } else if (isOutgoing && prefs.value.events.includes('outgoing')) {
-            showBrowserNotification(
-              'Outgoing Transfer',
-              `${formatAmount(transfer.amount)} QU sent from ${truncateAddr(address)}`,
-              `/address/${address}`
-            )
-          }
-        }
-      } catch {
-        // Silently ignore errors during polling
       }
     }
   }
 
-  const startPolling = () => {
-    if (pollTimer) return
-    if (!prefs.value.enabled) return
+  const enable = async () => {
+    if (!pushSupported.value) {
+      showToast('Push notifications not supported in this browser', { type: 'error' })
+      return
+    }
 
-    // Initial check after a short delay
-    setTimeout(() => checkAddressesForUpdates(), 5000)
+    // Request notification permission
+    const permission = await Notification.requestPermission()
+    permissionState.value = permission
+    if (permission !== 'granted') {
+      showToast('Notification permission denied', { type: 'error' })
+      return
+    }
 
-    pollTimer = setInterval(
-      () => checkAddressesForUpdates(),
-      prefs.value.pollIntervalSec * 1000
+    // Register service worker
+    const reg = await registerServiceWorker()
+    if (!reg) {
+      showToast('Failed to register service worker', { type: 'error' })
+      return
+    }
+
+    // Get VAPID key from server
+    const vapidKey = await getVapidKey()
+    if (!vapidKey) {
+      showToast('Failed to get push configuration', { type: 'error' })
+      return
+    }
+
+    // Subscribe to push
+    const sub = await subscribeToPush(reg, vapidKey)
+    if (!sub) {
+      showToast('Failed to subscribe to push notifications', { type: 'error' })
+      return
+    }
+
+    // Send subscription to server with current addresses
+    if (addresses.value.length > 0) {
+      await sendSubscriptionToServer(
+        sub,
+        [...addresses.value],
+        prefs.value.events,
+        prefs.value.largeTransferThreshold
+      )
+    }
+
+    subscriptionActive.value = true
+    prefs.value.enabled = true
+    savePrefs()
+    showToast('Push notifications enabled', { type: 'success' })
+  }
+
+  const disable = async () => {
+    if (swRegistration) {
+      const sub = await swRegistration.pushManager.getSubscription()
+      if (sub) {
+        await removeSubscriptionFromServer(sub.endpoint)
+        await sub.unsubscribe()
+      }
+    }
+
+    subscriptionActive.value = false
+    prefs.value.enabled = false
+    savePrefs()
+    showToast('Push notifications disabled', { type: 'info' })
+  }
+
+  // Sync subscription when addresses change
+  const syncSubscription = async () => {
+    if (!prefs.value.enabled || !swRegistration) return
+    const sub = await swRegistration.pushManager.getSubscription()
+    if (!sub || addresses.value.length === 0) return
+
+    await sendSubscriptionToServer(
+      sub,
+      [...addresses.value],
+      prefs.value.events,
+      prefs.value.largeTransferThreshold
     )
   }
 
-  const stopPolling = () => {
-    if (pollTimer) {
-      clearInterval(pollTimer)
-      pollTimer = null
-    }
+  // Listen for notification clicks from SW
+  if (typeof window !== 'undefined') {
+    navigator.serviceWorker?.addEventListener('message', (event) => {
+      if (event.data?.type === 'NOTIFICATION_CLICK' && event.data.url) {
+        router.push(event.data.url)
+      }
+    })
   }
 
-  // Auto-start polling if enabled
-  if (typeof window !== 'undefined' && prefs.value.enabled) {
-    onMounted(() => startPolling())
-    onUnmounted(() => stopPolling())
+  // Initialize: check existing subscription state
+  if (typeof window !== 'undefined' && prefs.value.enabled && pushSupported.value) {
+    registerServiceWorker().then(async (reg) => {
+      if (!reg) return
+      const sub = await reg.pushManager.getSubscription()
+      subscriptionActive.value = !!sub
+    })
   }
+
+  // Watch for address changes and re-sync
+  watch(addresses, () => syncSubscription(), { deep: true })
 
   return {
     prefs: readonly(prefs),
     permissionState: readonly(permissionState),
+    pushSupported: readonly(pushSupported),
+    subscriptionActive: readonly(subscriptionActive),
     enable,
     disable,
     updatePrefs,
-    startPolling,
-    stopPolling,
+    syncSubscription,
   }
 }
