@@ -142,7 +142,10 @@ public class AddressController : ControllerBase
         if (limit < 1) limit = 1;
         if (limit > 50) limit = 50;
 
-        var result = await _queryService.GetAddressFlowAsync(address, limit, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"address:flow:{address}:{limit}",
+            AnalyticsCacheService.AddressSummaryTtl,
+            () => _queryService.GetAddressFlowAsync(address, limit, ct));
         return Ok(result);
     }
 

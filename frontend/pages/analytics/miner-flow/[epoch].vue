@@ -232,7 +232,7 @@ const getNodeIcon = (type: string) => {
         <!-- Sankey Chart -->
         <div class="overflow-x-auto border border-border rounded-lg p-4 bg-surface">
           <ClientOnly>
-            <ChartsSankeyChart
+            <LazyChartsSankeyChart
               :nodes="flowData.nodes"
               :links="flowData.links"
               :width="1200"

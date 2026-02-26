@@ -226,7 +226,7 @@ useHead({ title: computed(() => job.value?.alias || 'Flow Tracking') })
       <!-- Sankey visualization -->
       <div v-if="vizData && nodes.length > 0" class="bg-card rounded-lg border p-4">
         <h3 class="text-sm font-semibold mb-3">Flow Visualization</h3>
-        <ChartsSankeyChart
+        <LazyChartsSankeyChart
           v-if="links.length > 0"
           :nodes="nodes"
           :links="links"

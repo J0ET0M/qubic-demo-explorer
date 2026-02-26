@@ -2,6 +2,7 @@
 import { Users, Activity, History, ArrowLeftRight, Building2, Cpu, UserPlus } from 'lucide-vue-next'
 
 const api = useApi()
+const { formatVolume } = useFormatting()
 
 // Active addresses trend
 const { data: activeAddresses, pending: activeAddressesLoading } = await useAsyncData(
@@ -150,13 +151,7 @@ const newUsersHighBalanceChartData = computed(() => {
   }
 })
 
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(1) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(1) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(1) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(1) + 'K'
-  return volume.toLocaleString()
-}
+
 </script>
 
 <template>

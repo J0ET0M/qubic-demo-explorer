@@ -715,7 +715,7 @@ const getTypeName = (type: number) => {
         <div v-if="graphLoading" class="loading py-12">Loading graph...</div>
         <template v-else-if="graphData && graphData.nodes.length > 0">
           <ClientOnly>
-            <TransactionGraph
+            <LazyTransactionGraph
               :nodes="graphData.nodes"
               :links="graphData.links"
               :center-address="address"

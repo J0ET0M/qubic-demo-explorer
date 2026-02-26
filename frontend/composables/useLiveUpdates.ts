@@ -65,16 +65,19 @@ export const useLiveUpdates = () => {
     await connection?.invoke('UnsubscribeFromAddress', address)
   }
 
-  const onNewTick = (callback: (data: any) => void) => {
+  const onNewTick = (callback: (data: any) => void): (() => void) => {
     connection?.on('OnNewTick', callback)
+    return () => connection?.off('OnNewTick', callback)
   }
 
-  const onNewTransaction = (callback: (data: any) => void) => {
+  const onNewTransaction = (callback: (data: any) => void): (() => void) => {
     connection?.on('OnNewTransaction', callback)
+    return () => connection?.off('OnNewTransaction', callback)
   }
 
-  const onAddressUpdate = (callback: (data: any) => void) => {
+  const onAddressUpdate = (callback: (data: any) => void): (() => void) => {
     connection?.on('OnAddressUpdate', callback)
+    return () => connection?.off('OnAddressUpdate', callback)
   }
 
   return {

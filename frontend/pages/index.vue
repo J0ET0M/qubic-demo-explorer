@@ -80,7 +80,7 @@ onMounted(async () => {
     await subscribeToUpdates()
   }
 
-  liveUpdates.onNewTick((tickData: { tickNumber: number; epoch: number; txCount: number }) => {
+  const offNewTick = liveUpdates.onNewTick((tickData: { tickNumber: number; epoch: number; txCount: number }) => {
     // Only process if subscribed and tab is visible
     if (!isSubscribed.value || document.hidden) return
 
@@ -105,6 +105,8 @@ onMounted(async () => {
       }
     }
   })
+
+  onUnmounted(() => offNewTick())
 })
 
 onUnmounted(async () => {

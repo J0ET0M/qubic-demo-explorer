@@ -672,66 +672,42 @@ public class ClickHouseQueryService : IDisposable
             return new SearchResponse(query, results);
         }
 
-        // Check if it's a tick number
-        if (ulong.TryParse(query, out var tickNumber))
+        // Pre-check input format to only run the relevant query
+        var isNumber = ulong.TryParse(query, out var tickNumber);
+        var is60CharLower = query.Length == 60 && query.All(c => (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'));
+        var is60CharUpper = query.Length == 60 && query.All(c => c >= 'A' && c <= 'Z');
+
+        if (isNumber)
         {
+            // Tick lookup
             await using var tickCmd = _connection.CreateCommand();
             tickCmd.CommandText = $"SELECT tick_number FROM ticks WHERE tick_number = {tickNumber} LIMIT 1";
             var tickResult = await tickCmd.ExecuteScalarAsync(ct);
             if (tickResult != null)
-            {
                 results.Add(new SearchResultDto(SearchResultType.Tick, tickNumber.ToString(), $"Tick {tickNumber}"));
-            }
         }
-
-        // Check if it's a transaction hash (60 chars lowercase)
-        if (query.Length == 60 && query.All(c => char.IsLetterOrDigit(c)))
+        else if (is60CharLower)
         {
+            // Transaction hash lookup (uses bloom filter index on hash)
             await using var txCmd = _connection.CreateCommand();
-            txCmd.CommandText = $"SELECT hash FROM transactions WHERE hash = '{query.ToLowerInvariant()}' LIMIT 1";
+            txCmd.CommandText = $"SELECT hash FROM transactions PREWHERE hash = '{query}' LIMIT 1";
             var txResult = await txCmd.ExecuteScalarAsync(ct);
             if (txResult != null)
-            {
-                results.Add(new SearchResultDto(SearchResultType.Transaction, query.ToLowerInvariant(), "Transaction"));
-            }
+                results.Add(new SearchResultDto(SearchResultType.Transaction, query, "Transaction"));
         }
-
-        // Check if it's an address (60 chars uppercase)
-        if (query.Length == 60 && query.All(c => char.IsLetterOrDigit(c)))
+        else if (is60CharUpper)
         {
-            await using var addrCmd = _connection.CreateCommand();
-            addrCmd.CommandText = $@"
-                SELECT 1 FROM transactions
-                WHERE from_address = '{query.ToUpperInvariant()}'
-                   OR to_address = '{query.ToUpperInvariant()}'
-                LIMIT 1";
-            var addrResult = await addrCmd.ExecuteScalarAsync(ct);
-            if (addrResult != null)
-            {
-                results.Add(new SearchResultDto(SearchResultType.Address, query.ToUpperInvariant(), "Address"));
-            }
+            // Address — valid format, return directly (address page handles display)
+            results.Add(new SearchResultDto(SearchResultType.Address, query, "Address"));
         }
-
-        // Search by label/name if query is not a tick number or exact address/hash match
-        // and we haven't found results yet (or always search for partial matches)
-        if (results.Count == 0 || (query.Length < 60 && !ulong.TryParse(query, out _)))
+        else
         {
+            // Label/name search (in-memory, no DB query)
             await _labelService.EnsureFreshDataAsync();
             var labelMatches = _labelService.SearchByLabel(query, 10);
 
-            // Track existing addresses to avoid duplicates
-            var existingAddresses = results
-                .Where(r => r.Type == SearchResultType.Address)
-                .Select(r => r.Value.ToUpperInvariant())
-                .ToHashSet();
-
             foreach (var match in labelMatches)
             {
-                // Skip if we already have this address in results
-                if (existingAddresses.Contains(match.Address.ToUpperInvariant()))
-                    continue;
-
-                // Format display name based on type
                 var displayName = match.Type switch
                 {
                     "smartcontract" => $"[{match.Label}]",
@@ -739,9 +715,7 @@ public class ClickHouseQueryService : IDisposable
                     "tokenissuer" => $"${match.Label}",
                     _ => match.Label
                 };
-
                 results.Add(new SearchResultDto(SearchResultType.Address, match.Address, displayName));
-                existingAddresses.Add(match.Address.ToUpperInvariant());
             }
         }
 
@@ -3994,17 +3968,8 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<List<AssetSummaryDto>> GetAssetsAsync(CancellationToken ct = default)
     {
-        // Get latest universe epoch
-        await using var epochCmd = _connection.CreateCommand();
-        epochCmd.CommandText = "SELECT max(epoch) FROM universe_imports";
-        var epochResult = await epochCmd.ExecuteScalarAsync(ct);
-        if (epochResult == null || epochResult == DBNull.Value)
-            return new List<AssetSummaryDto>();
-
-        var latestEpoch = Convert.ToUInt32(epochResult);
-
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT
                 asset_name,
                 issuer_address,
@@ -4012,13 +3977,11 @@ public class ClickHouseQueryService : IDisposable
                 sumIf(number_of_shares, record_type = 'ownership') AS total_supply,
                 countDistinctIf(holder_address, record_type = 'possession' AND number_of_shares > 0) AS holder_count
             FROM asset_snapshots FINAL
-            WHERE epoch = {{epoch:UInt32}}
+            WHERE epoch = (SELECT max(epoch) FROM universe_imports)
               AND record_type IN ('issuance', 'ownership', 'possession')
             GROUP BY asset_name, issuer_address, number_of_decimal_places
             HAVING asset_name != ''
             ORDER BY total_supply DESC";
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "epoch", Value = latestEpoch });
 
         var results = new List<AssetSummaryDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -4041,16 +4004,7 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<AssetDetailDto?> GetAssetDetailAsync(string assetName, string? issuer = null, CancellationToken ct = default)
     {
-        // Get latest universe epoch
-        await using var epochCmd = _connection.CreateCommand();
-        epochCmd.CommandText = "SELECT max(epoch) FROM universe_imports";
-        var epochResult = await epochCmd.ExecuteScalarAsync(ct);
-        if (epochResult == null || epochResult == DBNull.Value)
-            return null;
-
-        var latestEpoch = Convert.ToUInt32(epochResult);
-
-        // Get asset info
+        // Single query: embed epoch subquery + return epoch as extra column
         var issuerFilter = issuer != null ? "AND issuer_address = {issuer:String}" : "";
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
@@ -4059,35 +4013,30 @@ public class ClickHouseQueryService : IDisposable
                 issuer_address,
                 number_of_decimal_places,
                 sumIf(number_of_shares, record_type = 'ownership') AS total_supply,
-                countDistinctIf(holder_address, record_type = 'possession' AND number_of_shares > 0) AS holder_count
+                countDistinctIf(holder_address, record_type = 'possession' AND number_of_shares > 0) AS holder_count,
+                (SELECT max(epoch) FROM universe_imports) AS snapshot_epoch
             FROM asset_snapshots FINAL
-            WHERE epoch = {{epoch:UInt32}}
+            WHERE epoch = (SELECT max(epoch) FROM universe_imports)
               AND asset_name = {{name:String}}
               {issuerFilter}
               AND record_type IN ('issuance', 'ownership', 'possession')
             GROUP BY asset_name, issuer_address, number_of_decimal_places
             LIMIT 1";
         cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "epoch", Value = latestEpoch });
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
             { ParameterName = "name", Value = assetName });
         if (issuer != null)
             cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
                 { ParameterName = "issuer", Value = issuer });
 
-        string? issuerAddress = null;
-        int numberOfDecimalPlaces = 0;
-        long totalSupply = 0;
-        int holderCount = 0;
-
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
             return null;
 
-        issuerAddress = reader.GetString(1);
-        numberOfDecimalPlaces = Convert.ToInt32(reader.GetValue(2));
-        totalSupply = Convert.ToInt64(reader.GetValue(3));
-        holderCount = Convert.ToInt32(reader.GetValue(4));
+        var issuerAddress = reader.GetString(1);
+        var numberOfDecimalPlaces = Convert.ToInt32(reader.GetValue(2));
+        var totalSupply = Convert.ToInt64(reader.GetValue(3));
+        var holderCount = Convert.ToInt32(reader.GetValue(4));
+        var latestEpoch = Convert.ToUInt32(reader.GetValue(5));
 
         var issuerInfo = _labelService.GetAddressInfo(issuerAddress);
 
@@ -4109,30 +4058,24 @@ public class ClickHouseQueryService : IDisposable
     public async Task<AssetHoldersPageDto> GetAssetHoldersAsync(
         string assetName, string? issuer, int page, int limit, CancellationToken ct = default)
     {
-        // Get latest universe epoch
-        await using var epochCmd = _connection.CreateCommand();
-        epochCmd.CommandText = "SELECT max(epoch) FROM universe_imports";
-        var epochResult = await epochCmd.ExecuteScalarAsync(ct);
-        if (epochResult == null || epochResult == DBNull.Value)
+        // Single query to get epoch + issuer if needed
+        await using var metaCmd = _connection.CreateCommand();
+        metaCmd.CommandText = $@"
+            SELECT
+                (SELECT max(epoch) FROM universe_imports) AS latest_epoch,
+                (SELECT DISTINCT issuer_address FROM asset_snapshots FINAL
+                 WHERE epoch = (SELECT max(epoch) FROM universe_imports)
+                   AND asset_name = {{name:String}} AND record_type = 'issuance'
+                 LIMIT 1) AS resolved_issuer";
+        metaCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = "name", Value = assetName });
+
+        await using var metaReader = await metaCmd.ExecuteReaderAsync(ct);
+        if (!await metaReader.ReadAsync(ct) || metaReader.IsDBNull(0))
             return new AssetHoldersPageDto(new List<AssetHolderDetailDto>(), page, limit, 0, 0);
 
-        var latestEpoch = Convert.ToUInt32(epochResult);
-
-        // If no issuer specified, find it
-        if (issuer == null)
-        {
-            await using var issuerCmd = _connection.CreateCommand();
-            issuerCmd.CommandText = $@"
-                SELECT DISTINCT issuer_address FROM asset_snapshots FINAL
-                WHERE epoch = {{epoch:UInt32}} AND asset_name = {{name:String}} AND record_type = 'issuance'
-                LIMIT 1";
-            issuerCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-                { ParameterName = "epoch", Value = latestEpoch });
-            issuerCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-                { ParameterName = "name", Value = assetName });
-            var issuerResult = await issuerCmd.ExecuteScalarAsync(ct);
-            issuer = issuerResult?.ToString() ?? "";
-        }
+        var latestEpoch = Convert.ToUInt32(metaReader.GetValue(0));
+        issuer ??= metaReader.IsDBNull(1) ? "" : metaReader.GetString(1);
 
         return await GetAssetHoldersInternalAsync(latestEpoch, assetName, issuer, page, limit, ct);
     }
