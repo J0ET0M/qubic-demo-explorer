@@ -106,10 +106,11 @@ const networkStatsHistoryChartData = computed(() => {
 
 // Volume history chart data
 const volumeHistoryChartData = computed(() => {
-  if (!networkStatsHistory.value) return { volume: [], transfers: [] }
+  if (!networkStatsHistory.value) return { volume: [], transfers: [], transactions: [] }
   return {
     volume: networkStatsHistory.value.map(d => d.totalVolume),
-    transfers: networkStatsHistory.value.map(d => d.totalTransfers)
+    transfers: networkStatsHistory.value.map(d => d.totalTransfers),
+    transactions: networkStatsHistory.value.map(d => d.totalTransactions)
   }
 })
 
@@ -362,6 +363,12 @@ const newUsersHighBalanceChartData = computed(() => {
           <ChartsEpochLineChart
             :labels="networkStatsHistoryChartLabels"
             :datasets="[
+              {
+                label: 'Transactions',
+                data: volumeHistoryChartData.transactions,
+                borderColor: 'rgb(108, 140, 204)',
+                backgroundColor: 'rgba(108, 140, 204, 0.1)'
+              },
               {
                 label: 'Transfers',
                 data: volumeHistoryChartData.transfers,
