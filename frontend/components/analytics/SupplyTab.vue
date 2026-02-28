@@ -30,7 +30,9 @@ const emissionData = computed(() => {
 // Chart data for burns
 const burnLabels = computed(() => {
   if (!supply.value?.burnHistory) return []
-  return [...supply.value.burnHistory].reverse().map(e => `E${e.epoch}`)
+  return [...supply.value.burnHistory].reverse().map(e =>
+    new Date(e.snapshotAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit' })
+  )
 })
 
 const burnData = computed(() => {
@@ -96,7 +98,7 @@ const burnData = computed(() => {
         <div class="card" v-if="burnLabels.length">
           <h2 class="section-title mb-4">
             <Flame class="h-5 w-5 text-destructive" />
-            Burns per Epoch
+            Burns (4-Hour Snapshots)
           </h2>
           <ClientOnly>
             <ChartsEpochBarChart

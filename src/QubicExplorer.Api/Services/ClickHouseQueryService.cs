@@ -1541,12 +1541,12 @@ public class ClickHouseQueryService : IDisposable
             }
         }
 
-        // Get burn history (per epoch)
+        // Get burn history (per 4-hour snapshot window)
         await using var burnHistCmd = _connection.CreateCommand();
         burnHistCmd.CommandText = @"
-            SELECT epoch, burn_amount, burn_count
+            SELECT epoch, snapshot_at, burn_amount, burn_count
             FROM burn_stats_history FINAL
-            ORDER BY epoch DESC
+            ORDER BY snapshot_at DESC
             LIMIT 50";
 
         var burnHistory = new List<BurnDataPointDto>();
@@ -1556,8 +1556,9 @@ public class ClickHouseQueryService : IDisposable
             {
                 burnHistory.Add(new BurnDataPointDto(
                     Convert.ToUInt32(reader.GetValue(0)),
-                    ToUInt64(reader.GetValue(1)),
-                    ToUInt64(reader.GetValue(2))
+                    reader.GetDateTime(1),
+                    ToUInt64(reader.GetValue(2)),
+                    ToUInt64(reader.GetValue(3))
                 ));
             }
         }

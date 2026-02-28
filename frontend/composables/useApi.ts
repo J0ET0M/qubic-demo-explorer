@@ -930,6 +930,7 @@ interface EmissionDataPointDto {
 
 interface BurnDataPointDto {
   epoch: number
+  snapshotAt: string
   burnAmount: number
   burnCount: number
 }

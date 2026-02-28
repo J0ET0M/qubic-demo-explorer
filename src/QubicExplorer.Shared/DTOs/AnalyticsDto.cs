@@ -93,10 +93,11 @@ public record EmissionDataPointDto(
 );
 
 /// <summary>
-/// Epoch burn data point
+/// Burn data point (per 4-hour snapshot window)
 /// </summary>
 public record BurnDataPointDto(
     uint Epoch,
+    DateTime SnapshotAt,
     ulong BurnAmount,
     ulong BurnCount
 );
