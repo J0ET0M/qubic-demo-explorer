@@ -10,11 +10,13 @@ public class StatsController : ControllerBase
 {
     private readonly ClickHouseQueryService _queryService;
     private readonly AnalyticsCacheService _cache;
+    private readonly BobProxyService _bobProxy;
 
-    public StatsController(ClickHouseQueryService queryService, AnalyticsCacheService cache)
+    public StatsController(ClickHouseQueryService queryService, AnalyticsCacheService cache, BobProxyService bobProxy)
     {
         _queryService = queryService;
         _cache = cache;
+        _bobProxy = bobProxy;
     }
 
     [HttpGet]
@@ -81,7 +83,11 @@ public class StatsController : ControllerBase
         var result = await _cache.GetOrSetAsync(
             "stats:supply",
             AnalyticsCacheService.SupplyDashboardTtl,
-            () => _queryService.GetSupplyDashboardAsync(ct));
+            async () =>
+            {
+                var donationTable = await _bobProxy.GetRevenueDonationTableAsync(ct);
+                return await _queryService.GetSupplyDashboardAsync(donationTable, ct);
+            });
         return Ok(result);
     }
 

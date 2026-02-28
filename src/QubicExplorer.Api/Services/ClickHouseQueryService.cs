@@ -1484,8 +1484,22 @@ public class ClickHouseQueryService : IDisposable
     private static readonly decimal MaxSupply = Qubic.Core.QubicConstants.MaxSupply;
     private static readonly string ArbAddress = Qubic.Core.QubicConstants.ArbitratorIdentity;
 
-    public async Task<SupplyDashboardDto> GetSupplyDashboardAsync(CancellationToken ct = default)
+    public async Task<SupplyDashboardDto> GetSupplyDashboardAsync(
+        List<BobProxyService.RevenueDonationEntry> donationTable,
+        CancellationToken ct = default)
     {
+        // Build the set of donation target addresses from the GQMPROP table
+        var donationAddresses = donationTable
+            .Select(d => d.Address)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // All addresses we want to look for at emission ticks: ARB + donation recipients
+        var targetAddresses = new HashSet<string>(donationAddresses, StringComparer.OrdinalIgnoreCase)
+        {
+            ArbAddress
+        };
+        var targetAddressesIn = string.Join("', '", targetAddresses);
+
         // Query 1: Circulating supply from latest spectrum import
         var supplyTask = Task.Run(async () =>
         {
@@ -1524,10 +1538,9 @@ public class ClickHouseQueryService : IDisposable
             return items;
         }, ct);
 
-        // Query 3: Non-computor emission transfers (ARB + donations) per epoch
-        // These are transfers from the zero address at emission ticks to addresses
-        // that are NOT computors (i.e. ARB address and donation contract addresses)
-        var nonComputorTask = Task.Run(async () =>
+        // Query 3: ARB + donation transfers at emission ticks
+        // Only look for the specific addresses from the GQMPROP revenue donation table + ARB
+        var emissionTransfersTask = Task.Run(async () =>
         {
             await using var cmd = _connection.CreateCommand();
             cmd.CommandText = $@"
@@ -1538,9 +1551,7 @@ public class ClickHouseQueryService : IDisposable
                 )
                 AND l.source_address = '{AddressLabelService.BurnAddress}'
                 AND l.log_type = 0
-                AND l.dest_address NOT IN (
-                    SELECT DISTINCT address FROM computor_emissions
-                )
+                AND l.dest_address IN ('{targetAddressesIn}')
                 GROUP BY l.epoch, l.dest_address
                 ORDER BY l.epoch DESC, total_amount DESC";
             // epoch -> list of (address, amount)
@@ -1589,11 +1600,11 @@ public class ClickHouseQueryService : IDisposable
             return items;
         }, ct);
 
-        await Task.WhenAll(supplyTask, emissionTask, nonComputorTask, epochCountTask, burnHistTask);
+        await Task.WhenAll(supplyTask, emissionTask, emissionTransfersTask, epochCountTask, burnHistTask);
 
         var (snapshotEpoch, circulatingSupply) = supplyTask.Result;
         var emissionRaw = emissionTask.Result;
-        var nonComputorMap = nonComputorTask.Result;
+        var transfersMap = emissionTransfersTask.Result;
         var epochCount = epochCountTask.Result;
         var burnHistory = burnHistTask.Result;
 
@@ -1604,15 +1615,15 @@ public class ClickHouseQueryService : IDisposable
             var arbRevenue = 0m;
             var donations = new List<EmissionDonationDto>();
 
-            if (nonComputorMap.TryGetValue(epoch, out var nonComputorEntries))
+            if (transfersMap.TryGetValue(epoch, out var transfers))
             {
-                foreach (var (address, amount) in nonComputorEntries)
+                foreach (var (address, amount) in transfers)
                 {
                     if (string.Equals(address, ArbAddress, StringComparison.OrdinalIgnoreCase))
                     {
                         arbRevenue = amount;
                     }
-                    else
+                    else if (donationAddresses.Contains(address))
                     {
                         var label = _labelService.GetLabel(address);
                         donations.Add(new EmissionDonationDto(address, label, amount));
@@ -1623,7 +1634,7 @@ public class ClickHouseQueryService : IDisposable
             var donationTotal = donations.Sum(d => d.Amount);
 
             // Fallback: if we don't have emission tick data, compute remainder
-            if (!nonComputorMap.ContainsKey(epoch))
+            if (!transfersMap.ContainsKey(epoch))
             {
                 arbRevenue = IssuanceRatePerEpoch - computorEmission;
             }

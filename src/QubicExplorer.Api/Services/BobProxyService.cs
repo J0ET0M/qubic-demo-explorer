@@ -1,6 +1,9 @@
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Caching.Memory;
 using Qubic.Bob;
+using Qubic.Core;
+using Qubic.Core.Contracts.Gqmprop;
+using Qubic.Crypto;
 using QubicExplorer.Shared.Models;
 
 namespace QubicExplorer.Api.Services;
@@ -165,6 +168,72 @@ public class BobProxyService
             _logger.LogWarning(ex, "Failed to get computors for epoch {Epoch}", epoch);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Queries the GQMPROP contract to get the current revenue donation table.
+    /// Returns the list of active donation recipient addresses and their percentage amounts.
+    /// Cached for 10 minutes since the table changes rarely (only via quorum voting).
+    /// </summary>
+    public async Task<List<RevenueDonationEntry>> GetRevenueDonationTableAsync(CancellationToken ct = default)
+    {
+        const string cacheKey = "gqmprop:revenueDonation";
+
+        if (_cache.TryGetValue(cacheKey, out List<RevenueDonationEntry>? cached))
+            return cached!;
+
+        try
+        {
+            // Query GQMPROP (contract index 6), function 5 (GetRevenueDonation), empty input
+            var hexResult = await _bobClient.QuerySmartContractAsync(
+                QubicContracts.Gqmprop, 5, "", ct);
+
+            var bytes = Convert.FromHexString(hexResult);
+            var output = GetRevenueDonationOutput.FromBytes(bytes);
+            var crypt = new QubicCrypt();
+
+            var entries = new List<RevenueDonationEntry>();
+            foreach (var entry in output.Entries)
+            {
+                // Skip empty entries (zero public key)
+                if (entry.DestinationPublicKey.All(b => b == 0))
+                    continue;
+                if (entry.MillionthAmount <= 0)
+                    continue;
+
+                var address = crypt.GetIdentityFromPublicKey(entry.DestinationPublicKey);
+                entries.Add(new RevenueDonationEntry
+                {
+                    Address = address,
+                    MillionthAmount = entry.MillionthAmount,
+                    Percentage = entry.MillionthAmount / 10_000.0, // Convert to percentage
+                    FirstEpoch = entry.FirstEpoch
+                });
+            }
+
+            _cache.Set(cacheKey, entries, TimeSpan.FromMinutes(10));
+            return entries;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query GQMPROP revenue donation table");
+            return new List<RevenueDonationEntry>();
+        }
+    }
+
+    public class RevenueDonationEntry
+    {
+        [JsonPropertyName("address")]
+        public string Address { get; set; } = "";
+
+        [JsonPropertyName("millionthAmount")]
+        public long MillionthAmount { get; set; }
+
+        [JsonPropertyName("percentage")]
+        public double Percentage { get; set; }
+
+        [JsonPropertyName("firstEpoch")]
+        public ushort FirstEpoch { get; set; }
     }
 
     // Public result types — kept for compatibility with existing consumers
