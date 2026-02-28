@@ -84,11 +84,24 @@ public record RichListDto(
 // =====================================================
 
 /// <summary>
-/// Epoch emission data point
+/// Individual donation recipient in an epoch emission
+/// </summary>
+public record EmissionDonationDto(
+    string Address,
+    string? Label,
+    decimal Amount
+);
+
+/// <summary>
+/// Epoch emission data point with full breakdown:
+/// 1T = ComputorEmission + ArbRevenue + DonationTotal
 /// </summary>
 public record EmissionDataPointDto(
     uint Epoch,
-    decimal TotalEmission,
+    decimal ComputorEmission,
+    decimal ArbRevenue,
+    List<EmissionDonationDto> Donations,
+    decimal DonationTotal,
     int ComputorCount
 );
 
@@ -107,9 +120,13 @@ public record BurnDataPointDto(
 /// </summary>
 public record SupplyDashboardDto(
     decimal CirculatingSupply,
-    ulong TotalBurned,
+    decimal TotalEmitted,
+    decimal TotalBurned,
     decimal LatestEpochEmission,
+    uint EpochCount,
     uint SnapshotEpoch,
+    decimal SupplyCap,
+    decimal SupplyCapProgress,
     List<EmissionDataPointDto> EmissionHistory,
     List<BurnDataPointDto> BurnHistory
 );

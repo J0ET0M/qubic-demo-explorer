@@ -1,43 +1,69 @@
 <script setup lang="ts">
-import { Coins, Flame, Pickaxe } from 'lucide-vue-next'
+import { Coins, Flame, Pickaxe, TrendingUp, Target, Hash } from 'lucide-vue-next'
 
 const api = useApi()
+const { formatVolume } = useFormatting()
 
 const { data: supply, pending } = await useAsyncData(
   'supply-dashboard',
   () => api.getSupplyDashboard()
 )
 
-const formatVolume = (volume: number) => {
-  if (volume >= 1_000_000_000_000) return (volume / 1_000_000_000_000).toFixed(2) + 'T'
-  if (volume >= 1_000_000_000) return (volume / 1_000_000_000).toFixed(2) + 'B'
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(2) + 'M'
-  if (volume >= 1_000) return (volume / 1_000).toFixed(2) + 'K'
-  return volume.toLocaleString()
-}
-
 // Chart data for emissions (reversed for chronological order)
-const emissionLabels = computed(() => {
+const emissionChartSorted = computed(() => {
   if (!supply.value?.emissionHistory) return []
-  return [...supply.value.emissionHistory].reverse().map(e => `E${e.epoch}`)
+  return [...supply.value.emissionHistory].reverse()
 })
 
-const emissionData = computed(() => {
-  if (!supply.value?.emissionHistory) return []
-  return [...supply.value.emissionHistory].reverse().map(e => e.totalEmission)
-})
+const emissionLabels = computed(() => emissionChartSorted.value.map(e => `E${e.epoch}`))
+
+const emissionComputorData = computed(() =>
+  emissionChartSorted.value.map(e => e.computorEmission)
+)
+
+const emissionArbData = computed(() =>
+  emissionChartSorted.value.map(e => e.arbRevenue)
+)
+
+const emissionDonationData = computed(() =>
+  emissionChartSorted.value.map(e => e.donationTotal)
+)
 
 // Chart data for burns
-const burnLabels = computed(() => {
+const burnChartSorted = computed(() => {
   if (!supply.value?.burnHistory) return []
-  return [...supply.value.burnHistory].reverse().map(e =>
-    new Date(e.snapshotAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit' })
-  )
+  return [...supply.value.burnHistory].reverse()
 })
 
-const burnData = computed(() => {
-  if (!supply.value?.burnHistory) return []
-  return [...supply.value.burnHistory].reverse().map(e => e.burnAmount)
+const burnLabels = computed(() =>
+  burnChartSorted.value.map(e =>
+    new Date(e.snapshotAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit' })
+  )
+)
+
+const burnData = computed(() => burnChartSorted.value.map(e => e.burnAmount))
+
+// Derived metrics
+const inflationRate = computed(() => {
+  if (!supply.value || !supply.value.circulatingSupply) return 0
+  return (supply.value.latestEpochEmission / supply.value.circulatingSupply) * 100
+})
+
+const burnRate = computed(() => {
+  if (!supply.value || !supply.value.totalEmitted) return 0
+  return (supply.value.totalBurned / supply.value.totalEmitted) * 100
+})
+
+// Collect unique donation recipient names across all epochs
+const donationRecipients = computed(() => {
+  if (!supply.value?.emissionHistory) return []
+  const names = new Set<string>()
+  for (const e of supply.value.emissionHistory) {
+    for (const d of e.donations) {
+      names.add(d.label || d.address.slice(0, 8))
+    }
+  }
+  return [...names]
 })
 </script>
 
@@ -46,7 +72,7 @@ const burnData = computed(() => {
     <div v-if="pending" class="loading py-12">Loading supply data...</div>
 
     <template v-else-if="supply && (supply.snapshotEpoch > 0 || supply.emissionHistory.length > 0 || supply.burnHistory.length > 0)">
-      <!-- Summary Cards -->
+      <!-- Summary Cards - Row 1 -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="card-elevated text-center">
           <div class="flex items-center justify-center gap-2 mb-2">
@@ -58,33 +84,76 @@ const burnData = computed(() => {
         </div>
         <div class="card-elevated text-center">
           <div class="flex items-center justify-center gap-2 mb-2">
+            <TrendingUp class="h-4 w-4 text-success" />
+          </div>
+          <div class="text-2xl font-bold text-success">{{ formatVolume(supply.totalEmitted) }} QU</div>
+          <div class="text-xs text-foreground-muted uppercase mt-1">Total Emitted</div>
+          <div class="text-xs text-foreground-muted mt-0.5">{{ supply.epochCount }} epochs</div>
+        </div>
+        <div class="card-elevated text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
             <Flame class="h-4 w-4 text-destructive" />
           </div>
           <div class="text-2xl font-bold text-destructive">{{ formatVolume(supply.totalBurned) }} QU</div>
           <div class="text-xs text-foreground-muted uppercase mt-1">Total Burned</div>
+          <div class="text-xs text-foreground-muted mt-0.5">{{ burnRate.toFixed(1) }}% of emitted</div>
         </div>
+      </div>
+
+      <!-- Summary Cards - Row 2 -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="card-elevated text-center">
           <div class="flex items-center justify-center gap-2 mb-2">
             <Pickaxe class="h-4 w-4 text-success" />
           </div>
           <div class="text-2xl font-bold text-success">{{ formatVolume(supply.latestEpochEmission) }} QU</div>
           <div class="text-xs text-foreground-muted uppercase mt-1">Latest Epoch Emission</div>
+          <div class="text-xs text-foreground-muted mt-0.5">~{{ inflationRate.toFixed(3) }}% per epoch</div>
+        </div>
+        <div class="card-elevated text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <Target class="h-4 w-4 text-warning" />
+          </div>
+          <div class="text-2xl font-bold text-warning">{{ formatVolume(supply.supplyCap) }} QU</div>
+          <div class="text-xs text-foreground-muted uppercase mt-1">Supply Cap</div>
+          <div class="mt-2">
+            <div class="w-full bg-background-secondary rounded-full h-2">
+              <div
+                class="bg-warning rounded-full h-2 transition-all"
+                :style="{ width: `${Math.min(supply.supplyCapProgress, 100)}%` }"
+              />
+            </div>
+            <div class="text-xs text-foreground-muted mt-1">{{ supply.supplyCapProgress.toFixed(2) }}% reached</div>
+          </div>
+        </div>
+        <div class="card-elevated text-center">
+          <div class="flex items-center justify-center gap-2 mb-2">
+            <Hash class="h-4 w-4 text-foreground-muted" />
+          </div>
+          <div class="text-2xl font-bold">{{ supply.epochCount }}</div>
+          <div class="text-xs text-foreground-muted uppercase mt-1">Total Epochs</div>
+          <div class="text-xs text-foreground-muted mt-0.5">1T QU emitted per epoch</div>
         </div>
       </div>
 
       <!-- Charts -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- Emission History -->
+        <!-- Emission History (stacked: computor + ARB + donations) -->
         <div class="card" v-if="emissionLabels.length">
           <h2 class="section-title mb-4">
             <Pickaxe class="h-5 w-5 text-success" />
-            Emission per Epoch
+            Emission Breakdown per Epoch
           </h2>
           <ClientOnly>
             <ChartsEpochBarChart
               :labels="emissionLabels"
-              :datasets="[{ label: 'Emission (QU)', data: emissionData }]"
+              :datasets="[
+                { label: 'Computors', data: emissionComputorData },
+                { label: 'Arbitrator', data: emissionArbData },
+                { label: 'Donations', data: emissionDonationData }
+              ]"
               :height="250"
+              :stacked="true"
             />
             <template #fallback>
               <div class="h-[250px] flex items-center justify-center text-foreground-muted text-sm">
@@ -126,8 +195,11 @@ const burnData = computed(() => {
             <thead>
               <tr>
                 <th>Epoch</th>
-                <th>Total Emission</th>
                 <th>Computors</th>
+                <th>Arbitrator</th>
+                <th v-for="name in donationRecipients" :key="name">{{ name }}</th>
+                <th>Donations Total</th>
+                <th># Computors</th>
               </tr>
             </thead>
             <tbody>
@@ -135,7 +207,12 @@ const burnData = computed(() => {
                 <td>
                   <NuxtLink :to="`/epochs/${e.epoch}`" class="text-accent">{{ e.epoch }}</NuxtLink>
                 </td>
-                <td class="font-semibold text-success">{{ formatVolume(e.totalEmission) }} QU</td>
+                <td class="font-semibold text-success">{{ formatVolume(e.computorEmission) }}</td>
+                <td class="font-semibold text-warning">{{ formatVolume(e.arbRevenue) }}</td>
+                <td v-for="name in donationRecipients" :key="name" class="text-info">
+                  {{ formatVolume(e.donations.find(d => (d.label || d.address.slice(0, 8)) === name)?.amount || 0) }}
+                </td>
+                <td class="text-foreground-muted">{{ formatVolume(e.donationTotal) }}</td>
                 <td>{{ e.computorCount }}</td>
               </tr>
             </tbody>

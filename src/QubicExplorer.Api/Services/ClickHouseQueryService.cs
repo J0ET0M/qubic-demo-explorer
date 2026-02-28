@@ -1480,94 +1480,180 @@ public class ClickHouseQueryService : IDisposable
     /// <summary>
     /// Get supply dashboard data (circulating supply, burns, emissions)
     /// </summary>
+    private static readonly decimal IssuanceRatePerEpoch = Qubic.Core.QubicConstants.IssuanceRate;
+    private static readonly decimal MaxSupply = Qubic.Core.QubicConstants.MaxSupply;
+    private static readonly string ArbAddress = Qubic.Core.QubicConstants.ArbitratorIdentity;
+
     public async Task<SupplyDashboardDto> GetSupplyDashboardAsync(CancellationToken ct = default)
     {
-        // Get circulating supply from latest spectrum import
-        decimal circulatingSupply = 0;
-        uint snapshotEpoch = 0;
-
-        await using var supplyCmd = _connection.CreateCommand();
-        supplyCmd.CommandText = @"
-            SELECT epoch, total_balance
-            FROM spectrum_imports
-            ORDER BY epoch DESC
-            LIMIT 1";
-
-        await using (var reader = await supplyCmd.ExecuteReaderAsync(ct))
+        // Query 1: Circulating supply from latest spectrum import
+        var supplyTask = Task.Run(async () =>
         {
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT epoch, total_balance
+                FROM spectrum_imports
+                ORDER BY epoch DESC
+                LIMIT 1";
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct))
-            {
-                snapshotEpoch = Convert.ToUInt32(reader.GetValue(0));
-                circulatingSupply = ToDecimal(reader.GetValue(1));
-            }
-        }
+                return (Convert.ToUInt32(reader.GetValue(0)), ToDecimal(reader.GetValue(1)));
+            return ((uint)0, 0m);
+        }, ct);
 
-        // Get total burned
-        ulong totalBurned = 0;
-        await using var burnCmd = _connection.CreateCommand();
-        burnCmd.CommandText = @"
-            SELECT max(cumulative_burned)
-            FROM burn_stats_history FINAL";
-
-        await using (var reader = await burnCmd.ExecuteReaderAsync(ct))
+        // Query 2: Computor emission totals per epoch
+        var emissionTask = Task.Run(async () =>
         {
-            if (await reader.ReadAsync(ct) && !reader.IsDBNull(0))
-                totalBurned = ToUInt64(reader.GetValue(0));
-        }
-
-        // Get emission history (per epoch)
-        await using var emissionCmd = _connection.CreateCommand();
-        emissionCmd.CommandText = @"
-            SELECT epoch, sum(emission_amount) as total_emission, count() as computor_count
-            FROM computor_emissions
-            GROUP BY epoch
-            ORDER BY epoch DESC
-            LIMIT 50";
-
-        var emissionHistory = new List<EmissionDataPointDto>();
-        decimal latestEpochEmission = 0;
-        await using (var reader = await emissionCmd.ExecuteReaderAsync(ct))
-        {
-            var first = true;
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT epoch, sum(emission_amount) as total_emission, count() as computor_count
+                FROM computor_emissions
+                GROUP BY epoch
+                ORDER BY epoch DESC
+                LIMIT 50";
+            var items = new List<(uint Epoch, decimal ComputorEmission, int ComputorCount)>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                var emission = ToDecimal(reader.GetValue(1));
-                emissionHistory.Add(new EmissionDataPointDto(
+                items.Add((
                     Convert.ToUInt32(reader.GetValue(0)),
-                    emission,
+                    ToDecimal(reader.GetValue(1)),
                     Convert.ToInt32(reader.GetValue(2))
                 ));
-                if (first) { latestEpochEmission = emission; first = false; }
             }
-        }
+            return items;
+        }, ct);
 
-        // Get burn history (per 4-hour snapshot window)
-        await using var burnHistCmd = _connection.CreateCommand();
-        burnHistCmd.CommandText = @"
-            SELECT epoch, snapshot_at, burn_amount, burn_count
-            FROM burn_stats_history FINAL
-            ORDER BY snapshot_at DESC
-            LIMIT 50";
-
-        var burnHistory = new List<BurnDataPointDto>();
-        await using (var reader = await burnHistCmd.ExecuteReaderAsync(ct))
+        // Query 3: Non-computor emission transfers (ARB + donations) per epoch
+        // These are transfers from the zero address at emission ticks to addresses
+        // that are NOT computors (i.e. ARB address and donation contract addresses)
+        var nonComputorTask = Task.Run(async () =>
         {
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $@"
+                SELECT l.epoch, l.dest_address, sum(l.amount) as total_amount
+                FROM logs l
+                WHERE l.tick_number IN (
+                    SELECT emission_tick FROM emission_imports ORDER BY epoch DESC LIMIT 50
+                )
+                AND l.source_address = '{AddressLabelService.BurnAddress}'
+                AND l.log_type = 0
+                AND l.dest_address NOT IN (
+                    SELECT DISTINCT address FROM computor_emissions
+                )
+                GROUP BY l.epoch, l.dest_address
+                ORDER BY l.epoch DESC, total_amount DESC";
+            // epoch -> list of (address, amount)
+            var result = new Dictionary<uint, List<(string Address, decimal Amount)>>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                burnHistory.Add(new BurnDataPointDto(
+                var epoch = Convert.ToUInt32(reader.GetValue(0));
+                var address = reader.GetString(1);
+                var amount = ToDecimal(reader.GetValue(2));
+                if (!result.ContainsKey(epoch))
+                    result[epoch] = new List<(string, decimal)>();
+                result[epoch].Add((address, amount));
+            }
+            return result;
+        }, ct);
+
+        // Query 4: Epoch count
+        var epochCountTask = Task.Run(async () =>
+        {
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "SELECT count(DISTINCT epoch) FROM computor_emissions";
+            return Convert.ToUInt32(await cmd.ExecuteScalarAsync(ct));
+        }, ct);
+
+        // Query 5: Burn history
+        var burnHistTask = Task.Run(async () =>
+        {
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT epoch, snapshot_at, burn_amount, burn_count
+                FROM burn_stats_history FINAL
+                ORDER BY snapshot_at DESC
+                LIMIT 50";
+            var items = new List<BurnDataPointDto>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                items.Add(new BurnDataPointDto(
                     Convert.ToUInt32(reader.GetValue(0)),
                     reader.GetDateTime(1),
                     ToUInt64(reader.GetValue(2)),
                     ToUInt64(reader.GetValue(3))
                 ));
             }
+            return items;
+        }, ct);
+
+        await Task.WhenAll(supplyTask, emissionTask, nonComputorTask, epochCountTask, burnHistTask);
+
+        var (snapshotEpoch, circulatingSupply) = supplyTask.Result;
+        var emissionRaw = emissionTask.Result;
+        var nonComputorMap = nonComputorTask.Result;
+        var epochCount = epochCountTask.Result;
+        var burnHistory = burnHistTask.Result;
+
+        // Build emission history with full breakdown
+        var emissionHistory = new List<EmissionDataPointDto>();
+        foreach (var (epoch, computorEmission, computorCount) in emissionRaw)
+        {
+            var arbRevenue = 0m;
+            var donations = new List<EmissionDonationDto>();
+
+            if (nonComputorMap.TryGetValue(epoch, out var nonComputorEntries))
+            {
+                foreach (var (address, amount) in nonComputorEntries)
+                {
+                    if (string.Equals(address, ArbAddress, StringComparison.OrdinalIgnoreCase))
+                    {
+                        arbRevenue = amount;
+                    }
+                    else
+                    {
+                        var label = _labelService.GetLabel(address);
+                        donations.Add(new EmissionDonationDto(address, label, amount));
+                    }
+                }
+            }
+
+            var donationTotal = donations.Sum(d => d.Amount);
+
+            // Fallback: if we don't have emission tick data, compute remainder
+            if (!nonComputorMap.ContainsKey(epoch))
+            {
+                arbRevenue = IssuanceRatePerEpoch - computorEmission;
+            }
+
+            emissionHistory.Add(new EmissionDataPointDto(
+                epoch,
+                computorEmission,
+                arbRevenue,
+                donations,
+                donationTotal,
+                computorCount
+            ));
         }
+
+        // Total emitted = number of epochs * 1T per epoch
+        var totalEmitted = epochCount * IssuanceRatePerEpoch;
+        // Total burned = total emitted - circulating supply
+        var totalBurned = totalEmitted - circulatingSupply;
+        var latestEpochEmission = emissionHistory.Count > 0 ? emissionHistory[0].ComputorEmission : 0m;
+        var supplyCapProgress = circulatingSupply / MaxSupply * 100m;
 
         return new SupplyDashboardDto(
             circulatingSupply,
+            totalEmitted,
             totalBurned,
             latestEpochEmission,
+            epochCount,
             snapshotEpoch,
+            MaxSupply,
+            supplyCapProgress,
             emissionHistory,
             burnHistory
         );

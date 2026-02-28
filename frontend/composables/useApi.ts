@@ -922,9 +922,18 @@ interface RichListDto {
 }
 
 // Supply dashboard
+interface EmissionDonationDto {
+  address: string
+  label: string | null
+  amount: number
+}
+
 interface EmissionDataPointDto {
   epoch: number
-  totalEmission: number
+  computorEmission: number
+  arbRevenue: number
+  donations: EmissionDonationDto[]
+  donationTotal: number
   computorCount: number
 }
 
@@ -937,9 +946,13 @@ interface BurnDataPointDto {
 
 interface SupplyDashboardDto {
   circulatingSupply: number
+  totalEmitted: number
   totalBurned: number
   latestEpochEmission: number
+  epochCount: number
   snapshotEpoch: number
+  supplyCap: number
+  supplyCapProgress: number
   emissionHistory: EmissionDataPointDto[]
   burnHistory: BurnDataPointDto[]
 }
