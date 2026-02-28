@@ -1569,11 +1569,11 @@ public class ClickHouseQueryService : IDisposable
             return result;
         }, ct);
 
-        // Query 4: Epoch count
+        // Query 4: Latest epoch number (= total epochs emitted, each producing 1T QU)
         var epochCountTask = Task.Run(async () =>
         {
             await using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT count(DISTINCT epoch) FROM computor_emissions";
+            cmd.CommandText = "SELECT max(epoch) FROM epoch_meta";
             return Convert.ToUInt32(await cmd.ExecuteScalarAsync(ct));
         }, ct);
 

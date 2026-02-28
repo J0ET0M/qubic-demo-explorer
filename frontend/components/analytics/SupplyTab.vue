@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Coins, Flame, Pickaxe, TrendingUp, Target, Hash } from 'lucide-vue-next'
+import { Coins, Flame, Pickaxe, Target, Hash } from 'lucide-vue-next'
 
 const api = useApi()
 const { formatVolume } = useFormatting()
@@ -84,24 +84,12 @@ const donationRecipients = computed(() => {
         </div>
         <div class="card-elevated text-center">
           <div class="flex items-center justify-center gap-2 mb-2">
-            <TrendingUp class="h-4 w-4 text-success" />
-          </div>
-          <div class="text-2xl font-bold text-success">{{ formatVolume(supply.totalEmitted) }} QU</div>
-          <div class="text-xs text-foreground-muted uppercase mt-1">Total Emitted</div>
-          <div class="text-xs text-foreground-muted mt-0.5">{{ supply.epochCount }} epochs</div>
-        </div>
-        <div class="card-elevated text-center">
-          <div class="flex items-center justify-center gap-2 mb-2">
             <Flame class="h-4 w-4 text-destructive" />
           </div>
           <div class="text-2xl font-bold text-destructive">{{ formatVolume(supply.totalBurned) }} QU</div>
           <div class="text-xs text-foreground-muted uppercase mt-1">Total Burned</div>
           <div class="text-xs text-foreground-muted mt-0.5">{{ burnRate.toFixed(1) }}% of emitted</div>
         </div>
-      </div>
-
-      <!-- Summary Cards - Row 2 -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="card-elevated text-center">
           <div class="flex items-center justify-center gap-2 mb-2">
             <Pickaxe class="h-4 w-4 text-success" />
@@ -110,6 +98,10 @@ const donationRecipients = computed(() => {
           <div class="text-xs text-foreground-muted uppercase mt-1">Latest Epoch Emission</div>
           <div class="text-xs text-foreground-muted mt-0.5">~{{ inflationRate.toFixed(3) }}% per epoch</div>
         </div>
+      </div>
+
+      <!-- Summary Cards - Row 2 -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="card-elevated text-center">
           <div class="flex items-center justify-center gap-2 mb-2">
             <Target class="h-4 w-4 text-warning" />
@@ -131,7 +123,7 @@ const donationRecipients = computed(() => {
             <Hash class="h-4 w-4 text-foreground-muted" />
           </div>
           <div class="text-2xl font-bold">{{ supply.epochCount }}</div>
-          <div class="text-xs text-foreground-muted uppercase mt-1">Total Epochs</div>
+          <div class="text-xs text-foreground-muted uppercase mt-1">Epochs</div>
           <div class="text-xs text-foreground-muted mt-0.5">1T QU emitted per epoch</div>
         </div>
       </div>
