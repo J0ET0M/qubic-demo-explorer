@@ -762,6 +762,21 @@ public static class ClickHouseSchema
         TTL toDateTime(sent_at) + INTERVAL 7 DAY
         """,
 
+        // Per-epoch emission breakdown (computed once per completed epoch, immutable)
+        // Stores: computor total, ARB revenue, and each donation recipient amount
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.epoch_emission_stats (
+            epoch UInt32,
+            computor_emission Decimal(38, 0),
+            computor_count UInt16,
+            arb_revenue Decimal(38, 0),
+            donation_total Decimal(38, 0),
+            donations String DEFAULT '[]',
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        ORDER BY epoch
+        """,
+
         // Qearn per-epoch stats (computed once per epoch, immutable)
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.qearn_epoch_stats (

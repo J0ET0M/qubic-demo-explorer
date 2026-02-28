@@ -1484,23 +1484,9 @@ public class ClickHouseQueryService : IDisposable
     private static readonly decimal MaxSupply = Qubic.Core.QubicConstants.MaxSupply;
     private static readonly string ArbAddress = Qubic.Core.QubicConstants.ArbitratorIdentity;
 
-    public async Task<SupplyDashboardDto> GetSupplyDashboardAsync(
-        List<BobProxyService.RevenueDonationEntry> donationTable,
-        CancellationToken ct = default)
+    public async Task<SupplyDashboardDto> GetSupplyDashboardAsync(CancellationToken ct = default)
     {
-        // Build the set of donation target addresses from the GQMPROP table
-        var donationAddresses = donationTable
-            .Select(d => d.Address)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        // All addresses we want to look for at emission ticks: ARB + donation recipients
-        var targetAddresses = new HashSet<string>(donationAddresses, StringComparer.OrdinalIgnoreCase)
-        {
-            ArbAddress
-        };
-        var targetAddressesIn = string.Join("', '", targetAddresses);
-
-        // Query 1: Circulating supply from latest spectrum import
+        // All queries read from pre-computed tables — no heavy on-the-fly computation
         var supplyTask = Task.Run(async () =>
         {
             await using var cmd = _connection.CreateCommand();
@@ -1515,61 +1501,34 @@ public class ClickHouseQueryService : IDisposable
             return ((uint)0, 0m);
         }, ct);
 
-        // Query 2: Computor emission totals per epoch
+        // Read persisted emission breakdown (last 50 epochs)
         var emissionTask = Task.Run(async () =>
         {
             await using var cmd = _connection.CreateCommand();
             cmd.CommandText = @"
-                SELECT epoch, sum(emission_amount) as total_emission, count() as computor_count
-                FROM computor_emissions
-                GROUP BY epoch
+                SELECT epoch, computor_emission, computor_count, arb_revenue, donation_total, donations
+                FROM epoch_emission_stats FINAL
                 ORDER BY epoch DESC
                 LIMIT 50";
-            var items = new List<(uint Epoch, decimal ComputorEmission, int ComputorCount)>();
+            var items = new List<EmissionDataPointDto>();
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                items.Add((
+                var donationsJson = reader.GetString(5);
+                var donations = DeserializeDonations(donationsJson);
+
+                items.Add(new EmissionDataPointDto(
                     Convert.ToUInt32(reader.GetValue(0)),
                     ToDecimal(reader.GetValue(1)),
+                    ToDecimal(reader.GetValue(3)),
+                    donations,
+                    ToDecimal(reader.GetValue(4)),
                     Convert.ToInt32(reader.GetValue(2))
                 ));
             }
             return items;
         }, ct);
 
-        // Query 3: ARB + donation transfers at emission ticks
-        // Only look for the specific addresses from the GQMPROP revenue donation table + ARB
-        var emissionTransfersTask = Task.Run(async () =>
-        {
-            await using var cmd = _connection.CreateCommand();
-            cmd.CommandText = $@"
-                SELECT l.epoch, l.dest_address, sum(l.amount) as total_amount
-                FROM logs l
-                WHERE l.tick_number IN (
-                    SELECT emission_tick FROM emission_imports ORDER BY epoch DESC LIMIT 50
-                )
-                AND l.source_address = '{AddressLabelService.BurnAddress}'
-                AND l.log_type = 0
-                AND l.dest_address IN ('{targetAddressesIn}')
-                GROUP BY l.epoch, l.dest_address
-                ORDER BY l.epoch DESC, total_amount DESC";
-            // epoch -> list of (address, amount)
-            var result = new Dictionary<uint, List<(string Address, decimal Amount)>>();
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-            {
-                var epoch = Convert.ToUInt32(reader.GetValue(0));
-                var address = reader.GetString(1);
-                var amount = ToDecimal(reader.GetValue(2));
-                if (!result.ContainsKey(epoch))
-                    result[epoch] = new List<(string, decimal)>();
-                result[epoch].Add((address, amount));
-            }
-            return result;
-        }, ct);
-
-        // Query 4: Latest epoch number (= total epochs emitted, each producing 1T QU)
         var epochCountTask = Task.Run(async () =>
         {
             await using var cmd = _connection.CreateCommand();
@@ -1577,7 +1536,6 @@ public class ClickHouseQueryService : IDisposable
             return Convert.ToUInt32(await cmd.ExecuteScalarAsync(ct));
         }, ct);
 
-        // Query 5: Burn history
         var burnHistTask = Task.Run(async () =>
         {
             await using var cmd = _connection.CreateCommand();
@@ -1600,58 +1558,14 @@ public class ClickHouseQueryService : IDisposable
             return items;
         }, ct);
 
-        await Task.WhenAll(supplyTask, emissionTask, emissionTransfersTask, epochCountTask, burnHistTask);
+        await Task.WhenAll(supplyTask, emissionTask, epochCountTask, burnHistTask);
 
         var (snapshotEpoch, circulatingSupply) = supplyTask.Result;
-        var emissionRaw = emissionTask.Result;
-        var transfersMap = emissionTransfersTask.Result;
+        var emissionHistory = emissionTask.Result;
         var epochCount = epochCountTask.Result;
         var burnHistory = burnHistTask.Result;
 
-        // Build emission history with full breakdown
-        var emissionHistory = new List<EmissionDataPointDto>();
-        foreach (var (epoch, computorEmission, computorCount) in emissionRaw)
-        {
-            var arbRevenue = 0m;
-            var donations = new List<EmissionDonationDto>();
-
-            if (transfersMap.TryGetValue(epoch, out var transfers))
-            {
-                foreach (var (address, amount) in transfers)
-                {
-                    if (string.Equals(address, ArbAddress, StringComparison.OrdinalIgnoreCase))
-                    {
-                        arbRevenue = amount;
-                    }
-                    else if (donationAddresses.Contains(address))
-                    {
-                        var label = _labelService.GetLabel(address);
-                        donations.Add(new EmissionDonationDto(address, label, amount));
-                    }
-                }
-            }
-
-            var donationTotal = donations.Sum(d => d.Amount);
-
-            // Fallback: if we don't have emission tick data, compute remainder
-            if (!transfersMap.ContainsKey(epoch))
-            {
-                arbRevenue = IssuanceRatePerEpoch - computorEmission;
-            }
-
-            emissionHistory.Add(new EmissionDataPointDto(
-                epoch,
-                computorEmission,
-                arbRevenue,
-                donations,
-                donationTotal,
-                computorCount
-            ));
-        }
-
-        // Total emitted = number of epochs * 1T per epoch
         var totalEmitted = epochCount * IssuanceRatePerEpoch;
-        // Total burned = total emitted - circulating supply
         var totalBurned = totalEmitted - circulatingSupply;
         var latestEpochEmission = emissionHistory.Count > 0 ? emissionHistory[0].ComputorEmission : 0m;
         var supplyCapProgress = circulatingSupply / MaxSupply * 100m;
@@ -1668,6 +1582,139 @@ public class ClickHouseQueryService : IDisposable
             emissionHistory,
             burnHistory
         );
+    }
+
+    private static List<EmissionDonationDto> DeserializeDonations(string json)
+    {
+        if (string.IsNullOrEmpty(json) || json == "[]")
+            return new List<EmissionDonationDto>();
+        try
+        {
+            var items = System.Text.Json.JsonSerializer.Deserialize<List<EmissionDonationDto>>(json);
+            return items ?? new List<EmissionDonationDto>();
+        }
+        catch
+        {
+            return new List<EmissionDonationDto>();
+        }
+    }
+
+    /// <summary>
+    /// Backfill epoch_emission_stats for all completed epochs that have emission data but no persisted stats.
+    /// Computes per-epoch: computor emission, ARB revenue, and individual donation amounts.
+    /// </summary>
+    public async Task<(int Backfilled, List<uint> Epochs)> BackfillEmissionStatsAsync(
+        List<BobProxyService.RevenueDonationEntry> donationTable,
+        CancellationToken ct = default)
+    {
+        var donationAddresses = donationTable
+            .Select(d => d.Address)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var targetAddresses = new HashSet<string>(donationAddresses, StringComparer.OrdinalIgnoreCase) { ArbAddress };
+        var targetAddressesIn = string.Join("', '", targetAddresses);
+
+        var currentEpoch = await GetCurrentEpochAsync(ct);
+        if (currentEpoch == null) return (0, new List<uint>());
+
+        // Get epochs that have emission data
+        await using var emissionCmd = _connection.CreateCommand();
+        emissionCmd.CommandText = "SELECT DISTINCT epoch FROM emission_imports ORDER BY epoch";
+        var emissionEpochs = new List<uint>();
+        await using (var reader = await emissionCmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                emissionEpochs.Add(reader.GetFieldValue<uint>(0));
+        }
+
+        // Get already-persisted epochs
+        await using var existingCmd = _connection.CreateCommand();
+        existingCmd.CommandText = "SELECT epoch FROM epoch_emission_stats";
+        var persisted = new HashSet<uint>();
+        await using (var reader = await existingCmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                persisted.Add(reader.GetFieldValue<uint>(0));
+        }
+
+        var backfilled = new List<uint>();
+
+        foreach (var epoch in emissionEpochs)
+        {
+            if (ct.IsCancellationRequested) break;
+            if (persisted.Contains(epoch)) continue;
+            // Skip current epoch — it's still in progress
+            if (epoch >= currentEpoch.Value) continue;
+
+            // Get computor emission total
+            await using var compCmd = _connection.CreateCommand();
+            compCmd.CommandText = $@"
+                SELECT sum(emission_amount), count()
+                FROM computor_emissions
+                WHERE epoch = {epoch}";
+            decimal computorEmission = 0;
+            int computorCount = 0;
+            await using (var reader = await compCmd.ExecuteReaderAsync(ct))
+            {
+                if (await reader.ReadAsync(ct))
+                {
+                    computorEmission = ToDecimal(reader.GetValue(0));
+                    computorCount = Convert.ToInt32(reader.GetValue(1));
+                }
+            }
+
+            // Get ARB + donation transfers from emission tick
+            await using var transferCmd = _connection.CreateCommand();
+            transferCmd.CommandText = $@"
+                SELECT l.dest_address, sum(l.amount) as total_amount
+                FROM logs l
+                WHERE l.tick_number IN (
+                    SELECT emission_tick FROM emission_imports WHERE epoch = {epoch}
+                )
+                AND l.source_address = '{AddressLabelService.BurnAddress}'
+                AND l.log_type = 0
+                AND l.dest_address IN ('{targetAddressesIn}')
+                GROUP BY l.dest_address";
+
+            var arbRevenue = 0m;
+            var donations = new List<EmissionDonationDto>();
+
+            await using (var reader = await transferCmd.ExecuteReaderAsync(ct))
+            {
+                while (await reader.ReadAsync(ct))
+                {
+                    var address = reader.GetString(0);
+                    var amount = ToDecimal(reader.GetValue(1));
+                    if (string.Equals(address, ArbAddress, StringComparison.OrdinalIgnoreCase))
+                        arbRevenue = amount;
+                    else if (donationAddresses.Contains(address))
+                    {
+                        var label = _labelService.GetLabel(address);
+                        donations.Add(new EmissionDonationDto(address, label, amount));
+                    }
+                }
+            }
+
+            // Fallback if no emission tick logs found
+            if (arbRevenue == 0 && donations.Count == 0)
+                arbRevenue = IssuanceRatePerEpoch - computorEmission;
+
+            var donationTotal = donations.Sum(d => d.Amount);
+            var donationsJson = System.Text.Json.JsonSerializer.Serialize(donations);
+            var escapedJson = donationsJson.Replace("'", "\\'");
+
+            await using var insertCmd = _connection.CreateCommand();
+            insertCmd.CommandText = $@"
+                INSERT INTO epoch_emission_stats
+                (epoch, computor_emission, computor_count, arb_revenue, donation_total, donations)
+                VALUES
+                ({epoch}, {computorEmission}, {computorCount}, {arbRevenue}, {donationTotal}, '{escapedJson}')";
+
+            await insertCmd.ExecuteNonQueryAsync(ct);
+            backfilled.Add(epoch);
+        }
+
+        return (backfilled.Count, backfilled);
     }
 
     /// <summary>

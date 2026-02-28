@@ -83,11 +83,7 @@ public class StatsController : ControllerBase
         var result = await _cache.GetOrSetAsync(
             "stats:supply",
             AnalyticsCacheService.SupplyDashboardTtl,
-            async () =>
-            {
-                var donationTable = await _bobProxy.GetRevenueDonationTableAsync(ct);
-                return await _queryService.GetSupplyDashboardAsync(donationTable, ct);
-            });
+            () => _queryService.GetSupplyDashboardAsync(ct));
         return Ok(result);
     }
 
@@ -319,6 +315,15 @@ public class StatsController : ControllerBase
     public async Task<IActionResult> BackfillQearnStats(CancellationToken ct = default)
     {
         var (backfilled, epochs) = await _queryService.BackfillQearnEpochStatsAsync(ct);
+        return Ok(new { success = true, backfilled, epochs });
+    }
+
+    [HttpPost("emission/backfill")]
+    [AdminApiKey]
+    public async Task<IActionResult> BackfillEmissionStats(CancellationToken ct = default)
+    {
+        var donationTable = await _bobProxy.GetRevenueDonationTableAsync(ct);
+        var (backfilled, epochs) = await _queryService.BackfillEmissionStatsAsync(donationTable, ct);
         return Ok(new { success = true, backfilled, epochs });
     }
 
