@@ -121,7 +121,7 @@ dotnet run
 
 # Production
 dotnet publish -c Release
-./bin/Release/net8.0/QubicExplorer.Indexer
+./bin/Release/net10.0/QubicExplorer.Indexer
 ```
 
 ## Docker

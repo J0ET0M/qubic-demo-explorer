@@ -13,7 +13,7 @@ A blockchain explorer for Qubic that indexes data from a Bob node via the [Qubic
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   Bob Node      │────>│   Indexer        │────>│   ClickHouse    │<────│   API Server    │
-│   (Qubic.Bob)   │     │   (.NET 8)      │     │                 │     │   (.NET 8)      │
+│   (Qubic.Bob)   │     │   (.NET 10)      │     │                 │     │   (.NET 10)      │
 └─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
                                                                                │
                                                                                v
@@ -79,7 +79,7 @@ The explorer will be available at:
 ### Development Setup
 
 #### Prerequisites
-- .NET 8 SDK
+- .NET 10 SDK
 - Node.js 20+
 - Docker (for ClickHouse)
 
@@ -201,7 +201,7 @@ See [docker/clickhouse/init.sql](docker/clickhouse/init.sql) for the full schema
 
 ## Technology Stack
 
-- **Backend**: .NET 8, ASP.NET Core, SignalR
+- **Backend**: .NET 10, ASP.NET Core, SignalR
 - **Bob Client**: [Qubic.Bob](https://www.nuget.org/packages/Qubic.Bob) (WebSocket + HTTP RPC)
 - **Database**: ClickHouse
 - **Frontend**: Vue 3, Nuxt 3, TypeScript, Tailwind CSS
@@ -209,7 +209,7 @@ See [docker/clickhouse/init.sql](docker/clickhouse/init.sql) for the full schema
 
 ## Why This Stack?
 
-### .NET 8 + Qubic.Bob
+### .NET 10 + Qubic.Bob
 
 The [Qubic.Bob](https://www.nuget.org/packages/Qubic.Bob) NuGet package provides a typed WebSocket client for Bob's JSON-RPC interface — managed subscriptions (tick stream, new ticks), RPC query methods, multi-node failover, and automatic reconnection. The explorer uses `BobWebSocketClient` for all communication with the Qubic network, keeping the application code focused on indexing and serving data rather than connection management.
 

@@ -203,7 +203,7 @@ dotnet watch run
 
 # Production
 dotnet publish -c Release
-./bin/Release/net8.0/QubicExplorer.Api
+./bin/Release/net10.0/QubicExplorer.Api
 ```
 
 ## Docker
