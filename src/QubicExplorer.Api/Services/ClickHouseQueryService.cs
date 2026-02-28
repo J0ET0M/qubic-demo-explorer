@@ -1718,6 +1718,108 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
+    /// Compute and persist emission stats for a single epoch.
+    /// Returns true if stats were persisted (or already existed).
+    /// </summary>
+    public async Task<bool> PersistSingleEpochEmissionStatsAsync(
+        uint epoch,
+        List<BobProxyService.RevenueDonationEntry> donationTable,
+        CancellationToken ct = default)
+    {
+        // Check if already persisted
+        await using var checkCmd = _connection.CreateCommand();
+        checkCmd.CommandText = $"SELECT count() FROM epoch_emission_stats WHERE epoch = {epoch}";
+        var existing = Convert.ToInt64(await checkCmd.ExecuteScalarAsync(ct));
+        if (existing > 0)
+        {
+            _logger.LogDebug("Emission stats already persisted for epoch {Epoch}", epoch);
+            return true;
+        }
+
+        var donationAddresses = donationTable
+            .Select(d => d.Address)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var targetAddresses = new HashSet<string>(donationAddresses, StringComparer.OrdinalIgnoreCase) { ArbAddress };
+        var targetAddressesIn = string.Join("', '", targetAddresses);
+
+        // Get computor emission total
+        await using var compCmd = _connection.CreateCommand();
+        compCmd.CommandText = $@"
+            SELECT sum(emission_amount), count()
+            FROM computor_emissions
+            WHERE epoch = {epoch}";
+        decimal computorEmission = 0;
+        int computorCount = 0;
+        await using (var reader = await compCmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct))
+            {
+                computorEmission = ToDecimal(reader.GetValue(0));
+                computorCount = Convert.ToInt32(reader.GetValue(1));
+            }
+        }
+
+        if (computorCount == 0)
+        {
+            _logger.LogWarning("No computor emissions found for epoch {Epoch}, skipping emission stats", epoch);
+            return false;
+        }
+
+        // Get ARB + donation transfers from emission tick
+        await using var transferCmd = _connection.CreateCommand();
+        transferCmd.CommandText = $@"
+            SELECT l.dest_address, sum(l.amount) as total_amount
+            FROM logs l
+            WHERE l.tick_number IN (
+                SELECT emission_tick FROM emission_imports WHERE epoch = {epoch}
+            )
+            AND l.source_address = '{AddressLabelService.BurnAddress}'
+            AND l.log_type = 0
+            AND l.dest_address IN ('{targetAddressesIn}')
+            GROUP BY l.dest_address";
+
+        var arbRevenue = 0m;
+        var donations = new List<EmissionDonationDto>();
+
+        await using (var reader = await transferCmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                var address = reader.GetString(0);
+                var amount = ToDecimal(reader.GetValue(1));
+                if (string.Equals(address, ArbAddress, StringComparison.OrdinalIgnoreCase))
+                    arbRevenue = amount;
+                else if (donationAddresses.Contains(address))
+                {
+                    var label = _labelService.GetLabel(address);
+                    donations.Add(new EmissionDonationDto(address, label, amount));
+                }
+            }
+        }
+
+        // Fallback if no emission tick logs found
+        if (arbRevenue == 0 && donations.Count == 0)
+            arbRevenue = IssuanceRatePerEpoch - computorEmission;
+
+        var donationTotal = donations.Sum(d => d.Amount);
+        var donationsJson = System.Text.Json.JsonSerializer.Serialize(donations);
+        var escapedJson = donationsJson.Replace("'", "\\'");
+
+        await using var insertCmd = _connection.CreateCommand();
+        insertCmd.CommandText = $@"
+            INSERT INTO epoch_emission_stats
+            (epoch, computor_emission, computor_count, arb_revenue, donation_total, donations)
+            VALUES
+            ({epoch}, {computorEmission}, {computorCount}, {arbRevenue}, {donationTotal}, '{escapedJson}')";
+
+        await insertCmd.ExecuteNonQueryAsync(ct);
+        _logger.LogInformation("Persisted emission stats for epoch {Epoch}: computor={Computor}, arb={Arb}, donations={Donations}",
+            epoch, computorEmission, arbRevenue, donationTotal);
+        return true;
+    }
+
+    /// <summary>
     /// Get address activity range (first seen / last seen)
     /// </summary>
     public async Task<AddressActivityRangeDto> GetAddressActivityRangeAsync(

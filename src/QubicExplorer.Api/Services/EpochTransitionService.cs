@@ -251,6 +251,9 @@ public class EpochTransitionService : BackgroundService
 
             // Capture emissions for this epoch
             await CaptureEmissionsAsync(epoch, epochMeta.EndTick, queryService, ct);
+
+            // Persist emission breakdown (ARB + donations) for this epoch
+            await PersistEmissionStatsAsync(epoch, queryService, ct);
         }
         else if (epochMeta != null && epochMeta.IsComplete)
         {
@@ -259,6 +262,9 @@ public class EpochTransitionService : BackgroundService
             {
                 await CaptureEmissionsAsync(epoch, epochMeta.EndTick, queryService, ct);
             }
+
+            // Persist emission breakdown if not yet done
+            await PersistEmissionStatsAsync(epoch, queryService, ct);
         }
     }
 
@@ -363,6 +369,27 @@ public class EpochTransitionService : BackgroundService
 
         _logger.LogInformation("Backfill complete for epoch {Epoch}: inserted {Count} logs", epoch, totalInserted);
         return true;
+    }
+
+    /// <summary>
+    /// Persists the emission breakdown (computor, ARB, donations) for a completed epoch.
+    /// Queries the GQMPROP donation table and delegates to ClickHouseQueryService.
+    /// </summary>
+    private async Task PersistEmissionStatsAsync(uint epoch, ClickHouseQueryService queryService, CancellationToken ct)
+    {
+        try
+        {
+            var donationTable = await _bobProxy.GetRevenueDonationTableAsync(ct);
+            var persisted = await queryService.PersistSingleEpochEmissionStatsAsync(epoch, donationTable, ct);
+            if (persisted)
+                _logger.LogInformation("Emission stats persisted for epoch {Epoch}", epoch);
+            else
+                _logger.LogWarning("Could not persist emission stats for epoch {Epoch} (no computor data yet?)", epoch);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to persist emission stats for epoch {Epoch}", epoch);
+        }
     }
 
     private void SetCriticalError(uint epoch, string message)
