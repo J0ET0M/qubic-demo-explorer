@@ -202,10 +202,20 @@ public class ComputorRevenueService : IDisposable
             var inputDataHex = reader.GetString(0);
             if (string.IsNullOrEmpty(inputDataHex)) continue;
 
-            var dataLen = Math.Min(inputDataHex.Length, minHexLen);
-            var data = new byte[dataLen / 2];
-            for (int i = 0; i < data.Length; i++)
-                data[i] = Convert.ToByte(inputDataHex.Substring(i * 2, 2), 16);
+            // Strip 0x prefix if present
+            var hex = inputDataHex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                ? inputDataHex[2..] : inputDataHex;
+            if (hex.Length < minHexLen) continue;
+
+            byte[] data;
+            try
+            {
+                data = Convert.FromHexString(hex[..minHexLen]);
+            }
+            catch (FormatException)
+            {
+                continue;
+            }
 
             for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
             {
