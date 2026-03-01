@@ -485,4 +485,33 @@ public class StatsController : ControllerBase
             () => _queryService.GetBurnStatsExtendedAsync(historyLimit, from, to, ct));
         return Ok(result);
     }
+
+    // =====================================================
+    // COMPUTOR REVENUE
+    // =====================================================
+
+    [HttpGet("computor-revenue")]
+    public async Task<IActionResult> GetComputorRevenue(CancellationToken ct = default)
+    {
+        var epoch = await _queryService.GetCurrentEpochAsync(ct);
+        if (epoch == null) return NotFound("No epoch data available");
+
+        var result = await _cache.GetOrSetAsync(
+            $"stats:computor-revenue:{epoch}",
+            AnalyticsCacheService.ComputorRevenueTtl,
+            () => _queryService.GetComputorRevenueAsync(epoch.Value, ct));
+        if (result == null) return NotFound("No computor revenue data available for current epoch");
+        return Ok(result);
+    }
+
+    [HttpGet("computor-revenue/{epoch:int}")]
+    public async Task<IActionResult> GetComputorRevenueByEpoch(uint epoch, CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            $"stats:computor-revenue:{epoch}",
+            AnalyticsCacheService.ComputorRevenueTtl,
+            () => _queryService.GetComputorRevenueAsync(epoch, ct));
+        if (result == null) return NotFound("No computor revenue data available for this epoch");
+        return Ok(result);
+    }
 }

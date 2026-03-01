@@ -1,6 +1,7 @@
 using System.Data;
 using System.Numerics;
 using System.Text;
+using System.Text.Json;
 using ClickHouse.Client.ADO;
 using Microsoft.Extensions.Options;
 using Qubic.Core;
@@ -4810,6 +4811,45 @@ public class ClickHouseQueryService : IDisposable
             );
         }
         return (0, 0);
+    }
+
+    // =====================================================
+    // COMPUTOR REVENUE (read from Analytics-persisted data)
+    // =====================================================
+
+    /// <summary>
+    /// Read persisted computor revenue for a given epoch from the computor_revenue table.
+    /// Data is computed and persisted by the Analytics service's ComputorRevenueService.
+    /// </summary>
+    public async Task<ComputorRevenueDto?> GetComputorRevenueAsync(uint epoch, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT epoch, computor_count, issuance_rate,
+                   tx_quorum_score, vote_quorum_score, mining_quorum_score,
+                   total_computor_revenue, arb_revenue, computors
+            FROM computor_revenue FINAL
+            WHERE epoch = {epoch}";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return null;
+
+        var computorsJson = reader.GetString(8);
+        var computors = JsonSerializer.Deserialize<ComputorRevenueEntryDto[]>(computorsJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+
+        return new ComputorRevenueDto(
+            Epoch: reader.GetFieldValue<uint>(0),
+            ComputorCount: reader.GetFieldValue<ushort>(1),
+            IssuanceRate: reader.GetFieldValue<long>(2),
+            TxQuorumScore: ToUInt64(reader.GetValue(3)),
+            VoteQuorumScore: ToUInt64(reader.GetValue(4)),
+            MiningQuorumScore: ToUInt64(reader.GetValue(5)),
+            TotalComputorRevenue: reader.GetFieldValue<long>(6),
+            ArbRevenue: reader.GetFieldValue<long>(7),
+            Computors: computors
+        );
     }
 
     /// <summary>

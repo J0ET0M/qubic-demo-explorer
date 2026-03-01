@@ -800,3 +800,28 @@ public record CcfStatsDto(
     uint ProposalFee,
     List<CcfEpochSpendingDto> SpendingByEpoch
 );
+
+public record ComputorRevenueEntryDto(
+    ushort ComputorIndex,
+    string Address,
+    string? Label,
+    ulong TxScore,
+    ulong VoteScore,
+    ulong MiningScore,
+    ulong TxFactor,
+    ulong VoteFactor,
+    ulong MiningFactor,
+    long Revenue
+);
+
+public record ComputorRevenueDto(
+    uint Epoch,
+    int ComputorCount,
+    long IssuanceRate,
+    ulong TxQuorumScore,
+    ulong VoteQuorumScore,
+    ulong MiningQuorumScore,
+    long TotalComputorRevenue,
+    long ArbRevenue,
+    ComputorRevenueEntryDto[] Computors
+);

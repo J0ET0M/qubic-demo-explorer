@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Users, PieChart, Building2, Pickaxe, Flame, Cpu, TrendingUp, Network, Crown, Coins, Landmark } from 'lucide-vue-next'
+import { BarChart3, Users, PieChart, Building2, Pickaxe, Flame, Cpu, TrendingUp, Network, Crown, Coins, Landmark, Monitor } from 'lucide-vue-next'
 import OverviewTab from '~/components/analytics/OverviewTab.vue'
 
 useHead({ title: 'Analytics - QLI Explorer' })
@@ -16,6 +16,7 @@ const subPages = [
   { label: 'Top Addresses', description: 'Highest volume addresses and activity rankings', path: '/analytics/top', icon: TrendingUp },
   { label: 'Flow Visualization', description: 'Sankey diagrams of miner emission flow paths', path: '/analytics/miner-flow', icon: Network },
   { label: 'CCF', description: 'Proposals, voting, transfers, and subscription tracking', path: '/analytics/ccf', icon: Landmark },
+  { label: 'Computor Revenue', description: 'Per-computor TX, vote, and mining scores with revenue breakdown', path: '/analytics/computors', icon: Monitor },
 ]
 </script>
 

@@ -66,6 +66,9 @@ builder.Services.AddSingleton<ComputorFlowService>();
 // CustomFlowTrackingService - user-initiated flow tracking
 builder.Services.AddSingleton<CustomFlowTrackingService>();
 
+// ComputorRevenueService - computes per-computor revenue from scores
+builder.Services.AddSingleton<ComputorRevenueService>();
+
 // Background services
 builder.Services.AddHostedService<AnalyticsSnapshotService>();
 

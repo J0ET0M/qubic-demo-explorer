@@ -338,6 +338,10 @@ export const useApi = () => {
   const getCcfStats = () =>
     fetchApi<CcfStatsDto>('/api/stats/ccf')
 
+  // Computor revenue
+  const getComputorRevenue = (epoch?: number) =>
+    fetchApi<ComputorRevenueDto>(epoch ? `/api/stats/computor-revenue/${epoch}` : '/api/stats/computor-revenue')
+
   // Miner/Computor Flow
   const getMinerFlowStats = (limit = 500, from?: string, to?: string) => {
     const params = new URLSearchParams({ limit: String(limit) })
@@ -442,6 +446,7 @@ export const useApi = () => {
     getBurnStatsExtended,
     getQearnStats,
     getCcfStats,
+    getComputorRevenue,
     getMinerFlowStats,
     getComputors,
     getFlowVisualization,
@@ -968,6 +973,32 @@ interface CcfStatsDto {
   totalTransferCount: number
   proposalFee: number
   spendingByEpoch: CcfEpochSpendingDto[]
+}
+
+// Computor revenue
+interface ComputorRevenueEntryDto {
+  computorIndex: number
+  address: string
+  label: string | null
+  txScore: number
+  voteScore: number
+  miningScore: number
+  txFactor: number
+  voteFactor: number
+  miningFactor: number
+  revenue: number
+}
+
+interface ComputorRevenueDto {
+  epoch: number
+  computorCount: number
+  issuanceRate: number
+  txQuorumScore: number
+  voteQuorumScore: number
+  miningQuorumScore: number
+  totalComputorRevenue: number
+  arbRevenue: number
+  computors: ComputorRevenueEntryDto[]
 }
 
 // Rich list

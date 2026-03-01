@@ -55,6 +55,9 @@ public class AnalyticsCacheService
     // Cache durations - CCF
     public static readonly TimeSpan CcfStatsTtl = TimeSpan.FromMinutes(10);
 
+    // Cache durations - computor revenue
+    public static readonly TimeSpan ComputorRevenueTtl = TimeSpan.FromMinutes(5);
+
     // Cache durations - miner flow (static per epoch)
     public static readonly TimeSpan MinerFlowStatsTtl = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan MinerFlowVisualizationTtl = TimeSpan.FromHours(1);

@@ -85,6 +85,9 @@ public class AnalyticsSnapshotService : BackgroundService
                     var bobProxy = scope.ServiceProvider.GetRequiredService<BobProxyService>();
                     await PersistCcfTransfersAsync(queryService, bobProxy, currentEpoch.Value, stoppingToken);
 
+                    // Compute computor revenue for current epoch
+                    await ComputeComputorRevenueAsync(scope, currentEpoch.Value, stoppingToken);
+
                     // Process custom flow tracking jobs
                     var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
                     await customFlowService.ProcessPendingJobsAsync(stoppingToken);
@@ -609,6 +612,19 @@ public class AnalyticsSnapshotService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error persisting CCF transfers");
+        }
+    }
+
+    private async Task ComputeComputorRevenueAsync(IServiceScope scope, uint currentEpoch, CancellationToken ct)
+    {
+        try
+        {
+            var revenueService = scope.ServiceProvider.GetRequiredService<ComputorRevenueService>();
+            await revenueService.ComputeAndPersistAsync(currentEpoch, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error computing computor revenue for epoch {Epoch}", currentEpoch);
         }
     }
 }

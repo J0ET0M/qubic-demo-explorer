@@ -824,6 +824,24 @@ public static class ClickHouseSchema
         PARTITION BY epoch
         ORDER BY (tick, destination, period_index)
         """,
+
+        // Per-epoch computor revenue (recomputed periodically for current epoch)
+        // Stores summary + JSON array of per-computor scores/factors/revenue
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.computor_revenue (
+            epoch UInt32,
+            computor_count UInt16,
+            issuance_rate Int64,
+            tx_quorum_score UInt64,
+            vote_quorum_score UInt64,
+            mining_quorum_score UInt64,
+            total_computor_revenue Int64,
+            arb_revenue Int64,
+            computors String DEFAULT '[]',
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        ORDER BY epoch
+        """,
     ];
 
     /// <summary>
