@@ -18,6 +18,29 @@ const activeCount = computed(() =>
   revenueData.value?.computors.filter(c => c.revenue > 0).length ?? 0
 )
 
+// Max possible revenue per computor
+const maxRevenue = computed(() =>
+  revenueData.value ? Math.floor(revenueData.value.issuanceRate / revenueData.value.computorCount) : 0
+)
+
+// Revenue stats: min, max, average (only among active computors)
+const revenueStats = computed(() => {
+  const active = revenueData.value?.computors.filter(c => c.revenue > 0) ?? []
+  if (active.length === 0) return { min: 0, max: 0, avg: 0, avgPct: 0 }
+  const revenues = active.map(c => c.revenue)
+  const min = Math.min(...revenues)
+  const max = Math.max(...revenues)
+  const avg = revenues.reduce((a, b) => a + b, 0) / revenues.length
+  const maxPossible = maxRevenue.value || 1
+  return { min, max, avg, avgPct: (avg / maxPossible) * 100 }
+})
+
+// Revenue percentage of max possible
+const revenuePct = (revenue: number) => {
+  const m = maxRevenue.value
+  return m > 0 ? ((revenue / m) * 100).toFixed(2) : '0.00'
+}
+
 // Factor as percentage
 const factorPct = (factor: number) => ((factor / 1024) * 100).toFixed(1)
 
@@ -111,6 +134,26 @@ const { truncateAddress } = useFormatting()
           </div>
         </div>
 
+        <!-- Revenue distribution -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div class="card-elevated text-center">
+            <div class="text-lg font-bold text-destructive">{{ formatAmount(revenueStats.min) }}</div>
+            <div class="text-xs text-foreground-muted">Min Revenue</div>
+          </div>
+          <div class="card-elevated text-center">
+            <div class="text-lg font-bold text-success">{{ formatAmount(revenueStats.max) }}</div>
+            <div class="text-xs text-foreground-muted">Max Revenue</div>
+          </div>
+          <div class="card-elevated text-center">
+            <div class="text-lg font-bold">{{ formatAmount(Math.round(revenueStats.avg)) }}</div>
+            <div class="text-xs text-foreground-muted">Avg Revenue ({{ revenueStats.avgPct.toFixed(2) }}%)</div>
+          </div>
+          <div class="card-elevated text-center">
+            <div class="text-lg font-bold text-foreground-muted">{{ formatAmount(maxRevenue) }}</div>
+            <div class="text-xs text-foreground-muted">Max Possible (100%)</div>
+          </div>
+        </div>
+
         <!-- Quorum scores -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div class="card-elevated text-center">
@@ -164,6 +207,7 @@ const { truncateAddress } = useFormatting()
               <th class="cursor-pointer select-none text-right" @click="toggleSort('voteFactor')">Vote %</th>
               <th class="cursor-pointer select-none text-right" @click="toggleSort('miningFactor')">Mining %</th>
               <th class="cursor-pointer select-none text-right" @click="toggleSort('revenue')">Revenue</th>
+              <th class="text-right">%</th>
             </tr>
           </thead>
           <tbody>
@@ -182,9 +226,10 @@ const { truncateAddress } = useFormatting()
               <td class="text-right font-mono text-xs" :class="factorClass(c.voteFactor)">{{ factorPct(c.voteFactor) }}%</td>
               <td class="text-right font-mono text-xs" :class="factorClass(c.miningFactor)">{{ factorPct(c.miningFactor) }}%</td>
               <td class="text-right font-bold">{{ formatAmount(c.revenue) }}</td>
+              <td class="text-right font-mono text-xs" :class="c.revenue > 0 ? 'text-success' : 'text-destructive'">{{ revenuePct(c.revenue) }}%</td>
             </tr>
             <tr v-if="paginatedComputors.length === 0">
-              <td colspan="10" class="text-center text-foreground-muted py-4">No matching computors</td>
+              <td colspan="11" class="text-center text-foreground-muted py-4">No matching computors</td>
             </tr>
           </tbody>
         </table>
