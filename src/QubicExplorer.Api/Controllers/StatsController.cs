@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using QubicExplorer.Api.Attributes;
 using QubicExplorer.Api.Services;
+using QubicExplorer.Shared.DTOs;
 
 namespace QubicExplorer.Api.Controllers;
 
@@ -325,6 +326,126 @@ public class StatsController : ControllerBase
         var donationTable = await _bobProxy.GetRevenueDonationTableAsync(ct);
         var (backfilled, epochs) = await _queryService.BackfillEmissionStatsAsync(donationTable, ct);
         return Ok(new { success = true, backfilled, epochs });
+    }
+
+    // =====================================================
+    // CCF (COMPUTOR CONTROLLED FUND) STATS
+    // =====================================================
+
+    [HttpGet("ccf")]
+    public async Task<IActionResult> GetCcfStats(CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            "stats:ccf",
+            AnalyticsCacheService.CcfStatsTtl,
+            () => BuildCcfStatsAsync(ct));
+        return Ok(result);
+    }
+
+    private async Task<CcfStatsDto> BuildCcfStatsAsync(CancellationToken ct)
+    {
+        // Parallel: persisted data from ClickHouse + live contract data from Bob
+        var transfersTask = _queryService.GetCcfTransfersAsync(ct);
+        var regularPaymentsTask = _queryService.GetCcfRegularPaymentsAsync(ct);
+        var spendingByEpochTask = _queryService.GetCcfSpendingByEpochAsync(ct);
+        var totalSpendingTask = _queryService.GetCcfTotalSpendingAsync(ct);
+        var proposalFeeTask = _bobProxy.GetCcfProposalFeeAsync(ct);
+
+        await Task.WhenAll(transfersTask, regularPaymentsTask, spendingByEpochTask,
+            totalSpendingTask, proposalFeeTask);
+
+        var transfers = await transfersTask;
+        var regularPayments = await regularPaymentsTask;
+        var spendingByEpoch = await spendingByEpochTask;
+        var (totalSpent, totalCount) = await totalSpendingTask;
+        var proposalFee = await proposalFeeTask;
+
+        // Fetch proposals from contract (active + past)
+        var activeProposals = await GetCcfProposalsAsync(active: true, ct);
+        var pastProposals = await GetCcfProposalsAsync(active: false, ct);
+
+        // Fetch active subscriptions from proposals that have them
+        var subscriptions = new List<CcfSubscriptionDto>();
+        foreach (var p in activeProposals.Concat(pastProposals))
+        {
+            var proposal = await _bobProxy.GetCcfProposalAsync(p.ProposalIndex, ct);
+            if (proposal?.HasActiveSubscription == true && proposal.Subscription is { } sub
+                && sub.Destination != null)
+            {
+                subscriptions.Add(new CcfSubscriptionDto(
+                    Destination: sub.Destination,
+                    Url: sub.Url,
+                    AmountPerPeriod: sub.AmountPerPeriod,
+                    NumberOfPeriods: sub.NumberOfPeriods,
+                    CurrentPeriod: sub.CurrentPeriod,
+                    WeeksPerPeriod: sub.WeeksPerPeriod,
+                    StartEpoch: sub.StartEpoch
+                ));
+            }
+        }
+
+        return new CcfStatsDto(
+            ActiveProposals: activeProposals,
+            PastProposals: pastProposals,
+            Transfers: transfers,
+            RegularPayments: regularPayments,
+            ActiveSubscriptions: subscriptions,
+            TotalSpent: totalSpent,
+            TotalTransferCount: totalCount,
+            ProposalFee: proposalFee,
+            SpendingByEpoch: spendingByEpoch
+        );
+    }
+
+    private async Task<List<CcfProposalDto>> GetCcfProposalsAsync(bool active, CancellationToken ct)
+    {
+        var result = new List<CcfProposalDto>();
+        var prevIndex = -1;
+
+        // Paginate through all proposal indices (64 per call)
+        while (true)
+        {
+            var (count, indices) = await _bobProxy.GetCcfProposalIndicesAsync(active, prevIndex, ct);
+            if (count == 0) break;
+
+            for (var i = 0; i < count; i++)
+            {
+                var idx = indices[i];
+                var proposal = await _bobProxy.GetCcfProposalAsync(idx, ct);
+                if (proposal is not { Okay: true, Proposal: not null }) continue;
+
+                var voting = await _bobProxy.GetCcfVotingResultsAsync(idx, ct);
+
+                var noVotes = voting != null && voting.OptionCount >= 2
+                    ? (int)voting.OptionVoteCounts[0] : 0;
+                var yesVotes = voting != null && voting.OptionCount >= 2
+                    ? (int)voting.OptionVoteCounts[1] : 0;
+                var totalCast = voting != null ? (int)voting.TotalVotesCast : 0;
+                var passed = yesVotes > CcfContractParser.Quorum / 2 && totalCast >= CcfContractParser.Quorum;
+
+                result.Add(new CcfProposalDto(
+                    ProposalIndex: idx,
+                    ProposerAddress: proposal.ProposerAddress ?? "",
+                    Url: proposal.Proposal.Url,
+                    ProposalType: proposal.Proposal.ProposalType,
+                    ProposalTick: proposal.Proposal.Tick,
+                    Epoch: proposal.Proposal.Epoch,
+                    TransferDestination: proposal.Proposal.TransferDestination,
+                    TransferAmount: proposal.Proposal.TransferAmount,
+                    TotalVotesAuthorized: voting != null ? (int)voting.TotalVotesAuthorized : CcfContractParser.NumberOfComputors,
+                    TotalVotesCast: totalCast,
+                    NoVotes: noVotes,
+                    YesVotes: yesVotes,
+                    Passed: passed,
+                    IsActive: active
+                ));
+            }
+
+            if (count < 64) break;
+            prevIndex = indices[count - 1];
+        }
+
+        return result;
     }
 
     // =====================================================

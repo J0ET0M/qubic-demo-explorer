@@ -1,7 +1,9 @@
+using System.Buffers.Binary;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Caching.Memory;
 using Qubic.Bob;
 using Qubic.Core;
+using Qubic.Core.Contracts.Ccf;
 using Qubic.Core.Contracts.Gqmprop;
 using Qubic.Crypto;
 using QubicExplorer.Shared.Models;
@@ -234,6 +236,144 @@ public class BobProxyService
 
         [JsonPropertyName("firstEpoch")]
         public ushort FirstEpoch { get; set; }
+    }
+
+    // =====================================================
+    // CCF (Computor Controlled Fund) contract queries
+    // =====================================================
+
+    /// <summary>
+    /// Get the latest 128 one-time transfers from the CCF contract.
+    /// </summary>
+    public async Task<List<ParsedTransferEntry>> GetCcfLatestTransfersAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var hexResult = await _bobClient.QuerySmartContractAsync(
+                QubicContracts.Ccf, (int)CcfContract.Functions.GetLatestTransfers, "", ct);
+            var bytes = Convert.FromHexString(hexResult);
+            return CcfContractParser.ParseLatestTransfers(bytes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query CCF GetLatestTransfers");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Get the latest 128 regular/subscription payments from the CCF contract.
+    /// </summary>
+    public async Task<List<ParsedRegularPaymentEntry>> GetCcfRegularPaymentsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var hexResult = await _bobClient.QuerySmartContractAsync(
+                QubicContracts.Ccf, (int)CcfContract.Functions.GetRegularPayments, "", ct);
+            var bytes = Convert.FromHexString(hexResult);
+            return CcfContractParser.ParseRegularPayments(bytes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query CCF GetRegularPayments");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Get proposal indices (active or all). Returns up to 64 indices per call.
+    /// Use prevProposalIndex for pagination (-1 to start from beginning).
+    /// </summary>
+    public async Task<(ushort count, ushort[] indices)> GetCcfProposalIndicesAsync(
+        bool active, int prevProposalIndex, CancellationToken ct = default)
+    {
+        try
+        {
+            var input = new Qubic.Core.Contracts.Ccf.GetProposalIndicesInput
+            {
+                ActiveProposals = active,
+                PrevProposalIndex = prevProposalIndex
+            };
+            var hexResult = await _bobClient.QuerySmartContractAsync(
+                QubicContracts.Ccf, (int)CcfContract.Functions.GetProposalIndices,
+                Convert.ToHexString(input.ToBytes()), ct);
+            var bytes = Convert.FromHexString(hexResult);
+            var output = Qubic.Core.Contracts.Ccf.GetProposalIndicesOutput.FromBytes(bytes);
+            return (output.NumOfIndices, output.Indices);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query CCF GetProposalIndices");
+            return (0, []);
+        }
+    }
+
+    /// <summary>
+    /// Get full proposal details including subscription info.
+    /// </summary>
+    public async Task<ParsedGetProposalOutput?> GetCcfProposalAsync(
+        ushort proposalIndex, CancellationToken ct = default)
+    {
+        try
+        {
+            var input = new Qubic.Core.Contracts.Ccf.GetProposalInput
+            {
+                SubscriptionDestination = new byte[32],
+                ProposalIndex = proposalIndex
+            };
+            var hexResult = await _bobClient.QuerySmartContractAsync(
+                QubicContracts.Ccf, (int)CcfContract.Functions.GetProposal,
+                Convert.ToHexString(input.ToBytes()), ct);
+            var bytes = Convert.FromHexString(hexResult);
+            return CcfContractParser.ParseGetProposalOutput(bytes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query CCF GetProposal for index {Index}", proposalIndex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Get summarized voting results for a proposal.
+    /// </summary>
+    public async Task<ParsedVotingResults?> GetCcfVotingResultsAsync(
+        ushort proposalIndex, CancellationToken ct = default)
+    {
+        try
+        {
+            var input = new Qubic.Core.Contracts.Ccf.GetVotingResultsInput { ProposalIndex = proposalIndex };
+            var hexResult = await _bobClient.QuerySmartContractAsync(
+                QubicContracts.Ccf, (int)CcfContract.Functions.GetVotingResults,
+                Convert.ToHexString(input.ToBytes()), ct);
+            var bytes = Convert.FromHexString(hexResult);
+            return CcfContractParser.ParseGetVotingResultsOutput(bytes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query CCF GetVotingResults for index {Index}", proposalIndex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Get the current proposal fee.
+    /// </summary>
+    public async Task<uint> GetCcfProposalFeeAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var hexResult = await _bobClient.QuerySmartContractAsync(
+                QubicContracts.Ccf, (int)CcfContract.Functions.GetProposalFee, "", ct);
+            var bytes = Convert.FromHexString(hexResult);
+            var output = GetProposalFeeOutput.FromBytes(bytes);
+            return output.ProposalFee;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query CCF GetProposalFee");
+            return 0;
+        }
     }
 
     // Public result types — kept for compatibility with existing consumers

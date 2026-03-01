@@ -1,6 +1,10 @@
+using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Caching.Memory;
 using Qubic.Bob;
+using Qubic.Core;
+using Qubic.Core.Contracts.Ccf;
+using Qubic.Crypto;
 using QubicExplorer.Shared.Models;
 
 namespace QubicExplorer.Analytics.Services;
@@ -199,5 +203,114 @@ public class BobProxyService
 
         [JsonPropertyName("latestOutgoingTransferTick")]
         public uint LatestOutgoingTransferTick { get; set; }
+    }
+
+    // =====================================================
+    // CCF contract queries for persistence
+    // =====================================================
+
+    /// <summary>
+    /// Get the latest 128 one-time transfers from the CCF contract.
+    /// Returns parsed entries with empty slots filtered out.
+    /// </summary>
+    public async Task<List<CcfParsedTransfer>> GetCcfLatestTransfersAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var hexResult = await _bobClient.QuerySmartContractAsync(
+                QubicContracts.Ccf, (int)CcfContract.Functions.GetLatestTransfers, "", ct);
+            var bytes = Convert.FromHexString(hexResult);
+            var output = GetLatestTransfersOutput.FromBytes(bytes);
+            var crypt = new QubicCrypt();
+            var result = new List<CcfParsedTransfer>();
+
+            foreach (var entry in output.Entries)
+            {
+                if (entry.Tick == 0 && entry.Amount == 0) continue;
+                if (entry.Destination.All(b => b == 0)) continue;
+
+                result.Add(new CcfParsedTransfer
+                {
+                    Destination = crypt.GetIdentityFromPublicKey(entry.Destination),
+                    Url = ReadNullTerminatedString(entry.Url),
+                    Amount = entry.Amount,
+                    Tick = entry.Tick,
+                    Success = entry.Success
+                });
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query CCF GetLatestTransfers");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Get the latest 128 regular/subscription payments from the CCF contract.
+    /// Returns parsed entries with empty slots filtered out.
+    /// </summary>
+    public async Task<List<CcfParsedRegularPayment>> GetCcfRegularPaymentsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var hexResult = await _bobClient.QuerySmartContractAsync(
+                QubicContracts.Ccf, (int)CcfContract.Functions.GetRegularPayments, "", ct);
+            var bytes = Convert.FromHexString(hexResult);
+            var output = GetRegularPaymentsOutput.FromBytes(bytes);
+            var crypt = new QubicCrypt();
+            var result = new List<CcfParsedRegularPayment>();
+
+            foreach (var entry in output.Entries)
+            {
+                if (entry.Tick == 0 && entry.Amount == 0) continue;
+                if (entry.Destination.All(b => b == 0)) continue;
+
+                result.Add(new CcfParsedRegularPayment
+                {
+                    Destination = crypt.GetIdentityFromPublicKey(entry.Destination),
+                    Url = ReadNullTerminatedString(entry.Url),
+                    Amount = entry.Amount,
+                    Tick = entry.Tick,
+                    PeriodIndex = entry.PeriodIndex,
+                    Success = entry.Success
+                });
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query CCF GetRegularPayments");
+            return [];
+        }
+    }
+
+    private static string ReadNullTerminatedString(byte[] data)
+    {
+        var nullIdx = Array.IndexOf(data, (byte)0);
+        var len = nullIdx >= 0 ? nullIdx : data.Length;
+        return Encoding.ASCII.GetString(data, 0, len).Trim();
+    }
+
+    public class CcfParsedTransfer
+    {
+        public string Destination { get; init; } = "";
+        public string Url { get; init; } = "";
+        public long Amount { get; init; }
+        public uint Tick { get; init; }
+        public bool Success { get; init; }
+    }
+
+    public class CcfParsedRegularPayment
+    {
+        public string Destination { get; init; } = "";
+        public string Url { get; init; } = "";
+        public long Amount { get; init; }
+        public uint Tick { get; init; }
+        public int PeriodIndex { get; init; }
+        public bool Success { get; init; }
     }
 }

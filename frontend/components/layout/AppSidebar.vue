@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Blocks, ArrowLeftRight, Send, Calendar, Users, X, BarChart3, ChevronDown, ChevronRight, Pickaxe, Network, PanelLeftClose, PanelLeftOpen, PieChart, Building2, Cpu, TrendingUp, Flame, Radar, Crown, Coins, Fish, Gem, Star, Lock } from 'lucide-vue-next'
+import { Blocks, ArrowLeftRight, Send, Calendar, Users, X, BarChart3, ChevronDown, ChevronRight, Pickaxe, Network, PanelLeftClose, PanelLeftOpen, PieChart, Building2, Cpu, TrendingUp, Flame, Radar, Crown, Coins, Fish, Gem, Star, Lock, Landmark } from 'lucide-vue-next'
 
 const APP_VERSION = '0.1.0'
 
@@ -38,18 +38,19 @@ const navItems: NavItem[] = [
     icon: BarChart3,
     children: [
       { label: 'Overview', path: '/analytics', icon: BarChart3 },
+      { label: 'Supply', path: '/analytics/supply', icon: Coins },
       { label: 'Network', path: '/analytics/network', icon: Users },
       { label: 'Holders', path: '/analytics/holders', icon: PieChart },
+      { label: 'Rich List', path: '/analytics/richlist', icon: Crown },
+      { label: 'Top Addresses', path: '/analytics/top', icon: TrendingUp },
+      { label: 'Burns', path: '/analytics/burns', icon: Flame },
       { label: 'Exchanges', path: '/analytics/exchanges', icon: Building2 },
       { label: 'Miner Flows', path: '/analytics/miners', icon: Pickaxe },
-      { label: 'Burns', path: '/analytics/burns', icon: Flame },
-      { label: 'Qearn', path: '/analytics/qearn', icon: Lock },
-      { label: 'Contracts', path: '/analytics/contracts', icon: Cpu },
-      { label: 'Rich List', path: '/analytics/richlist', icon: Crown },
-      { label: 'Supply', path: '/analytics/supply', icon: Coins },
-      { label: 'Top Addresses', path: '/analytics/top', icon: TrendingUp },
       { label: 'Flow Viz', path: '/analytics/miner-flow', icon: Network },
       { label: 'Flow Tracking', path: '/analytics/flow-tracking', icon: Radar },
+      { label: 'Contracts', path: '/analytics/contracts', icon: Cpu },
+      { label: 'Qearn', path: '/analytics/qearn', icon: Lock },
+      { label: 'CCF', path: '/analytics/ccf', icon: Landmark },
     ]
   },
   { label: 'Assets', path: '/assets', icon: Gem },

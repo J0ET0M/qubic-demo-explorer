@@ -4699,6 +4699,119 @@ public class ClickHouseQueryService : IDisposable
         return (backfilled.Count, backfilled);
     }
 
+    // =====================================================
+    // CCF (Computor Controlled Fund) — READ FROM PERSISTED DATA
+    // =====================================================
+
+    /// <summary>
+    /// Get all persisted CCF one-time transfers, ordered by tick descending.
+    /// </summary>
+    public async Task<List<CcfTransferDto>> GetCcfTransfersAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT tick, epoch, destination, url, amount, success
+            FROM ccf_transfers FINAL
+            ORDER BY tick DESC";
+
+        var result = new List<CcfTransferDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new CcfTransferDto(
+                Destination: reader.GetString(2),
+                Url: reader.GetString(3),
+                Amount: reader.GetFieldValue<long>(4),
+                Tick: Convert.ToUInt32(reader.GetValue(0)),
+                Epoch: Convert.ToUInt32(reader.GetValue(1)),
+                Success: Convert.ToByte(reader.GetValue(5)) != 0
+            ));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Get all persisted CCF regular/subscription payments, ordered by tick descending.
+    /// </summary>
+    public async Task<List<CcfRegularPaymentDto>> GetCcfRegularPaymentsAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT tick, epoch, destination, url, amount, period_index, success
+            FROM ccf_regular_payments FINAL
+            ORDER BY tick DESC";
+
+        var result = new List<CcfRegularPaymentDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new CcfRegularPaymentDto(
+                Destination: reader.GetString(2),
+                Url: reader.GetString(3),
+                Amount: reader.GetFieldValue<long>(4),
+                Tick: Convert.ToUInt32(reader.GetValue(0)),
+                Epoch: Convert.ToUInt32(reader.GetValue(1)),
+                PeriodIndex: reader.GetFieldValue<int>(5),
+                Success: Convert.ToByte(reader.GetValue(6)) != 0
+            ));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Get CCF spending aggregated per epoch (from persisted transfers + regular payments).
+    /// </summary>
+    public async Task<List<CcfEpochSpendingDto>> GetCcfSpendingByEpochAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT epoch, sum(amount) AS total_spent, count() AS transfer_count
+            FROM (
+                SELECT epoch, amount FROM ccf_transfers FINAL WHERE success = 1
+                UNION ALL
+                SELECT epoch, amount FROM ccf_regular_payments FINAL WHERE success = 1
+            )
+            GROUP BY epoch
+            ORDER BY epoch";
+
+        var result = new List<CcfEpochSpendingDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new CcfEpochSpendingDto(
+                Epoch: Convert.ToUInt32(reader.GetValue(0)),
+                TotalSpent: Convert.ToInt64(reader.GetValue(1)),
+                TransferCount: Convert.ToInt32(reader.GetValue(2))
+            ));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Get CCF total spending (from persisted successful transfers + regular payments).
+    /// </summary>
+    public async Task<(long totalSpent, int totalCount)> GetCcfTotalSpendingAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT sum(amount), count()
+            FROM (
+                SELECT amount FROM ccf_transfers FINAL WHERE success = 1
+                UNION ALL
+                SELECT amount FROM ccf_regular_payments FINAL WHERE success = 1
+            )";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct))
+        {
+            return (
+                Convert.ToInt64(reader.GetValue(0)),
+                Convert.ToInt32(reader.GetValue(1))
+            );
+        }
+        return (0, 0);
+    }
+
     /// <summary>
     /// Helper to safely convert to double, handling NaN/Infinity from empty aggregates
     /// </summary>

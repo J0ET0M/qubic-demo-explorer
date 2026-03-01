@@ -793,6 +793,37 @@ public static class ClickHouseSchema
         ) ENGINE = ReplacingMergeTree(created_at)
         ORDER BY epoch
         """,
+
+        // CCF (Computor Controlled Fund) one-time transfers persisted from contract polling
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.ccf_transfers (
+            tick UInt32 CODEC(DoubleDelta, LZ4),
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            destination String CODEC(LZ4),
+            url String CODEC(LZ4),
+            amount Int64 CODEC(LZ4),
+            success UInt8 CODEC(LZ4),
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
+        ORDER BY (tick, destination, amount)
+        """,
+
+        // CCF regular (subscription) payments persisted from contract polling
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.ccf_regular_payments (
+            tick UInt32 CODEC(DoubleDelta, LZ4),
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            destination String CODEC(LZ4),
+            url String CODEC(LZ4),
+            amount Int64 CODEC(LZ4),
+            period_index Int32 CODEC(LZ4),
+            success UInt8 CODEC(LZ4),
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
+        ORDER BY (tick, destination, period_index)
+        """,
     ];
 
     /// <summary>

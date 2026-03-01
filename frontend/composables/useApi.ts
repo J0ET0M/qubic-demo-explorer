@@ -334,6 +334,10 @@ export const useApi = () => {
   const getQearnStats = () =>
     fetchApi<QearnStatsDto>('/api/stats/qearn')
 
+  // CCF stats
+  const getCcfStats = () =>
+    fetchApi<CcfStatsDto>('/api/stats/ccf')
+
   // Miner/Computor Flow
   const getMinerFlowStats = (limit = 500, from?: string, to?: string) => {
     const params = new URLSearchParams({ limit: String(limit) })
@@ -437,6 +441,7 @@ export const useApi = () => {
     getBurnStatsHistory,
     getBurnStatsExtended,
     getQearnStats,
+    getCcfStats,
     getMinerFlowStats,
     getComputors,
     getFlowVisualization,
@@ -900,6 +905,71 @@ interface QearnStatsDto {
   allTimeTotalOutput: number
 }
 
+// CCF stats
+interface CcfTransferDto {
+  destination: string
+  url: string
+  amount: number
+  tick: number
+  epoch: number
+  success: boolean
+}
+
+interface CcfRegularPaymentDto {
+  destination: string
+  url: string
+  amount: number
+  tick: number
+  epoch: number
+  periodIndex: number
+  success: boolean
+}
+
+interface CcfProposalDto {
+  proposalIndex: number
+  proposerAddress: string
+  url: string
+  proposalType: number
+  proposalTick: number
+  epoch: number
+  transferDestination: string | null
+  transferAmount: number | null
+  totalVotesAuthorized: number
+  totalVotesCast: number
+  noVotes: number
+  yesVotes: number
+  passed: boolean
+  isActive: boolean
+}
+
+interface CcfSubscriptionDto {
+  destination: string
+  url: string
+  amountPerPeriod: number
+  numberOfPeriods: number
+  currentPeriod: number
+  weeksPerPeriod: number
+  startEpoch: number
+}
+
+interface CcfEpochSpendingDto {
+  epoch: number
+  totalSpent: number
+  transferCount: number
+}
+
+interface CcfStatsDto {
+  activeProposals: CcfProposalDto[]
+  pastProposals: CcfProposalDto[]
+  transfers: CcfTransferDto[]
+  regularPayments: CcfRegularPaymentDto[]
+  activeSubscriptions: CcfSubscriptionDto[]
+  totalSpent: number
+  totalTransferCount: number
+  proposalFee: number
+  spendingByEpoch: CcfEpochSpendingDto[]
+}
+
 // Rich list
 interface RichListEntryDto {
   rank: number
@@ -1263,4 +1333,10 @@ export type {
   GraphNodeDto,
   GraphLinkDto,
   TransactionGraphDto,
+  CcfStatsDto,
+  CcfTransferDto,
+  CcfRegularPaymentDto,
+  CcfProposalDto,
+  CcfSubscriptionDto,
+  CcfEpochSpendingDto,
 }

@@ -18,6 +18,7 @@ ChartJS.register(
 interface Props {
   labels: string[]
   data: number[]
+  colors?: string[]
   title?: string
   height?: number
 }
@@ -26,7 +27,7 @@ const props = withDefaults(defineProps<Props>(), {
   height: 300
 })
 
-const colors = [
+const defaultColors = [
   'rgba(108, 140, 204, 0.8)',  // accent blue
   'rgba(102, 187, 154, 0.8)',  // success green
   'rgba(240, 184, 90, 0.8)',   // warning amber
@@ -37,16 +38,18 @@ const colors = [
   'rgba(140, 200, 80, 0.8)'   // lime
 ]
 
-const chartData = computed(() => ({
+const chartData = computed(() => {
+  const palette = props.colors ?? defaultColors
+  return {
   labels: props.labels,
   datasets: [{
     data: props.data,
-    backgroundColor: colors.slice(0, props.data.length),
-    borderColor: colors.slice(0, props.data.length).map(c => c.replace('0.8', '1')),
+    backgroundColor: palette.slice(0, props.data.length),
+    borderColor: palette.slice(0, props.data.length).map(c => c.replace('0.8', '1')),
     borderWidth: 2,
     hoverOffset: 4
   }]
-}))
+}})
 
 const chartOptions = computed(() => ({
   responsive: true,

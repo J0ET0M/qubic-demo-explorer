@@ -81,6 +81,10 @@ public class AnalyticsSnapshotService : BackgroundService
                     // Compute Qearn stats for completed epochs
                     await CreateQearnEpochStatsAsync(queryService, currentEpoch.Value, stoppingToken);
 
+                    // Poll CCF contract and persist new transfers
+                    var bobProxy = scope.ServiceProvider.GetRequiredService<BobProxyService>();
+                    await PersistCcfTransfersAsync(queryService, bobProxy, currentEpoch.Value, stoppingToken);
+
                     // Process custom flow tracking jobs
                     var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
                     await customFlowService.ProcessPendingJobsAsync(stoppingToken);
@@ -564,6 +568,47 @@ public class AnalyticsSnapshotService : BackgroundService
         {
             _logger.LogError(ex, "Failed to save burn stats snapshot for epoch {Epoch}", currentEpoch);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Poll the CCF contract for latest transfers and regular payments, persist any new entries.
+    /// </summary>
+    private async Task PersistCcfTransfersAsync(
+        AnalyticsQueryService queryService, BobProxyService bobProxy,
+        uint currentEpoch, CancellationToken ct)
+    {
+        try
+        {
+            // Build a tick → epoch mapping from the ticks table
+            await queryService.GetTickEpochMapAsync(ct);
+            uint TickToEpoch(uint tick)
+            {
+                var ep = queryService.GetEpochForTick(tick);
+                return ep > 0 ? ep : currentEpoch;
+            }
+
+            // Poll one-time transfers
+            var transfers = await bobProxy.GetCcfLatestTransfersAsync(ct);
+            if (transfers.Count > 0)
+            {
+                var persisted = await queryService.PersistCcfTransfersAsync(transfers, TickToEpoch, ct);
+                if (persisted > 0)
+                    _logger.LogInformation("CCF: persisted {Count} new one-time transfers", persisted);
+            }
+
+            // Poll regular payments
+            var payments = await bobProxy.GetCcfRegularPaymentsAsync(ct);
+            if (payments.Count > 0)
+            {
+                var persisted = await queryService.PersistCcfRegularPaymentsAsync(payments, TickToEpoch, ct);
+                if (persisted > 0)
+                    _logger.LogInformation("CCF: persisted {Count} new regular payments", persisted);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error persisting CCF transfers");
         }
     }
 }

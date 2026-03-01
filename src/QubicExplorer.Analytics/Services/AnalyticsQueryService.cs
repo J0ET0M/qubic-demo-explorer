@@ -803,6 +803,66 @@ public class AnalyticsQueryService : IDisposable
     }
 
     /// <summary>
+    /// Get a mapping of tick → epoch using per-epoch tick ranges.
+    /// Returns a dictionary for quick lookups by specific tick values.
+    /// </summary>
+    public async Task<Dictionary<uint, uint>> GetTickEpochMapAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT epoch, min(tick_number) AS min_tick, max(tick_number) AS max_tick
+            FROM ticks
+            GROUP BY epoch
+            ORDER BY epoch";
+
+        var ranges = new List<(uint epoch, uint minTick, uint maxTick)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            ranges.Add((
+                Convert.ToUInt32(reader.GetValue(0)),
+                Convert.ToUInt32(reader.GetValue(1)),
+                Convert.ToUInt32(reader.GetValue(2))
+            ));
+        }
+
+        // Build a simple lookup: we'll expose the ranges so callers can binary search
+        // For the CCF use case, we create a lookup that maps tick → epoch
+        var map = new Dictionary<uint, uint>();
+        // Store range boundaries for the caller's TickToEpoch function
+        foreach (var (epoch, minTick, maxTick) in ranges)
+        {
+            // Store min tick as a sentinel for binary search
+            map[minTick] = epoch;
+            map[maxTick] = epoch;
+        }
+
+        // Also store the ranges in a format that allows range lookup
+        // The caller wraps this in a closure, so we provide a fallback-friendly lookup
+        _tickEpochRanges = ranges;
+        return map;
+    }
+
+    private List<(uint epoch, uint minTick, uint maxTick)>? _tickEpochRanges;
+
+    /// <summary>
+    /// Resolve the epoch for a given tick using cached range data.
+    /// Call GetTickEpochMapAsync first to populate the ranges.
+    /// </summary>
+    public uint GetEpochForTick(uint tick)
+    {
+        if (_tickEpochRanges != null)
+        {
+            foreach (var (epoch, minTick, maxTick) in _tickEpochRanges)
+            {
+                if (tick >= minTick && tick <= maxTick)
+                    return epoch;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>
     /// Get the current (latest) tick number from the ticks table
     /// </summary>
     public async Task<ulong?> GetCurrentTickAsync(CancellationToken ct = default)
@@ -3034,6 +3094,115 @@ public class AnalyticsQueryService : IDisposable
             "Saved Qearn stats for epoch {Epoch}: burned={Burned}, in={Input}, out={Output}",
             epoch, totalBurned, totalInput, totalOutput);
         return true;
+    }
+
+    // =====================================================
+    // CCF TRANSFER PERSISTENCE
+    // =====================================================
+
+    /// <summary>
+    /// Get the set of (tick, destination, amount) tuples already persisted for CCF transfers.
+    /// Used for deduplication when polling the contract.
+    /// </summary>
+    public async Task<HashSet<(uint tick, string dest, long amount)>> GetPersistedCcfTransferKeysAsync(
+        CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT tick, destination, amount FROM ccf_transfers";
+        var keys = new HashSet<(uint, string, long)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            keys.Add((reader.GetFieldValue<uint>(0), reader.GetString(1), reader.GetFieldValue<long>(2)));
+        return keys;
+    }
+
+    /// <summary>
+    /// Persist new CCF one-time transfers from contract polling.
+    /// Returns count of newly inserted entries.
+    /// </summary>
+    public async Task<int> PersistCcfTransfersAsync(
+        List<BobProxyService.CcfParsedTransfer> transfers,
+        Func<uint, uint> tickToEpoch,
+        CancellationToken ct = default)
+    {
+        if (transfers.Count == 0) return 0;
+
+        var existing = await GetPersistedCcfTransferKeysAsync(ct);
+        var newEntries = transfers
+            .Where(t => !existing.Contains((t.Tick, t.Destination, t.Amount)))
+            .ToList();
+
+        if (newEntries.Count == 0) return 0;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("INSERT INTO ccf_transfers (tick, epoch, destination, url, amount, success) VALUES");
+        for (var i = 0; i < newEntries.Count; i++)
+        {
+            var t = newEntries[i];
+            var epoch = tickToEpoch(t.Tick);
+            var escapedUrl = t.Url.Replace("'", "\\'");
+            sb.Append($"({t.Tick}, {epoch}, '{t.Destination}', '{escapedUrl}', {t.Amount}, {(t.Success ? 1 : 0)})");
+            sb.AppendLine(i < newEntries.Count - 1 ? "," : "");
+        }
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = sb.ToString();
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        _logger.LogInformation("Persisted {Count} new CCF transfers", newEntries.Count);
+        return newEntries.Count;
+    }
+
+    /// <summary>
+    /// Get the set of (tick, destination, periodIndex) tuples already persisted for CCF regular payments.
+    /// </summary>
+    public async Task<HashSet<(uint tick, string dest, int period)>> GetPersistedCcfRegularPaymentKeysAsync(
+        CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT tick, destination, period_index FROM ccf_regular_payments";
+        var keys = new HashSet<(uint, string, int)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            keys.Add((reader.GetFieldValue<uint>(0), reader.GetString(1), reader.GetFieldValue<int>(2)));
+        return keys;
+    }
+
+    /// <summary>
+    /// Persist new CCF regular/subscription payments from contract polling.
+    /// Returns count of newly inserted entries.
+    /// </summary>
+    public async Task<int> PersistCcfRegularPaymentsAsync(
+        List<BobProxyService.CcfParsedRegularPayment> payments,
+        Func<uint, uint> tickToEpoch,
+        CancellationToken ct = default)
+    {
+        if (payments.Count == 0) return 0;
+
+        var existing = await GetPersistedCcfRegularPaymentKeysAsync(ct);
+        var newEntries = payments
+            .Where(p => !existing.Contains((p.Tick, p.Destination, p.PeriodIndex)))
+            .ToList();
+
+        if (newEntries.Count == 0) return 0;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("INSERT INTO ccf_regular_payments (tick, epoch, destination, url, amount, period_index, success) VALUES");
+        for (var i = 0; i < newEntries.Count; i++)
+        {
+            var p = newEntries[i];
+            var epoch = tickToEpoch(p.Tick);
+            var escapedUrl = p.Url.Replace("'", "\\'");
+            sb.Append($"({p.Tick}, {epoch}, '{p.Destination}', '{escapedUrl}', {p.Amount}, {p.PeriodIndex}, {(p.Success ? 1 : 0)})");
+            sb.AppendLine(i < newEntries.Count - 1 ? "," : "");
+        }
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = sb.ToString();
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        _logger.LogInformation("Persisted {Count} new CCF regular payments", newEntries.Count);
+        return newEntries.Count;
     }
 
     // =====================================================

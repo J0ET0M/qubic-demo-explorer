@@ -152,6 +152,34 @@ export const useFormatting = () => {
     }
   }
 
+  /**
+   * Convert an epoch number to its start date.
+   * Epochs always start on Wednesday. Epoch 202 started on 2026-02-25.
+   */
+  const EPOCH_REF = 202
+  const EPOCH_REF_DATE = new Date('2026-02-25T00:00:00Z')
+
+  const epochToDate = (epoch: number): Date => {
+    const diff = epoch - EPOCH_REF
+    return new Date(EPOCH_REF_DATE.getTime() + diff * 7 * 24 * 60 * 60 * 1000)
+  }
+
+  /**
+   * Format an epoch number as "MMM YYYY" (e.g. "Feb 2026").
+   */
+  const formatEpochDate = (epoch: number): string => {
+    const d = epochToDate(epoch)
+    return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' })
+  }
+
+  /**
+   * Format an epoch number as short date "MMM DD" (e.g. "Feb 25").
+   */
+  const formatEpochDateShort = (epoch: number): string => {
+    const d = epochToDate(epoch)
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
+  }
+
   return {
     formatVolume,
     formatAmount,
@@ -166,5 +194,8 @@ export const useFormatting = () => {
     getTypeClass,
     formatDuration,
     copyToClipboard,
+    epochToDate,
+    formatEpochDate,
+    formatEpochDateShort,
   }
 }

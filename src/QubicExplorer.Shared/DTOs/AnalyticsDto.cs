@@ -708,3 +708,95 @@ public record FlowValidationResult(
     List<string> Errors,
     List<string> Warnings
 );
+
+// =====================================================
+// CCF (Computor Controlled Fund) DTOs
+// =====================================================
+
+/// <summary>
+/// CCF one-time transfer record (persisted from contract polling).
+/// </summary>
+public record CcfTransferDto(
+    string Destination,
+    string Url,
+    long Amount,
+    uint Tick,
+    uint Epoch,
+    bool Success
+);
+
+/// <summary>
+/// CCF regular/subscription payment record (persisted from contract polling).
+/// </summary>
+public record CcfRegularPaymentDto(
+    string Destination,
+    string Url,
+    long Amount,
+    uint Tick,
+    uint Epoch,
+    int PeriodIndex,
+    bool Success
+);
+
+/// <summary>
+/// CCF proposal with voting results.
+/// </summary>
+public record CcfProposalDto(
+    ushort ProposalIndex,
+    string ProposerAddress,
+    string Url,
+    ushort ProposalType,
+    uint ProposalTick,
+    ushort Epoch,
+    /// <summary>Transfer destination (for transfer proposals).</summary>
+    string? TransferDestination,
+    /// <summary>Transfer amount (for transfer proposals).</summary>
+    long? TransferAmount,
+    /// <summary>Total votes authorized (676 computors).</summary>
+    int TotalVotesAuthorized,
+    /// <summary>Total votes actually cast.</summary>
+    int TotalVotesCast,
+    /// <summary>Votes for option 0 (No).</summary>
+    int NoVotes,
+    /// <summary>Votes for option 1 (Yes).</summary>
+    int YesVotes,
+    bool Passed,
+    bool IsActive
+);
+
+/// <summary>
+/// CCF active subscription info.
+/// </summary>
+public record CcfSubscriptionDto(
+    string Destination,
+    string Url,
+    long AmountPerPeriod,
+    int NumberOfPeriods,
+    int CurrentPeriod,
+    byte WeeksPerPeriod,
+    uint StartEpoch
+);
+
+/// <summary>
+/// CCF spending aggregated per epoch.
+/// </summary>
+public record CcfEpochSpendingDto(
+    uint Epoch,
+    long TotalSpent,
+    int TransferCount
+);
+
+/// <summary>
+/// Full CCF dashboard stats combining persisted transfers, live proposals, and subscriptions.
+/// </summary>
+public record CcfStatsDto(
+    List<CcfProposalDto> ActiveProposals,
+    List<CcfProposalDto> PastProposals,
+    List<CcfTransferDto> Transfers,
+    List<CcfRegularPaymentDto> RegularPayments,
+    List<CcfSubscriptionDto> ActiveSubscriptions,
+    long TotalSpent,
+    int TotalTransferCount,
+    uint ProposalFee,
+    List<CcfEpochSpendingDto> SpendingByEpoch
+);
