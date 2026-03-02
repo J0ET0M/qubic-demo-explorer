@@ -24,10 +24,10 @@ public static class ClickHouseSchema
             timestamp DateTime64(3) CODEC(Delta, LZ4),
             tx_count UInt32 CODEC(LZ4),
             tx_count_filtered UInt32 CODEC(LZ4),
-            is_empty UInt8 DEFAULT 0 CODEC(LZ4),
             log_count UInt32 CODEC(LZ4),
             log_count_filtered UInt32 CODEC(LZ4),
-            created_at DateTime64(3) DEFAULT now64(3)
+            created_at DateTime64(3) DEFAULT now64(3),
+            is_empty UInt8 DEFAULT 0 CODEC(LZ4)
         ) ENGINE = ReplacingMergeTree(created_at)
         PARTITION BY epoch
         ORDER BY tick_number
