@@ -159,6 +159,8 @@ public class BobConnectionService : IDisposable
         {
             Epoch = notification.Epoch,
             Tick = notification.Tick,
+            HasNoTickData = notification.HasNoTickData,
+            IsSkipped = notification.IsSkipped,
             IsCatchUp = notification.IsCatchUp,
             Timestamp = notification.Timestamp,
             TxCountFiltered = notification.TxCountFiltered,

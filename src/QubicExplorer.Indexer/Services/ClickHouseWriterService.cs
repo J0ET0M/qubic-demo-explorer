@@ -130,6 +130,7 @@ public class ClickHouseWriterService : IDisposable
                 Timestamp = timestamp,
                 TxCount = data.TxCountTotal,
                 TxCountFiltered = data.TxCountFiltered,
+                IsEmpty = data.HasNoTickData || data.IsSkipped,
                 LogCount = data.LogCountTotal,
                 LogCountFiltered = data.LogCountFiltered,
                 CreatedAt = DateTime.UtcNow
@@ -365,6 +366,7 @@ public class ClickHouseWriterService : IDisposable
                 tick.Timestamp,
                 tick.TxCount,
                 tick.TxCountFiltered,
+                (byte)(tick.IsEmpty ? 1 : 0),
                 tick.LogCount,
                 tick.LogCountFiltered,
                 tick.CreatedAt

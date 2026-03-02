@@ -37,6 +37,12 @@ public class TickStreamData
     [JsonPropertyName("tick")]
     public ulong Tick { get; set; }
 
+    [JsonPropertyName("hasNoTickData")]
+    public bool HasNoTickData { get; set; }
+
+    [JsonPropertyName("isSkipped")]
+    public bool IsSkipped { get; set; }
+
     [JsonPropertyName("isCatchUp")]
     public bool IsCatchUp { get; set; }
 

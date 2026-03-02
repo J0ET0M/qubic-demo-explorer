@@ -149,7 +149,7 @@ public class ComputorRevenueService : IDisposable
         var scores = new ulong[QubicConstants.NumberOfComputors];
 
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"SELECT tick_number, tx_count FROM ticks WHERE epoch = {epoch} AND tx_count > 0";
+        cmd.CommandText = $"SELECT tick_number, tx_count FROM ticks WHERE epoch = {epoch} AND is_empty = 0 AND tx_count > 0";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))

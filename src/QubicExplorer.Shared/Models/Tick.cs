@@ -7,6 +7,7 @@ public class Tick
     public DateTime Timestamp { get; set; }
     public uint TxCount { get; set; }
     public uint TxCountFiltered { get; set; }
+    public bool IsEmpty { get; set; }
     public uint LogCount { get; set; }
     public uint LogCountFiltered { get; set; }
     public DateTime CreatedAt { get; set; }
