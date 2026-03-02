@@ -18,6 +18,7 @@ const { formatDate, formatDateShort } = useFormatting()
           <th>Time</th>
           <th>TXs</th>
           <th class="hide-mobile">Logs</th>
+          <th class="hide-mobile">Status</th>
         </tr>
       </thead>
       <tbody>
@@ -34,6 +35,11 @@ const { formatDate, formatDateShort } = useFormatting()
           </td>
           <td>{{ tick.txCount }}</td>
           <td class="hide-mobile">{{ tick.logCount }}</td>
+          <td class="hide-mobile">
+            <span :class="tick.isEmpty ? 'text-destructive' : 'text-success'">
+              {{ tick.isEmpty ? 'Empty' : 'OK' }}
+            </span>
+          </td>
         </tr>
       </tbody>
     </table>

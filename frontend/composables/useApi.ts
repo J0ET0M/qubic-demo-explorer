@@ -479,6 +479,7 @@ interface TickDto {
   timestamp: string
   txCount: number
   logCount: number
+  isEmpty: boolean
 }
 
 interface TickDetailDto extends TickDto {

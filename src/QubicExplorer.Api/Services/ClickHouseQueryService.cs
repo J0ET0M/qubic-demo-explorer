@@ -55,7 +55,8 @@ public class ClickHouseQueryService : IDisposable
                 t.epoch,
                 t.timestamp,
                 if(t.tx_count > 0, t.tx_count, coalesce(tx_counts.cnt, 0)) as tx_count,
-                if(t.log_count > 0, t.log_count, coalesce(log_counts.cnt, 0)) as log_count
+                if(t.log_count > 0, t.log_count, coalesce(log_counts.cnt, 0)) as log_count,
+                t.is_empty
             FROM ticks t
             LEFT JOIN (
                 SELECT tick_number, toUInt32(count()) as cnt
@@ -79,7 +80,8 @@ public class ClickHouseQueryService : IDisposable
                 reader.GetFieldValue<uint>(1),
                 reader.GetDateTime(2),
                 Convert.ToUInt32(reader.GetValue(3)),
-                Convert.ToUInt32(reader.GetValue(4))
+                Convert.ToUInt32(reader.GetValue(4)),
+                reader.GetFieldValue<byte>(5) != 0
             ));
         }
 
@@ -96,7 +98,8 @@ public class ClickHouseQueryService : IDisposable
                 t.epoch,
                 t.timestamp,
                 if(t.tx_count > 0, t.tx_count, (SELECT toUInt32(count()) FROM transactions WHERE tick_number = {tickNumber})) as tx_count,
-                if(t.log_count > 0, t.log_count, (SELECT toUInt32(count()) FROM logs WHERE tick_number = {tickNumber})) as log_count
+                if(t.log_count > 0, t.log_count, (SELECT toUInt32(count()) FROM logs WHERE tick_number = {tickNumber})) as log_count,
+                t.is_empty
             FROM ticks t
             WHERE t.tick_number = {tickNumber}";
 
@@ -109,14 +112,15 @@ public class ClickHouseQueryService : IDisposable
             reader.GetFieldValue<uint>(1),
             reader.GetDateTime(2),
             Convert.ToUInt32(reader.GetValue(3)),
-            Convert.ToUInt32(reader.GetValue(4))
+            Convert.ToUInt32(reader.GetValue(4)),
+            reader.GetFieldValue<byte>(5) != 0
         );
 
         var transactions = await GetTransactionsByTickAsync(tickNumber, ct);
 
         return new TickDetailDto(
             tick.TickNumber, tick.Epoch, tick.Timestamp,
-            tick.TxCount, tick.LogCount, transactions);
+            tick.TxCount, tick.LogCount, tick.IsEmpty, transactions);
     }
 
     public async Task<List<TransactionDto>> GetTransactionsByTickAsync(ulong tickNumber, CancellationToken ct = default)

@@ -5,7 +5,8 @@ public record TickDto(
     uint Epoch,
     DateTime Timestamp,
     uint TxCount,
-    uint LogCount
+    uint LogCount,
+    bool IsEmpty
 );
 
 public record TickDetailDto(
@@ -14,5 +15,6 @@ public record TickDetailDto(
     DateTime Timestamp,
     uint TxCount,
     uint LogCount,
+    bool IsEmpty,
     List<TransactionDto> Transactions
 );

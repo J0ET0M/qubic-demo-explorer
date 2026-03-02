@@ -168,6 +168,12 @@ const getTypeName = (type: number) => {
             <span class="detail-value">{{ formatDate(tick.timestamp) }}</span>
           </div>
           <div class="detail-row">
+            <span class="detail-label">Status</span>
+            <span class="detail-value" :class="tick.isEmpty ? 'text-destructive' : 'text-success'">
+              {{ tick.isEmpty ? 'Empty' : 'OK' }}
+            </span>
+          </div>
+          <div class="detail-row">
             <span class="detail-label">Transactions</span>
             <span class="detail-value">{{ tick.txCount }}</span>
           </div>
