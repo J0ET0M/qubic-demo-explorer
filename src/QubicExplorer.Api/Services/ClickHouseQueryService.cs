@@ -742,6 +742,7 @@ public class ClickHouseQueryService : IDisposable
             SELECT
                 em.epoch,
                 if(em.is_complete = 1 AND em.tick_count > 0, em.tick_count, COALESCE(ts.tick_count, 0)) as tick_count,
+                if(em.is_complete = 1 AND em.empty_tick_count > 0, em.empty_tick_count, COALESCE(ts.empty_tick_count, 0)) as empty_tick_count,
                 if(em.is_complete = 1 AND em.tx_count > 0, em.tx_count, COALESCE(tx.tx_count, 0)) as tx_count,
                 if(em.is_complete = 1 AND em.total_volume > 0, em.total_volume, COALESCE(tx.total_volume, 0)) as total_volume,
                 if(em.is_complete = 1 AND em.active_addresses > 0, em.active_addresses,
@@ -755,6 +756,7 @@ public class ClickHouseQueryService : IDisposable
                 SELECT
                     epoch,
                     countMerge(tick_count_state) as tick_count,
+                    sumMerge(empty_tick_count_state) as empty_tick_count,
                     minMerge(start_time_state) as start_time,
                     maxMerge(end_time_state) as end_time,
                     maxMerge(last_tick_state) as last_tick
@@ -781,13 +783,14 @@ public class ClickHouseQueryService : IDisposable
             items.Add(new EpochSummaryDto(
                 reader.GetFieldValue<uint>(0),  // epoch
                 ToUInt64(reader.GetValue(1)),   // tick_count
-                ToUInt64(reader.GetValue(2)),   // tx_count
-                ToDecimal(reader.GetValue(3)),  // total_volume
-                ToUInt64(reader.GetValue(4)),   // active_addresses
-                reader.GetDateTime(5),          // start_time
-                reader.GetDateTime(6),          // end_time
-                ToUInt64(reader.GetValue(7)),   // initial_tick
-                ToUInt64(reader.GetValue(8))    // end_tick
+                ToUInt64(reader.GetValue(2)),   // empty_tick_count
+                ToUInt64(reader.GetValue(3)),   // tx_count
+                ToDecimal(reader.GetValue(4)),  // total_volume
+                ToUInt64(reader.GetValue(5)),   // active_addresses
+                reader.GetDateTime(6),          // start_time
+                reader.GetDateTime(7),          // end_time
+                ToUInt64(reader.GetValue(8)),   // initial_tick
+                ToUInt64(reader.GetValue(9))    // end_tick
             ));
         }
 
@@ -803,6 +806,7 @@ public class ClickHouseQueryService : IDisposable
             SELECT
                 em.epoch,
                 if(em.is_complete = 1 AND em.tick_count > 0, em.tick_count, COALESCE(ts.tick_count, 0)) as tick_count,
+                if(em.is_complete = 1 AND em.empty_tick_count > 0, em.empty_tick_count, COALESCE(ts.empty_tick_count, 0)) as empty_tick_count,
                 em.initial_tick as first_tick,
                 if(em.is_complete = 1 AND em.end_tick > 0, em.end_tick, COALESCE(ts.last_tick, em.initial_tick)) as last_tick,
                 COALESCE(ts.start_time, em.updated_at) as start_time,
@@ -821,6 +825,7 @@ public class ClickHouseQueryService : IDisposable
                 SELECT
                     epoch,
                     countMerge(tick_count_state) as tick_count,
+                    sumMerge(empty_tick_count_state) as empty_tick_count,
                     minMerge(start_time_state) as start_time,
                     maxMerge(end_time_state) as end_time,
                     maxMerge(last_tick_state) as last_tick
@@ -867,16 +872,17 @@ public class ClickHouseQueryService : IDisposable
             ToUInt64(reader.GetValue(1)),
             ToUInt64(reader.GetValue(2)),
             ToUInt64(reader.GetValue(3)),
-            reader.GetDateTime(4),
+            ToUInt64(reader.GetValue(4)),
             reader.GetDateTime(5),
-            ToUInt64(reader.GetValue(6)),
-            ToDecimal(reader.GetValue(7)),
-            ToUInt64(reader.GetValue(8)),
+            reader.GetDateTime(6),
+            ToUInt64(reader.GetValue(7)),
+            ToDecimal(reader.GetValue(8)),
             ToUInt64(reader.GetValue(9)),
             ToUInt64(reader.GetValue(10)),
             ToUInt64(reader.GetValue(11)),
-            ToDecimal(reader.GetValue(12)),
-            ToUInt64(reader.GetValue(13))
+            ToUInt64(reader.GetValue(12)),
+            ToDecimal(reader.GetValue(13)),
+            ToUInt64(reader.GetValue(14))
         );
     }
 
@@ -2859,7 +2865,7 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = $@"
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
                    is_complete, updated_at,
-                   tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
+                   tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
             FROM epoch_meta FINAL
             WHERE epoch = {epoch}";
 
@@ -2876,11 +2882,12 @@ public class ClickHouseQueryService : IDisposable
             reader.GetFieldValue<byte>(5) == 1,
             reader.GetDateTime(6),
             TickCount: reader.GetFieldValue<ulong>(7),
-            TxCount: reader.GetFieldValue<ulong>(8),
-            TotalVolume: ToBigDecimal(reader.GetValue(9)),
-            ActiveAddresses: reader.GetFieldValue<ulong>(10),
-            TransferCount: reader.GetFieldValue<ulong>(11),
-            QuTransferred: ToBigDecimal(reader.GetValue(12))
+            EmptyTickCount: reader.GetFieldValue<ulong>(8),
+            TxCount: reader.GetFieldValue<ulong>(9),
+            TotalVolume: ToBigDecimal(reader.GetValue(10)),
+            ActiveAddresses: reader.GetFieldValue<ulong>(11),
+            TransferCount: reader.GetFieldValue<ulong>(12),
+            QuTransferred: ToBigDecimal(reader.GetValue(13))
         );
     }
 
@@ -2893,7 +2900,7 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = $@"
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
                    is_complete, updated_at,
-                   tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
+                   tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
             FROM epoch_meta FINAL
             ORDER BY epoch DESC
             LIMIT {limit}";
@@ -2911,11 +2918,12 @@ public class ClickHouseQueryService : IDisposable
                 reader.GetFieldValue<byte>(5) == 1,
                 reader.GetDateTime(6),
                 TickCount: reader.GetFieldValue<ulong>(7),
-                TxCount: reader.GetFieldValue<ulong>(8),
-                TotalVolume: ToBigDecimal(reader.GetValue(9)),
-                ActiveAddresses: reader.GetFieldValue<ulong>(10),
-                TransferCount: reader.GetFieldValue<ulong>(11),
-                QuTransferred: ToBigDecimal(reader.GetValue(12))
+                EmptyTickCount: reader.GetFieldValue<ulong>(8),
+                TxCount: reader.GetFieldValue<ulong>(9),
+                TotalVolume: ToBigDecimal(reader.GetValue(10)),
+                ActiveAddresses: reader.GetFieldValue<ulong>(11),
+                TransferCount: reader.GetFieldValue<ulong>(12),
+                QuTransferred: ToBigDecimal(reader.GetValue(13))
             ));
         }
 
@@ -2931,12 +2939,12 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = $@"
             INSERT INTO epoch_meta
             (epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id, is_complete,
-             tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred)
+             tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred)
             VALUES
             ({epochMeta.Epoch}, {epochMeta.InitialTick}, {epochMeta.EndTick},
              {epochMeta.EndTickStartLogId}, {epochMeta.EndTickEndLogId},
              {(epochMeta.IsComplete ? 1 : 0)},
-             {epochMeta.TickCount}, {epochMeta.TxCount}, {epochMeta.TotalVolume},
+             {epochMeta.TickCount}, {epochMeta.EmptyTickCount}, {epochMeta.TxCount}, {epochMeta.TotalVolume},
              {epochMeta.ActiveAddresses}, {epochMeta.TransferCount}, {epochMeta.QuTransferred})";
 
         await cmd.ExecuteNonQueryAsync(ct);
@@ -2953,7 +2961,7 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = @"
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
                    is_complete, updated_at,
-                   tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
+                   tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
             FROM epoch_meta FINAL
             WHERE is_complete = 1
             ORDER BY epoch DESC
@@ -2972,11 +2980,12 @@ public class ClickHouseQueryService : IDisposable
             reader.GetFieldValue<byte>(5) == 1,
             reader.GetDateTime(6),
             TickCount: reader.GetFieldValue<ulong>(7),
-            TxCount: reader.GetFieldValue<ulong>(8),
-            TotalVolume: ToBigDecimal(reader.GetValue(9)),
-            ActiveAddresses: reader.GetFieldValue<ulong>(10),
-            TransferCount: reader.GetFieldValue<ulong>(11),
-            QuTransferred: ToBigDecimal(reader.GetValue(12))
+            EmptyTickCount: reader.GetFieldValue<ulong>(8),
+            TxCount: reader.GetFieldValue<ulong>(9),
+            TotalVolume: ToBigDecimal(reader.GetValue(10)),
+            ActiveAddresses: reader.GetFieldValue<ulong>(11),
+            TransferCount: reader.GetFieldValue<ulong>(12),
+            QuTransferred: ToBigDecimal(reader.GetValue(13))
         );
     }
 
@@ -2999,6 +3008,7 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = $@"
             SELECT
                 COALESCE(ts.tick_count, 0),
+                COALESCE(ts.empty_tick_count, 0),
                 COALESCE(tx.tx_count, 0),
                 COALESCE(tx.total_volume, 0),
                 COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0),
@@ -3007,7 +3017,8 @@ public class ClickHouseQueryService : IDisposable
             FROM (SELECT 1 as _join) d
             LEFT JOIN (
                 SELECT
-                    countMerge(tick_count_state) as tick_count
+                    countMerge(tick_count_state) as tick_count,
+                    sumMerge(empty_tick_count_state) as empty_tick_count
                 FROM epoch_tick_stats
                 WHERE epoch = {epoch}
             ) ts ON 1=1
@@ -3038,11 +3049,12 @@ public class ClickHouseQueryService : IDisposable
         var updatedMeta = meta with
         {
             TickCount = ToUInt64(reader.GetValue(0)),
-            TxCount = ToUInt64(reader.GetValue(1)),
-            TotalVolume = ToBigDecimal(reader.GetValue(2)),
-            ActiveAddresses = ToUInt64(reader.GetValue(3)),
-            TransferCount = ToUInt64(reader.GetValue(4)),
-            QuTransferred = ToBigDecimal(reader.GetValue(5)),
+            EmptyTickCount = ToUInt64(reader.GetValue(1)),
+            TxCount = ToUInt64(reader.GetValue(2)),
+            TotalVolume = ToBigDecimal(reader.GetValue(3)),
+            ActiveAddresses = ToUInt64(reader.GetValue(4)),
+            TransferCount = ToUInt64(reader.GetValue(5)),
+            QuTransferred = ToBigDecimal(reader.GetValue(6)),
             UpdatedAt = DateTime.UtcNow
         };
 

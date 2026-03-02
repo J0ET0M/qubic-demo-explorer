@@ -396,6 +396,7 @@ public record EpochMetaDto(
     bool IsComplete,
     DateTime UpdatedAt,
     ulong TickCount = 0,
+    ulong EmptyTickCount = 0,
     ulong TxCount = 0,
     decimal TotalVolume = 0,
     ulong ActiveAddresses = 0,

@@ -203,6 +203,7 @@ public static class ClickHouseSchema
         AS SELECT
             epoch,
             countState() as tick_count_state,
+            sumState(is_empty) as empty_tick_count_state,
             sumState(tx_count) as total_tx_in_ticks_state,
             sumState(log_count) as total_logs_in_ticks_state,
             minState(tick_number) as first_tick_state,
@@ -439,6 +440,7 @@ public static class ClickHouseSchema
             end_tick_end_log_id UInt64,
             is_complete UInt8 DEFAULT 0,
             tick_count UInt64 DEFAULT 0,
+            empty_tick_count UInt64 DEFAULT 0,
             tx_count UInt64 DEFAULT 0,
             total_volume UInt128 DEFAULT 0,
             active_addresses UInt64 DEFAULT 0,
@@ -451,7 +453,8 @@ public static class ClickHouseSchema
 
         // Migration: add stat columns to existing epoch_meta table
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS tick_count UInt64 DEFAULT 0 AFTER is_complete",
-        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS tx_count UInt64 DEFAULT 0 AFTER tick_count",
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS empty_tick_count UInt64 DEFAULT 0 AFTER tick_count",
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS tx_count UInt64 DEFAULT 0 AFTER empty_tick_count",
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS total_volume UInt128 DEFAULT 0 AFTER tx_count",
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS active_addresses UInt64 DEFAULT 0 AFTER total_volume",
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS transfer_count UInt64 DEFAULT 0 AFTER active_addresses",

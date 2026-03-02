@@ -621,6 +621,7 @@ interface ChartDataPointDto {
 interface EpochSummaryDto {
   epoch: number
   tickCount: number
+  emptyTickCount: number
   txCount: number
   totalVolume: number
   activeAddresses: number
@@ -633,6 +634,7 @@ interface EpochSummaryDto {
 interface EpochStatsDto {
   epoch: number
   tickCount: number
+  emptyTickCount: number
   firstTick: number
   lastTick: number
   startTime: string

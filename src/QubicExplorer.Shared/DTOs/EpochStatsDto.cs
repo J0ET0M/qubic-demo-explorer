@@ -3,6 +3,7 @@ namespace QubicExplorer.Shared.DTOs;
 public record EpochStatsDto(
     uint Epoch,
     ulong TickCount,
+    ulong EmptyTickCount,
     ulong FirstTick,
     ulong LastTick,
     DateTime StartTime,
@@ -28,6 +29,7 @@ public record EpochTransferByTypeDto(
 public record EpochSummaryDto(
     uint Epoch,
     ulong TickCount,
+    ulong EmptyTickCount,
     ulong TxCount,
     decimal TotalVolume,
     ulong ActiveAddresses,

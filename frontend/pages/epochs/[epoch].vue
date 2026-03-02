@@ -147,6 +147,12 @@ const formatDuration = (startStr: string, endStr: string) => {
         </div>
 
         <div class="card-elevated text-center">
+          <Blocks class="h-5 w-5 text-destructive mx-auto mb-2" />
+          <div class="text-2xl font-bold text-destructive">{{ stats.emptyTickCount.toLocaleString() }}</div>
+          <div class="text-xs text-foreground-muted uppercase mt-1">Empty Ticks</div>
+        </div>
+
+        <div class="card-elevated text-center">
           <ArrowLeftRight class="h-5 w-5 text-accent mx-auto mb-2" />
           <div class="text-2xl font-bold text-accent">{{ stats.txCount.toLocaleString() }}</div>
           <div class="text-xs text-foreground-muted uppercase mt-1">Transactions</div>
