@@ -87,7 +87,8 @@ const { formatVolume, formatDate, getLogTypeBadgeClass } = useFormatting()
 const formatDuration = (startStr: string, endStr: string) => {
   const diffMs = new Date(endStr).getTime() - new Date(startStr).getTime()
   const days = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-  const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+  const hours = Math.ceil((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+  if (hours === 24) return `${days + 1}d 0h`
   return `${days}d ${hours}h`
 }
 </script>
