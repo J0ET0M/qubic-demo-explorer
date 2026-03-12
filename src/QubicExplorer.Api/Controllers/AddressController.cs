@@ -75,7 +75,7 @@ public class AddressController : ControllerBase
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetTransfersAsync(page, limit, address, type, direction, minAmount, null, epoch, ct);
+        var result = await _queryService.GetTransfersAsync(page, limit, address, type, direction, minAmount, null, epoch, null, null, ct);
         return Ok(result);
     }
 

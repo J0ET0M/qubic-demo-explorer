@@ -21,8 +21,8 @@ const logTypes = [
 
 // Filter state from URL
 const page = ref(Number(route.query.page) || 1)
-const address = ref((route.query.address as string) || '')
-const direction = ref<'in' | 'out' | ''>((route.query.direction as 'in' | 'out' | '') || '')
+const fromAddress = ref((route.query.from as string) || '')
+const toAddress = ref((route.query.to as string) || '')
 const minAmount = ref(route.query.minAmount ? Number(route.query.minAmount) : undefined)
 const selectedType = ref<number | undefined>(
   route.query.type !== undefined ? Number(route.query.type) : undefined
@@ -35,42 +35,42 @@ const minAmountInput = ref(minAmount.value?.toString() || '')
 
 // Check if any filters are active
 const hasActiveFilters = computed(() =>
-  address.value !== '' || minAmount.value !== undefined || selectedType.value !== undefined
+  fromAddress.value !== '' || toAddress.value !== '' || minAmount.value !== undefined || selectedType.value !== undefined
 )
 
 // Build filter options for API
 const filterOptions = computed(() => {
   const opts: {
-    address?: string
-    direction?: 'in' | 'out'
+    fromAddress?: string
+    toAddress?: string
     type?: number
     minAmount?: number
   } = {}
-  if (address.value) opts.address = address.value
-  if (direction.value === 'in' || direction.value === 'out') opts.direction = direction.value
+  if (fromAddress.value) opts.fromAddress = fromAddress.value
+  if (toAddress.value) opts.toAddress = toAddress.value
   if (selectedType.value !== undefined) opts.type = selectedType.value
   if (minAmount.value !== undefined) opts.minAmount = minAmount.value
   return opts
 })
 
 const { data, pending } = await useAsyncData(
-  () => `transfers-${page.value}-${address.value}-${direction.value}-${selectedType.value}-${minAmount.value}`,
+  () => `transfers-${page.value}-${fromAddress.value}-${toAddress.value}-${selectedType.value}-${minAmount.value}`,
   () => api.getTransfers(page.value, limit, Object.keys(filterOptions.value).length > 0 ? filterOptions.value : undefined),
-  { watch: [page, address, direction, selectedType, minAmount] }
+  { watch: [page, fromAddress, toAddress, selectedType, minAmount] }
 )
 
 // Update URL when filters change
 const updateUrl = () => {
   const query: Record<string, string | number> = {}
   if (page.value > 1) query.page = page.value
-  if (address.value) query.address = address.value
-  if (direction.value) query.direction = direction.value
+  if (fromAddress.value) query.from = fromAddress.value
+  if (toAddress.value) query.to = toAddress.value
   if (selectedType.value !== undefined) query.type = selectedType.value
   if (minAmount.value !== undefined) query.minAmount = minAmount.value
   router.push({ query })
 }
 
-watch([page, address, direction, selectedType, minAmount], updateUrl)
+watch([page, fromAddress, toAddress, selectedType, minAmount], updateUrl)
 
 const updatePage = async (newPage: number) => {
   page.value = newPage
@@ -83,8 +83,8 @@ const applyFilters = () => {
 }
 
 const clearFilters = () => {
-  address.value = ''
-  direction.value = ''
+  fromAddress.value = ''
+  toAddress.value = ''
   minAmountInput.value = ''
   minAmount.value = undefined
   selectedType.value = undefined
@@ -147,11 +147,20 @@ const getTypeName = (type: number) => {
           <!-- Active filter pills -->
           <div v-if="hasActiveFilters" class="flex items-center gap-2 ml-4 flex-wrap">
             <span
-              v-if="address"
+              v-if="fromAddress"
               class="badge badge-info flex items-center gap-1"
             >
-              Addr: {{ address.slice(0, 8) }}...
-              <button @click="address = ''; page = 1" class="hover:text-white">
+              From: {{ fromAddress.slice(0, 8) }}...
+              <button @click="fromAddress = ''; page = 1" class="hover:text-white">
+                <X class="h-3 w-3" />
+              </button>
+            </span>
+            <span
+              v-if="toAddress"
+              class="badge badge-info flex items-center gap-1"
+            >
+              To: {{ toAddress.slice(0, 8) }}...
+              <button @click="toAddress = ''; page = 1" class="hover:text-white">
                 <X class="h-3 w-3" />
               </button>
             </span>
@@ -189,21 +198,22 @@ const getTypeName = (type: number) => {
       <div v-if="showFilters" class="mt-4 pt-4 border-t border-border">
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <div>
-            <label class="block text-sm font-medium mb-1">Address</label>
+            <label class="block text-sm font-medium mb-1">From Address</label>
             <input
-              v-model="address"
+              v-model="fromAddress"
               type="text"
               class="input w-full"
-              placeholder="Filter by address"
+              placeholder="Source address"
             />
           </div>
           <div>
-            <label class="block text-sm font-medium mb-1">Direction</label>
-            <select v-model="direction" class="input w-full">
-              <option value="">Both</option>
-              <option value="in">Incoming</option>
-              <option value="out">Outgoing</option>
-            </select>
+            <label class="block text-sm font-medium mb-1">To Address</label>
+            <input
+              v-model="toAddress"
+              type="text"
+              class="input w-full"
+              placeholder="Destination address"
+            />
           </div>
           <div>
             <label class="block text-sm font-medium mb-1">Minimum Amount (QU)</label>

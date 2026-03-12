@@ -39,6 +39,11 @@ public class LiveTickService : BackgroundService
             {
                 break;
             }
+            catch (InvalidOperationException) when (_bobClient.State != BobConnectionState.Connected)
+            {
+                _logger.LogWarning("WebSocket not connected, waiting for reconnection...");
+                await _bobClient.WaitForConnectionAsync(cancellationToken: stoppingToken);
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "NewTicks subscription error, resubscribing in 5 seconds...");

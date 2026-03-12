@@ -98,7 +98,7 @@ public class BobConnectionService : IDisposable
 
                 _logger.LogInformation("Subscribing to tickStream from tick {StartTick}", resumeTick);
 
-                using var subscription = await _bobClient.SubscribeTickStreamAsync(tickStreamOptions, cancellationToken);
+                using var subscription = await _bobClient!.SubscribeTickStreamAsync(tickStreamOptions, cancellationToken);
 
                 _logger.LogInformation("Subscribed to tickStream: {SubscriptionId}", subscription.ServerSubscriptionId);
 
@@ -130,6 +130,15 @@ public class BobConnectionService : IDisposable
                 _logger.LogInformation("Subscription interrupted by disconnect, waiting for reconnection...");
                 await WaitForReconnectionAsync(cancellationToken);
             }
+            catch (InvalidOperationException) when (_bobClient?.State != BobConnectionState.Connected)
+            {
+                // WebSocket not connected yet — wait for internal reconnection
+                _logger.LogWarning("WebSocket not connected, waiting for reconnection...");
+                if (_bobClient != null)
+                    await _bobClient.WaitForConnectionAsync(cancellationToken: cancellationToken);
+                else
+                    await Task.Delay(5000, cancellationToken);
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "TickStream error, resubscribing in 5s...");
@@ -139,15 +148,22 @@ public class BobConnectionService : IDisposable
     }
 
     /// <summary>
-    /// Waits briefly for the BobWebSocketClient to reconnect after a disconnect.
-    /// The client handles reconnection internally; we just need to give it time
-    /// before attempting to resubscribe.
+    /// Waits for the BobWebSocketClient to reconnect after a disconnect.
     /// </summary>
     private async Task WaitForReconnectionAsync(CancellationToken cancellationToken)
     {
-        // Give the client time to reconnect before resubscribing
-        // The actual reconnection is handled by BobWebSocketClient internally
-        await Task.Delay(_bobOptions.ReconnectDelayMs, cancellationToken);
+        if (_bobClient != null)
+        {
+            _logger.LogInformation("Waiting for Bob to reconnect...");
+            var connected = await _bobClient.WaitForConnectionAsync(
+                TimeSpan.FromSeconds(60), cancellationToken);
+            if (!connected)
+                _logger.LogWarning("Reconnection timed out after 60s, will retry subscription...");
+        }
+        else
+        {
+            await Task.Delay(_bobOptions.ReconnectDelayMs, cancellationToken);
+        }
     }
 
     /// <summary>

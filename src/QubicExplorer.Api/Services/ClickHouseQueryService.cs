@@ -482,27 +482,39 @@ public class ClickHouseQueryService : IDisposable
     public async Task<PaginatedResponse<TransferDto>> GetTransfersAsync(
         int page, int limit, string? address = null, byte? logType = null,
         string? direction = null, ulong? minAmount = null, List<byte>? logTypes = null,
-        uint? epoch = null, CancellationToken ct = default)
+        uint? epoch = null, string? fromAddress = null, string? toAddress = null,
+        CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
 
         // Build PREWHERE for address (uses bloom/minmax index) and WHERE for other filters
-        var prewhereClause = "";
+        var prewhereConditions = new List<string>();
         var conditions = new List<string>();
 
         // Epoch filter (enables partition pruning)
         if (epoch.HasValue)
             conditions.Add($"epoch = {epoch.Value}");
 
-        if (!string.IsNullOrEmpty(address))
+        // Specific from/to address filters (take precedence over generic address+direction)
+        if (!string.IsNullOrEmpty(fromAddress))
+            prewhereConditions.Add($"source_address = '{fromAddress}'");
+        if (!string.IsNullOrEmpty(toAddress))
+            prewhereConditions.Add($"dest_address = '{toAddress}'");
+
+        // Generic address + direction filter (only if from/to not specified)
+        if (prewhereConditions.Count == 0 && !string.IsNullOrEmpty(address))
         {
             if (direction == "in")
-                prewhereClause = $"PREWHERE dest_address = '{address}'";
+                prewhereConditions.Add($"dest_address = '{address}'");
             else if (direction == "out")
-                prewhereClause = $"PREWHERE source_address = '{address}'";
+                prewhereConditions.Add($"source_address = '{address}'");
             else
-                prewhereClause = $"PREWHERE source_address = '{address}' OR dest_address = '{address}'";
+                prewhereConditions.Add($"(source_address = '{address}' OR dest_address = '{address}')");
         }
+
+        var prewhereClause = prewhereConditions.Count > 0
+            ? "PREWHERE " + string.Join(" AND ", prewhereConditions)
+            : "";
 
         // Single log type filter (for backwards compatibility)
         if (logType.HasValue)
