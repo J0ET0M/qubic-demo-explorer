@@ -180,6 +180,17 @@ export const useFormatting = () => {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
   }
 
+  /**
+   * Format epoch duration from start/end date strings (e.g. "6d 23h").
+   */
+  const formatEpochDuration = (startStr: string, endStr: string): string => {
+    const diffMs = new Date(endStr).getTime() - new Date(startStr).getTime()
+    const days = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+    const hours = Math.ceil((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+    if (hours === 24) return `${days + 1}d 0h`
+    return `${days}d ${hours}h`
+  }
+
   return {
     formatVolume,
     formatAmount,
@@ -193,6 +204,7 @@ export const useFormatting = () => {
     getLogTypeBadgeClass,
     getTypeClass,
     formatDuration,
+    formatEpochDuration,
     copyToClipboard,
     epochToDate,
     formatEpochDate,

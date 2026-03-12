@@ -82,15 +82,7 @@ const rewardsByContract = computed(() => {
   return Array.from(grouped.values())
 })
 
-const { formatVolume, formatDate, getLogTypeBadgeClass } = useFormatting()
-
-const formatDuration = (startStr: string, endStr: string) => {
-  const diffMs = new Date(endStr).getTime() - new Date(startStr).getTime()
-  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-  const hours = Math.ceil((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-  if (hours === 24) return `${days + 1}d 0h`
-  return `${days}d ${hours}h`
-}
+const { formatVolume, formatDate, getLogTypeBadgeClass, formatEpochDuration } = useFormatting()
 </script>
 
 <template>
@@ -134,7 +126,7 @@ const formatDuration = (startStr: string, endStr: string) => {
           </div>
           <div class="detail-row">
             <span class="detail-label">Duration</span>
-            <span class="detail-value">{{ formatDuration(stats.startTime, stats.endTime) }}</span>
+            <span class="detail-value">{{ formatEpochDuration(stats.startTime, stats.endTime) }}</span>
           </div>
         </div>
       </div>

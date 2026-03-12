@@ -39,6 +39,84 @@ public class ClickHouseQueryService : IDisposable
     private static decimal ToDecimal(object value) =>
         value is BigInteger bi ? (decimal)bi : Convert.ToDecimal(value);
 
+    // --- DTO construction helpers (eliminate duplication across query methods) ---
+
+    private static TickDto ReadTickDto(System.Data.Common.DbDataReader reader) => new(
+        reader.GetFieldValue<ulong>(0),
+        reader.GetFieldValue<uint>(1),
+        reader.GetDateTime(2),
+        Convert.ToUInt32(reader.GetValue(3)),
+        Convert.ToUInt32(reader.GetValue(4)),
+        reader.GetFieldValue<byte>(5) != 0
+    );
+
+    private static TransactionDto ReadTransactionDto(System.Data.Common.DbDataReader reader)
+    {
+        var inputType = reader.GetFieldValue<ushort>(6);
+        var toAddr = reader.GetString(4);
+        var isCoreTx = string.Equals(toAddr, AddressLabelService.BurnAddress, StringComparison.OrdinalIgnoreCase);
+        return new TransactionDto(
+            reader.GetString(0),
+            reader.GetFieldValue<ulong>(1),
+            reader.GetFieldValue<uint>(2),
+            reader.GetString(3),
+            toAddr,
+            reader.GetFieldValue<ulong>(5),
+            inputType,
+            isCoreTx && CoreTransactionInputTypes.IsKnownType(inputType) ? CoreTransactionInputTypes.GetDisplayName(inputType) : null,
+            reader.GetFieldValue<byte>(7) == 1,
+            reader.GetDateTime(8)
+        );
+    }
+
+    private static TransferDto ReadTransferDto(System.Data.Common.DbDataReader reader)
+    {
+        var logType = reader.GetFieldValue<byte>(3);
+        return new TransferDto(
+            reader.GetFieldValue<ulong>(0),
+            reader.GetFieldValue<uint>(1),
+            reader.GetFieldValue<uint>(2),
+            logType,
+            LogTypes.GetName(logType),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? "" : reader.GetString(5),
+            reader.IsDBNull(6) ? "" : reader.GetString(6),
+            reader.GetFieldValue<ulong>(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.GetDateTime(9)
+        );
+    }
+
+    /// <summary>
+    /// Reads a LogDto from a reader with columns: tick_number, log_id, log_type, tx_hash, source_address, dest_address, amount, asset_name, timestamp
+    /// </summary>
+    private static LogDto ReadLogDto(System.Data.Common.DbDataReader reader)
+    {
+        var logType = reader.GetFieldValue<byte>(2);
+        return new LogDto(
+            reader.GetFieldValue<ulong>(0),
+            reader.GetFieldValue<uint>(1),
+            logType,
+            LogTypes.GetName(logType),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            reader.GetFieldValue<ulong>(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.GetDateTime(8)
+        );
+    }
+
+    private static string BuildDateRangeWhereClause(DateTime? from, DateTime? to, string column = "snapshot_at")
+    {
+        var conditions = new List<string>();
+        if (from.HasValue)
+            conditions.Add($"{column} >= '{from.Value:yyyy-MM-dd HH:mm:ss}'");
+        if (to.HasValue)
+            conditions.Add($"{column} <= '{to.Value:yyyy-MM-dd HH:mm:ss}'");
+        return conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+    }
+
     public async Task<PaginatedResponse<TickDto>> GetTicksAsync(int page, int limit, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
@@ -75,14 +153,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            items.Add(new TickDto(
-                reader.GetFieldValue<ulong>(0),
-                reader.GetFieldValue<uint>(1),
-                reader.GetDateTime(2),
-                Convert.ToUInt32(reader.GetValue(3)),
-                Convert.ToUInt32(reader.GetValue(4)),
-                reader.GetFieldValue<byte>(5) != 0
-            ));
+            items.Add(ReadTickDto(reader));
         }
 
         return new PaginatedResponse<TickDto>(
@@ -107,26 +178,13 @@ public class ClickHouseQueryService : IDisposable
         if (!await reader.ReadAsync(ct))
             return null;
 
-        var tick = new TickDto(
-            reader.GetFieldValue<ulong>(0),
-            reader.GetFieldValue<uint>(1),
-            reader.GetDateTime(2),
-            Convert.ToUInt32(reader.GetValue(3)),
-            Convert.ToUInt32(reader.GetValue(4)),
-            reader.GetFieldValue<byte>(5) != 0
-        );
+        var tick = ReadTickDto(reader);
 
-        var transactions = await GetTransactionsByTickAsync(tickNumber, ct);
+        var transactions = await GetTransactionsByTickPagedAsync(tickNumber, 1, 1000, null, null, null, null, ct);
 
         return new TickDetailDto(
             tick.TickNumber, tick.Epoch, tick.Timestamp,
-            tick.TxCount, tick.LogCount, tick.IsEmpty, transactions);
-    }
-
-    public async Task<List<TransactionDto>> GetTransactionsByTickAsync(ulong tickNumber, CancellationToken ct = default)
-    {
-        var result = await GetTransactionsByTickPagedAsync(tickNumber, 1, 1000, null, null, null, null, ct);
-        return result.Items;
+            tick.TxCount, tick.LogCount, tick.IsEmpty, transactions.Items);
     }
 
     public async Task<PaginatedResponse<TransactionDto>> GetTransactionsByTickPagedAsync(
@@ -172,31 +230,11 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var rowInputType = reader.GetFieldValue<ushort>(6);
-            var rowToAddr = reader.GetString(4);
-            var isCoreTx = string.Equals(rowToAddr, AddressLabelService.BurnAddress, StringComparison.OrdinalIgnoreCase);
-            items.Add(new TransactionDto(
-                reader.GetString(0),
-                reader.GetFieldValue<ulong>(1),
-                reader.GetFieldValue<uint>(2),
-                reader.GetString(3),
-                rowToAddr,
-                reader.GetFieldValue<ulong>(5),
-                rowInputType,
-                isCoreTx && CoreTransactionInputTypes.IsKnownType(rowInputType) ? CoreTransactionInputTypes.GetDisplayName(rowInputType) : null,
-                reader.GetFieldValue<byte>(7) == 1,
-                reader.GetDateTime(8)
-            ));
+            items.Add(ReadTransactionDto(reader));
         }
 
         var totalPages = (int)Math.Ceiling((double)totalCount / limit);
         return new PaginatedResponse<TransactionDto>(items, page, limit, totalCount, totalPages);
-    }
-
-    public async Task<List<TransferDto>> GetLogsByTickAsync(ulong tickNumber, CancellationToken ct = default)
-    {
-        var result = await GetLogsByTickPagedAsync(tickNumber, 1, 1000, null, null, null, null, ct);
-        return result.Items;
     }
 
     public async Task<PaginatedResponse<TransferDto>> GetLogsByTickPagedAsync(
@@ -237,20 +275,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var logTypeValue = reader.GetFieldValue<byte>(3);
-            items.Add(new TransferDto(
-                reader.GetFieldValue<ulong>(0),
-                reader.GetFieldValue<uint>(1),
-                reader.GetFieldValue<uint>(2),
-                logTypeValue,
-                LogTypes.GetName(logTypeValue),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.IsDBNull(5) ? "" : reader.GetString(5),
-                reader.IsDBNull(6) ? "" : reader.GetString(6),
-                reader.GetFieldValue<ulong>(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.GetDateTime(9)
-            ));
+            items.Add(ReadTransferDto(reader));
         }
 
         var totalPages = (int)Math.Ceiling((double)totalCount / limit);
@@ -315,21 +340,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var rowInputType = reader.GetFieldValue<ushort>(6);
-            var rowToAddr = reader.GetString(4);
-            var isCoreTx = string.Equals(rowToAddr, AddressLabelService.BurnAddress, StringComparison.OrdinalIgnoreCase);
-            items.Add(new TransactionDto(
-                reader.GetString(0),
-                reader.GetFieldValue<ulong>(1),
-                reader.GetFieldValue<uint>(2),
-                reader.GetString(3),
-                rowToAddr,
-                reader.GetFieldValue<ulong>(5),
-                rowInputType,
-                isCoreTx && CoreTransactionInputTypes.IsKnownType(rowInputType) ? CoreTransactionInputTypes.GetDisplayName(rowInputType) : null,
-                reader.GetFieldValue<byte>(7) == 1,
-                reader.GetDateTime(8)
-            ));
+            items.Add(ReadTransactionDto(reader));
         }
 
         var totalCount = await countTask;
@@ -387,19 +398,7 @@ public class ClickHouseQueryService : IDisposable
             await using var logReader = await logCmd.ExecuteReaderAsync(ct);
             while (await logReader.ReadAsync(ct))
             {
-                var logType = logReader.GetFieldValue<byte>(2);
-                logs.Add(new LogDto(
-                    logReader.GetFieldValue<ulong>(0),
-                    logReader.GetFieldValue<uint>(1),
-                    logType,
-                    LogTypes.GetName(logType),
-                    logReader.IsDBNull(3) ? null : logReader.GetString(3),
-                    logReader.IsDBNull(4) ? null : logReader.GetString(4),
-                    logReader.IsDBNull(5) ? null : logReader.GetString(5),
-                    logReader.GetFieldValue<ulong>(6),
-                    logReader.IsDBNull(7) ? null : logReader.GetString(7),
-                    logReader.GetDateTime(8)
-                ));
+                logs.Add(ReadLogDto(logReader));
             }
         }
 
@@ -436,22 +435,8 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var logType = reader.GetFieldValue<byte>(2);
-            var logTimestamp = reader.GetDateTime(8);
-            timestamp ??= logTimestamp;
-
-            logs.Add(new LogDto(
-                reader.GetFieldValue<ulong>(0),
-                reader.GetFieldValue<uint>(1),
-                logType,
-                LogTypes.GetName(logType),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.GetFieldValue<ulong>(6),
-                reader.IsDBNull(7) ? null : reader.GetString(7),
-                logTimestamp
-            ));
+            timestamp ??= reader.GetDateTime(8);
+            logs.Add(ReadLogDto(reader));
         }
 
         // If no logs found, try to get tick timestamp for display
@@ -475,7 +460,7 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<PaginatedResponse<TransferDto>> GetTransfersAsync(
         int page, int limit, string? address = null, byte? logType = null,
-        string? direction = null, ulong? minAmount = null, List<byte>? logTypes = null,
+        ulong? minAmount = null, List<byte>? logTypes = null,
         uint? epoch = null, string? fromAddress = null, string? toAddress = null,
         CancellationToken ct = default)
     {
@@ -489,22 +474,15 @@ public class ClickHouseQueryService : IDisposable
         if (epoch.HasValue)
             conditions.Add($"epoch = {epoch.Value}");
 
-        // Specific from/to address filters (take precedence over generic address+direction)
+        // Specific from/to address filters
         if (!string.IsNullOrEmpty(fromAddress))
             prewhereConditions.Add($"source_address = '{fromAddress}'");
         if (!string.IsNullOrEmpty(toAddress))
             prewhereConditions.Add($"dest_address = '{toAddress}'");
 
-        // Generic address + direction filter (only if from/to not specified)
+        // Generic address filter: matches either source or dest (used by address page)
         if (prewhereConditions.Count == 0 && !string.IsNullOrEmpty(address))
-        {
-            if (direction == "in")
-                prewhereConditions.Add($"dest_address = '{address}'");
-            else if (direction == "out")
-                prewhereConditions.Add($"source_address = '{address}'");
-            else
-                prewhereConditions.Add($"(source_address = '{address}' OR dest_address = '{address}')");
-        }
+            prewhereConditions.Add($"(source_address = '{address}' OR dest_address = '{address}')");
 
         var prewhereClause = prewhereConditions.Count > 0
             ? "PREWHERE " + string.Join(" AND ", prewhereConditions)
@@ -547,20 +525,7 @@ public class ClickHouseQueryService : IDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var rowLogType = reader.GetFieldValue<byte>(3);
-            items.Add(new TransferDto(
-                reader.GetFieldValue<ulong>(0),
-                reader.GetFieldValue<uint>(1),
-                reader.GetFieldValue<uint>(2),
-                rowLogType,
-                LogTypes.GetName(rowLogType),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.IsDBNull(5) ? "" : reader.GetString(5),
-                reader.IsDBNull(6) ? "" : reader.GetString(6),
-                reader.GetFieldValue<ulong>(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.GetDateTime(9)
-            ));
+            items.Add(ReadTransferDto(reader));
         }
 
         var totalCount = await countTask;
@@ -2563,12 +2528,7 @@ public class ClickHouseQueryService : IDisposable
         int limit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        var conditions = new List<string>();
-        if (from.HasValue)
-            conditions.Add($"snapshot_at >= '{from.Value:yyyy-MM-dd HH:mm:ss}'");
-        if (to.HasValue)
-            conditions.Add($"snapshot_at <= '{to.Value:yyyy-MM-dd HH:mm:ss}'");
-        var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+        var whereClause = BuildDateRangeWhereClause(from, to);
 
         cmd.CommandText = $@"
             SELECT
@@ -2658,12 +2618,7 @@ public class ClickHouseQueryService : IDisposable
         int limit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        var conditions = new List<string>();
-        if (from.HasValue)
-            conditions.Add($"snapshot_at >= '{from.Value:yyyy-MM-dd HH:mm:ss}'");
-        if (to.HasValue)
-            conditions.Add($"snapshot_at <= '{to.Value:yyyy-MM-dd HH:mm:ss}'");
-        var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+        var whereClause = BuildDateRangeWhereClause(from, to);
 
         cmd.CommandText = $@"
             SELECT
@@ -2753,12 +2708,7 @@ public class ClickHouseQueryService : IDisposable
         int limit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        var conditions = new List<string>();
-        if (from.HasValue)
-            conditions.Add($"snapshot_at >= '{from.Value:yyyy-MM-dd HH:mm:ss}'");
-        if (to.HasValue)
-            conditions.Add($"snapshot_at <= '{to.Value:yyyy-MM-dd HH:mm:ss}'");
-        var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+        var whereClause = BuildDateRangeWhereClause(from, to);
 
         cmd.CommandText = $@"
             SELECT
@@ -3409,12 +3359,7 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<MinerFlowStatsDto>> GetMinerFlowStatsHistoryAsync(int limit, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        var conditions = new List<string>();
-        if (from.HasValue)
-            conditions.Add($"snapshot_at >= '{from.Value:yyyy-MM-dd HH:mm:ss}'");
-        if (to.HasValue)
-            conditions.Add($"snapshot_at <= '{to.Value:yyyy-MM-dd HH:mm:ss}'");
-        var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+        var whereClause = BuildDateRangeWhereClause(from, to);
 
         cmd.CommandText = $@"
             SELECT

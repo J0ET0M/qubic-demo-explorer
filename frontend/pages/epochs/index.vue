@@ -34,12 +34,7 @@ const tickCountData = computed(() => {
   return [...epochs.value].reverse().map(e => e.tickCount)
 })
 
-const { formatVolume, formatDateShort: formatDate } = useFormatting()
-
-const formatDuration = (startStr: string, endStr: string) => {
-  const days = Math.floor((new Date(endStr).getTime() - new Date(startStr).getTime()) / (1000 * 60 * 60 * 24))
-  return `${days} days`
-}
+const { formatVolume, formatDateShort: formatDate, formatEpochDuration } = useFormatting()
 
 // Calculate summary stats
 const totalTx = computed(() => {
@@ -223,7 +218,7 @@ const avgActiveAddresses = computed(() => {
                 <td>{{ epoch.txCount.toLocaleString() }}</td>
                 <td>{{ formatVolume(epoch.totalVolume) }}</td>
                 <td class="hide-mobile">{{ epoch.activeAddresses.toLocaleString() }}</td>
-                <td class="hide-mobile">{{ formatDuration(epoch.startTime, epoch.endTime) }}</td>
+                <td class="hide-mobile">{{ formatEpochDuration(epoch.startTime, epoch.endTime) }}</td>
                 <td class="hide-mobile">{{ formatDate(epoch.startTime) }}</td>
               </tr>
             </tbody>

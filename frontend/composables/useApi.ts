@@ -90,21 +90,17 @@ export const useApi = () => {
 
   // Transfers
   const getTransfers = (page = 1, limit = 20, options?: {
-    address?: string
     fromAddress?: string
     toAddress?: string
     type?: number
     types?: number[]
-    direction?: 'in' | 'out'
     minAmount?: number
   }) => {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) })
-    if (options?.address) params.set('address', options.address)
     if (options?.fromAddress) params.set('fromAddress', options.fromAddress)
     if (options?.toAddress) params.set('toAddress', options.toAddress)
     if (options?.type !== undefined) params.set('type', String(options.type))
     if (options?.types && options.types.length > 0) params.set('types', options.types.join(','))
-    if (options?.direction) params.set('direction', options.direction)
     if (options?.minAmount !== undefined) params.set('minAmount', String(options.minAmount))
     return fetchApi<PaginatedResponse<TransferDto>>(`/api/transfers?${params}`)
   }
