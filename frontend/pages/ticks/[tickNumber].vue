@@ -7,14 +7,6 @@ const { formatDate } = useFormatting()
 
 const tickNumber = Number(route.params.tickNumber)
 
-// Log type definitions for transfers
-const logTypes = [
-  { value: 0, name: 'QU Transfer' },
-  { value: 1, name: 'Asset Issuance' },
-  { value: 2, name: 'Asset Ownership' },
-  { value: 3, name: 'Asset Possession' },
-]
-
 // Pagination state
 const txPage = ref(1)
 const logsPage = ref(1)
@@ -29,19 +21,14 @@ const showTxFilters = ref(false)
 const txMinAmountInput = ref('')
 
 // Logs filter state
-const logsAddress = ref('')
-const logsDirection = ref<'in' | 'out' | ''>('')
+const logsFromAddress = ref('')
+const logsToAddress = ref('')
 const logsType = ref<number | undefined>(undefined)
 const logsMinAmount = ref<number | undefined>(undefined)
-const showLogsFilters = ref(false)
-const logsMinAmountInput = ref('')
 
 // Check if filters are active
 const hasTxFilters = computed(() =>
   txAddress.value !== '' || txMinAmount.value !== undefined || txExecuted.value !== undefined
-)
-const hasLogsFilters = computed(() =>
-  logsAddress.value !== '' || logsType.value !== undefined || logsMinAmount.value !== undefined
 )
 
 const { data: tick, pending, error } = await useAsyncData(
@@ -69,9 +56,9 @@ const { data: transactions, pending: txPending } = await useAsyncData(
 
 // Build logs filter options
 const logsFilterOptions = computed(() => {
-  const opts: { address?: string; direction?: 'in' | 'out'; type?: number; minAmount?: number } = {}
-  if (logsAddress.value) opts.address = logsAddress.value
-  if (logsDirection.value === 'in' || logsDirection.value === 'out') opts.direction = logsDirection.value
+  const opts: { fromAddress?: string; toAddress?: string; type?: number; minAmount?: number } = {}
+  if (logsFromAddress.value) opts.fromAddress = logsFromAddress.value
+  if (logsToAddress.value) opts.toAddress = logsToAddress.value
   if (logsType.value !== undefined) opts.type = logsType.value
   if (logsMinAmount.value !== undefined) opts.minAmount = logsMinAmount.value
   return opts
@@ -79,10 +66,10 @@ const logsFilterOptions = computed(() => {
 
 // Fetch logs with pagination and filters
 const { data: logs, pending: logsPending } = await useAsyncData(
-  () => `tick-${tickNumber}-logs-${logsPage.value}-${logsAddress.value}-${logsDirection.value}-${logsType.value}-${logsMinAmount.value}`,
+  () => `tick-${tickNumber}-logs-${logsPage.value}-${logsFromAddress.value}-${logsToAddress.value}-${logsType.value}-${logsMinAmount.value}`,
   () => api.getTickLogs(tickNumber, logsPage.value, pageLimit,
     Object.keys(logsFilterOptions.value).length > 0 ? logsFilterOptions.value : undefined),
-  { watch: [logsPage, logsAddress, logsDirection, logsType, logsMinAmount] }
+  { watch: [logsPage, logsFromAddress, logsToAddress, logsType, logsMinAmount] }
 )
 
 // Transaction filter functions
@@ -106,25 +93,6 @@ const toggleTxExecutedFilter = (value: boolean | undefined) => {
   txPage.value = 1
 }
 
-// Logs filter functions
-const applyLogsFilters = () => {
-  logsPage.value = 1
-  logsMinAmount.value = logsMinAmountInput.value ? Number(logsMinAmountInput.value) : undefined
-  showLogsFilters.value = false
-}
-
-const clearLogsFilters = () => {
-  logsAddress.value = ''
-  logsDirection.value = ''
-  logsType.value = undefined
-  logsMinAmountInput.value = ''
-  logsMinAmount.value = undefined
-  logsPage.value = 1
-}
-
-const getTypeName = (type: number) => {
-  return logTypes.find(t => t.value === type)?.name || `Type ${type}`
-}
 </script>
 
 <template>
@@ -319,101 +287,14 @@ const getTypeName = (type: number) => {
           Logs / Transfers ({{ logs?.totalCount || 0 }})
         </h2>
 
-        <!-- Logs Filters -->
         <div class="mb-4">
-          <div class="flex items-center justify-between flex-wrap gap-2">
-            <div class="flex items-center gap-2 flex-wrap">
-              <button
-                @click="showLogsFilters = !showLogsFilters"
-                :class="['btn btn-sm btn-ghost', { 'text-accent': hasLogsFilters }]"
-              >
-                <Filter class="h-4 w-4 mr-1" />
-                Filters
-                <span v-if="hasLogsFilters" class="badge badge-accent ml-1 text-xs">Active</span>
-              </button>
-
-              <!-- Quick type filter -->
-              <select v-model="logsType" class="input input-sm w-auto" @change="logsPage = 1">
-                <option :value="undefined">All Types</option>
-                <option v-for="type in logTypes" :key="type.value" :value="type.value">
-                  {{ type.name }}
-                </option>
-              </select>
-
-              <!-- Active filter pills -->
-              <span
-                v-if="logsAddress"
-                class="badge badge-info flex items-center gap-1"
-              >
-                Addr: {{ logsAddress.slice(0, 8) }}...
-                <button @click="logsAddress = ''; logsPage = 1" class="hover:text-white">
-                  <X class="h-3 w-3" />
-                </button>
-              </span>
-              <span
-                v-if="logsMinAmount !== undefined"
-                class="badge badge-info flex items-center gap-1"
-              >
-                Min: {{ logsMinAmount.toLocaleString() }}
-                <button @click="logsMinAmount = undefined; logsPage = 1" class="hover:text-white">
-                  <X class="h-3 w-3" />
-                </button>
-              </span>
-            </div>
-
-            <button
-              v-if="hasLogsFilters"
-              @click="clearLogsFilters"
-              class="btn btn-sm btn-ghost"
-            >
-              Clear filters
-            </button>
-          </div>
-
-          <!-- Expanded filter panel -->
-          <div v-if="showLogsFilters" class="mt-3 p-3 bg-background-elevated rounded-lg">
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-              <div>
-                <label class="block text-xs font-medium mb-1">Address</label>
-                <input
-                  v-model="logsAddress"
-                  type="text"
-                  class="input input-sm w-full"
-                  placeholder="Filter by address"
-                />
-              </div>
-              <div>
-                <label class="block text-xs font-medium mb-1">Direction</label>
-                <select v-model="logsDirection" class="input input-sm w-full">
-                  <option value="">Both</option>
-                  <option value="in">Incoming</option>
-                  <option value="out">Outgoing</option>
-                </select>
-              </div>
-              <div>
-                <label class="block text-xs font-medium mb-1">Type</label>
-                <select v-model="logsType" class="input input-sm w-full">
-                  <option :value="undefined">All Types</option>
-                  <option v-for="type in logTypes" :key="type.value" :value="type.value">
-                    {{ type.name }}
-                  </option>
-                </select>
-              </div>
-              <div>
-                <label class="block text-xs font-medium mb-1">Min Amount</label>
-                <input
-                  v-model="logsMinAmountInput"
-                  type="number"
-                  min="0"
-                  class="input input-sm w-full"
-                  placeholder="e.g., 1000000"
-                />
-              </div>
-              <div class="flex items-end">
-                <button @click="applyLogsFilters" class="btn btn-sm btn-primary">Apply</button>
-              </div>
-            </div>
-          </div>
+          <TransferFilters
+            v-model:from-address="logsFromAddress"
+            v-model:to-address="logsToAddress"
+            v-model:selected-type="logsType"
+            v-model:min-amount="logsMinAmount"
+            @reset-page="logsPage = 1"
+          />
         </div>
 
         <div v-if="logsPending" class="loading">Loading logs...</div>
@@ -429,7 +310,7 @@ const getTypeName = (type: number) => {
           />
         </div>
         <div v-else class="text-center py-8 text-foreground-muted">
-          No logs found{{ hasLogsFilters ? ' matching filters' : ' in this tick' }}.
+          No logs found in this tick.
         </div>
       </div>
     </template>

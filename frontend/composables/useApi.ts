@@ -53,15 +53,15 @@ export const useApi = () => {
   }
 
   const getTickLogs = (tickNumber: number, page = 1, limit = 20, options?: {
-    address?: string
+    fromAddress?: string
+    toAddress?: string
     type?: number
-    direction?: 'in' | 'out'
     minAmount?: number
   }) => {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) })
-    if (options?.address) params.set('address', options.address)
+    if (options?.fromAddress) params.set('fromAddress', options.fromAddress)
+    if (options?.toAddress) params.set('toAddress', options.toAddress)
     if (options?.type !== undefined) params.set('type', String(options.type))
-    if (options?.direction) params.set('direction', options.direction)
     if (options?.minAmount !== undefined) params.set('minAmount', String(options.minAmount))
     return fetchApi<PaginatedResponse<TransferDto>>(`/api/ticks/${tickNumber}/logs?${params}`)
   }
@@ -126,12 +126,14 @@ export const useApi = () => {
   }
 
   const getAddressTransfers = (address: string, page = 1, limit = 20, options?: {
-    direction?: 'in' | 'out'
+    fromAddress?: string
+    toAddress?: string
     type?: number
     minAmount?: number
   }) => {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) })
-    if (options?.direction) params.set('direction', options.direction)
+    if (options?.fromAddress) params.set('fromAddress', options.fromAddress)
+    if (options?.toAddress) params.set('toAddress', options.toAddress)
     if (options?.type !== undefined) params.set('type', String(options.type))
     if (options?.minAmount !== undefined) params.set('minAmount', String(options.minAmount))
     return fetchApi<PaginatedResponse<TransferDto>>(`/api/address/${address}/transfers?${params}`)

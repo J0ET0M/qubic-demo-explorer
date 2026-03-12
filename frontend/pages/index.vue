@@ -97,7 +97,8 @@ onMounted(async () => {
         epoch: tickData.epoch,
         timestamp: new Date().toISOString(),
         txCount: tickData.txCount,
-        logCount: 0 // Will be updated on next full refresh
+        logCount: 0, // Will be updated on next full refresh
+        isEmpty: false
       }
       // Avoid duplicates
       if (!recentTicks.value.items.some(t => t.tickNumber === tickData.tickNumber)) {

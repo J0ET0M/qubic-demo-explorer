@@ -200,23 +200,17 @@ public class ClickHouseQueryService : IDisposable
     }
 
     public async Task<PaginatedResponse<TransferDto>> GetLogsByTickPagedAsync(
-        ulong tickNumber, int page, int limit, string? address = null, byte? logType = null,
-        string? direction = null, ulong? minAmount = null, CancellationToken ct = default)
+        ulong tickNumber, int page, int limit, string? fromAddress = null, string? toAddress = null,
+        byte? logType = null, ulong? minAmount = null, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
         var conditions = new List<string> { $"tick_number = {tickNumber}" };
 
         // Build filter conditions
-        if (!string.IsNullOrEmpty(address))
-        {
-            var escapedAddr = address.Replace("'", "''");
-            if (direction == "in")
-                conditions.Add($"dest_address = '{escapedAddr}'");
-            else if (direction == "out")
-                conditions.Add($"source_address = '{escapedAddr}'");
-            else
-                conditions.Add($"(source_address = '{escapedAddr}' OR dest_address = '{escapedAddr}')");
-        }
+        if (!string.IsNullOrEmpty(fromAddress))
+            conditions.Add($"source_address = '{fromAddress.Replace("'", "''")}'");
+        if (!string.IsNullOrEmpty(toAddress))
+            conditions.Add($"dest_address = '{toAddress.Replace("'", "''")}'");
         if (logType.HasValue)
             conditions.Add($"log_type = {logType.Value}");
         if (minAmount.HasValue)

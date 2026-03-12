@@ -1,23 +1,7 @@
 <script setup lang="ts">
-import { Filter, X } from 'lucide-vue-next'
-
 const api = useApi()
 const route = useRoute()
 const router = useRouter()
-
-// Log type definitions
-const logTypes = [
-  { value: 0, name: 'QU Transfer', color: 'badge-success' },
-  { value: 1, name: 'Asset Issuance', color: 'badge-info' },
-  { value: 2, name: 'Asset Ownership', color: 'badge-warning' },
-  { value: 3, name: 'Asset Possession', color: 'badge-accent' },
-  { value: 4, name: 'Contract Error', color: 'badge-error' },
-  { value: 5, name: 'Contract Warning', color: 'badge-warning' },
-  { value: 6, name: 'Contract Info', color: 'badge-info' },
-  { value: 7, name: 'Contract Debug', color: 'badge-ghost' },
-  { value: 8, name: 'Burning', color: 'badge-error' },
-  { value: 9, name: 'Dust Burning', color: 'badge-error' },
-]
 
 // Filter state from URL
 const page = ref(Number(route.query.page) || 1)
@@ -28,15 +12,6 @@ const selectedType = ref<number | undefined>(
   route.query.type !== undefined ? Number(route.query.type) : undefined
 )
 const limit = 20
-
-// UI state for filter panel
-const showFilters = ref(false)
-const minAmountInput = ref(minAmount.value?.toString() || '')
-
-// Check if any filters are active
-const hasActiveFilters = computed(() =>
-  fromAddress.value !== '' || toAddress.value !== '' || minAmount.value !== undefined || selectedType.value !== undefined
-)
 
 // Build filter options for API
 const filterOptions = computed(() => {
@@ -71,176 +46,18 @@ const updateUrl = () => {
 }
 
 watch([page, fromAddress, toAddress, selectedType, minAmount], updateUrl)
-
-const updatePage = async (newPage: number) => {
-  page.value = newPage
-}
-
-const applyFilters = () => {
-  page.value = 1 // Reset to first page when applying filters
-  minAmount.value = minAmountInput.value ? Number(minAmountInput.value) : undefined
-  showFilters.value = false
-}
-
-const clearFilters = () => {
-  fromAddress.value = ''
-  toAddress.value = ''
-  minAmountInput.value = ''
-  minAmount.value = undefined
-  selectedType.value = undefined
-  page.value = 1
-}
-
-const toggleTypeFilter = (type: number) => {
-  selectedType.value = selectedType.value === type ? undefined : type
-  page.value = 1
-}
-
-const getTypeName = (type: number) => {
-  return logTypes.find(t => t.value === type)?.name || `Type ${type}`
-}
 </script>
 
 <template>
   <div class="space-y-6">
-    <!-- Filter Bar -->
     <div class="card">
-      <div class="flex items-center justify-between flex-wrap gap-4">
-        <div class="flex items-center gap-2 flex-wrap">
-          <button
-            @click="showFilters = !showFilters"
-            :class="['btn btn-ghost', { 'text-accent': hasActiveFilters }]"
-          >
-            <Filter class="h-4 w-4 mr-1" />
-            Filters
-            <span v-if="hasActiveFilters" class="badge badge-accent ml-2">Active</span>
-          </button>
-
-          <!-- Quick filter buttons for common log types -->
-          <div class="flex items-center gap-1 ml-4 flex-wrap">
-            <button
-              @click="toggleTypeFilter(0)"
-              :class="['btn btn-sm', selectedType === 0 ? 'btn-success' : 'btn-ghost']"
-            >
-              QU Transfers
-            </button>
-            <button
-              @click="toggleTypeFilter(1)"
-              :class="['btn btn-sm', selectedType === 1 ? 'btn-info' : 'btn-ghost']"
-            >
-              Asset Issuance
-            </button>
-            <button
-              @click="toggleTypeFilter(2)"
-              :class="['btn btn-sm', selectedType === 2 ? 'btn-warning' : 'btn-ghost']"
-            >
-              Asset Ownership
-            </button>
-            <button
-              @click="toggleTypeFilter(3)"
-              :class="['btn btn-sm', selectedType === 3 ? 'btn-accent' : 'btn-ghost']"
-            >
-              Asset Possession
-            </button>
-          </div>
-
-          <!-- Active filter pills -->
-          <div v-if="hasActiveFilters" class="flex items-center gap-2 ml-4 flex-wrap">
-            <span
-              v-if="fromAddress"
-              class="badge badge-info flex items-center gap-1"
-            >
-              From: {{ fromAddress.slice(0, 8) }}...
-              <button @click="fromAddress = ''; page = 1" class="hover:text-white">
-                <X class="h-3 w-3" />
-              </button>
-            </span>
-            <span
-              v-if="toAddress"
-              class="badge badge-info flex items-center gap-1"
-            >
-              To: {{ toAddress.slice(0, 8) }}...
-              <button @click="toAddress = ''; page = 1" class="hover:text-white">
-                <X class="h-3 w-3" />
-              </button>
-            </span>
-            <span
-              v-if="minAmount !== undefined"
-              class="badge badge-info flex items-center gap-1"
-            >
-              Min: {{ minAmount.toLocaleString() }} QU
-              <button @click="minAmount = undefined; page = 1" class="hover:text-white">
-                <X class="h-3 w-3" />
-              </button>
-            </span>
-            <span
-              v-if="selectedType !== undefined"
-              class="badge badge-accent flex items-center gap-1"
-            >
-              {{ getTypeName(selectedType) }}
-              <button @click="selectedType = undefined; page = 1" class="hover:text-white">
-                <X class="h-3 w-3" />
-              </button>
-            </span>
-          </div>
-        </div>
-
-        <button
-          v-if="hasActiveFilters"
-          @click="clearFilters"
-          class="btn btn-ghost text-sm"
-        >
-          Clear all filters
-        </button>
-      </div>
-
-      <!-- Expanded filter panel -->
-      <div v-if="showFilters" class="mt-4 pt-4 border-t border-border">
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          <div>
-            <label class="block text-sm font-medium mb-1">From Address</label>
-            <input
-              v-model="fromAddress"
-              type="text"
-              class="input w-full"
-              placeholder="Source address"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">To Address</label>
-            <input
-              v-model="toAddress"
-              type="text"
-              class="input w-full"
-              placeholder="Destination address"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Minimum Amount (QU)</label>
-            <input
-              v-model="minAmountInput"
-              type="number"
-              min="0"
-              class="input w-full"
-              placeholder="e.g., 1000000"
-            />
-          </div>
-          <div>
-            <label class="block text-sm font-medium mb-1">Log Type</label>
-            <select v-model="selectedType" class="input w-full">
-              <option :value="undefined">All Types</option>
-              <option v-for="type in logTypes" :key="type.value" :value="type.value">
-                {{ type.name }}
-              </option>
-            </select>
-          </div>
-          <div class="flex items-end">
-            <button @click="applyFilters" class="btn btn-primary">
-              Apply Filters
-            </button>
-          </div>
-        </div>
-      </div>
+      <TransferFilters
+        v-model:from-address="fromAddress"
+        v-model:to-address="toAddress"
+        v-model:selected-type="selectedType"
+        v-model:min-amount="minAmount"
+        @reset-page="page = 1"
+      />
     </div>
 
     <div v-if="pending" class="loading">Loading...</div>
@@ -260,7 +77,7 @@ const getTypeName = (type: number) => {
         :total-pages="data.totalPages"
         :has-next="data.hasNextPage"
         :has-previous="data.hasPreviousPage"
-        @update:current-page="updatePage"
+        @update:current-page="(p) => page = p"
       />
     </template>
   </div>

@@ -60,16 +60,16 @@ public class TicksController : ControllerBase
         ulong tickNumber,
         [FromQuery] int page = 1,
         [FromQuery] int limit = 20,
-        [FromQuery] string? address = null,
+        [FromQuery] string? fromAddress = null,
+        [FromQuery] string? toAddress = null,
         [FromQuery] byte? type = null,
-        [FromQuery] string? direction = null,
         [FromQuery] ulong? minAmount = null,
         CancellationToken ct = default)
     {
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetLogsByTickPagedAsync(tickNumber, page, limit, address, type, direction, minAmount, ct);
+        var result = await _queryService.GetLogsByTickPagedAsync(tickNumber, page, limit, fromAddress, toAddress, type, minAmount, ct);
         return Ok(result);
     }
 }

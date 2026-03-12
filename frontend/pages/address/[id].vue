@@ -24,21 +24,14 @@ const togglePortfolio = () => {
   }
 }
 
-// Log type definitions for transfers
-const logTypes = [
-  { value: 0, name: 'QU Transfer' },
-  { value: 1, name: 'Asset Issuance' },
-  { value: 2, name: 'Asset Ownership' },
-  { value: 3, name: 'Asset Possession' },
-]
-
 // Initialize state from URL query params
 const activeTab = ref<'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph'>(
   (route.query.tab as 'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph') || 'transactions'
 )
-const direction = ref<string>((route.query.direction as string) || '')
 const page = ref(Number(route.query.page) || 1)
 const minAmount = ref(route.query.minAmount ? Number(route.query.minAmount) : undefined)
+const transferFromAddress = ref((route.query.from as string) || '')
+const transferToAddress = ref((route.query.to as string) || '')
 const transferType = ref<number | undefined>(
   route.query.type !== undefined ? Number(route.query.type) : undefined
 )
@@ -51,22 +44,22 @@ const copied = ref(false)
 
 // UI state
 const showTxFilters = ref(false)
-const showTransferFilters = ref(false)
 const minAmountInput = ref(minAmount.value?.toString() || '')
 
 // Sync state to URL
 const updateUrl = () => {
   const query: Record<string, string | number> = {}
   if (activeTab.value !== 'transactions') query.tab = activeTab.value
-  if (direction.value) query.direction = direction.value
   if (page.value > 1) query.page = page.value
+  if (transferFromAddress.value) query.from = transferFromAddress.value
+  if (transferToAddress.value) query.to = transferToAddress.value
   if (minAmount.value !== undefined) query.minAmount = minAmount.value
   if (transferType.value !== undefined) query.type = transferType.value
   if (txExecuted.value !== undefined) query.executed = String(txExecuted.value)
   router.push({ query })
 }
 
-watch([activeTab, direction, page, minAmount, transferType, txExecuted], updateUrl)
+watch([activeTab, page, transferFromAddress, transferToAddress, minAmount, transferType, txExecuted], updateUrl)
 
 // Fetch label for this address
 onMounted(() => fetchLabels([address]))
@@ -76,7 +69,6 @@ const isSmartContract = computed(() => addressLabel.value?.type === 'smartcontra
 
 // Check if filters are active
 const hasTxFilters = computed(() => minAmount.value !== undefined || txExecuted.value !== undefined)
-const hasTransferFilters = computed(() => minAmount.value !== undefined || transferType.value !== undefined || direction.value !== '')
 
 const { data: addressData, pending: addressLoading } = await useAsyncData(
   `address-${address}`,
@@ -128,15 +120,16 @@ const { data: transactions, pending: txLoading, execute: fetchTransactions } = a
 
 // Transfer filters
 const transferFilterOptions = computed(() => {
-  const opts: { direction?: 'in' | 'out'; type?: number; minAmount?: number } = {}
-  if (direction.value === 'in' || direction.value === 'out') opts.direction = direction.value
+  const opts: { fromAddress?: string; toAddress?: string; type?: number; minAmount?: number } = {}
+  if (transferFromAddress.value) opts.fromAddress = transferFromAddress.value
+  if (transferToAddress.value) opts.toAddress = transferToAddress.value
   if (transferType.value !== undefined) opts.type = transferType.value
   if (minAmount.value !== undefined) opts.minAmount = minAmount.value
   return opts
 })
 
 const { data: transfers, pending: transfersLoading, execute: fetchTransfers } = await useAsyncData(
-  () => `address-transfers-${address}-${page.value}-${direction.value}-${transferType.value}-${minAmount.value}`,
+  () => `address-transfers-${address}-${page.value}-${transferFromAddress.value}-${transferToAddress.value}-${transferType.value}-${minAmount.value}`,
   () => api.getAddressTransfers(address, page.value, limit,
     Object.keys(transferFilterOptions.value).length > 0 ? transferFilterOptions.value : undefined),
   { immediate: activeTab.value === 'transfers' }
@@ -181,7 +174,7 @@ watch(activeTab, (tab) => {
 watch([page, minAmount, txExecuted], () => {
   if (activeTab.value === 'transactions' && loadedTabs.value.has('transactions')) fetchTransactions()
 })
-watch([page, direction, transferType, minAmount], () => {
+watch([page, transferFromAddress, transferToAddress, transferType, minAmount], () => {
   if (activeTab.value === 'transfers' && loadedTabs.value.has('transfers')) fetchTransfers()
 })
 watch(rewardsPage, () => {
@@ -204,12 +197,11 @@ const switchTab = (tab: 'transactions' | 'transfers' | 'rewards' | 'flow' | 'gra
   rewardsPage.value = 1
   // Reset filters when switching tabs
   minAmount.value = undefined
-  minAmountInput.value = ''
+  transferFromAddress.value = ''
+  transferToAddress.value = ''
   transferType.value = undefined
   txExecuted.value = undefined
-  direction.value = ''
   showTxFilters.value = false
-  showTransferFilters.value = false
 }
 
 const applyTxFilters = () => {
@@ -225,23 +217,6 @@ const clearTxFilters = () => {
   page.value = 1
 }
 
-const applyTransferFilters = () => {
-  page.value = 1
-  minAmount.value = minAmountInput.value ? Number(minAmountInput.value) : undefined
-  showTransferFilters.value = false
-}
-
-const clearTransferFilters = () => {
-  minAmountInput.value = ''
-  minAmount.value = undefined
-  transferType.value = undefined
-  direction.value = ''
-  page.value = 1
-}
-
-const getTypeName = (type: number) => {
-  return logTypes.find(t => t.value === type)?.name || `Type ${type}`
-}
 </script>
 
 <template>
@@ -517,90 +492,14 @@ const getTypeName = (type: number) => {
 
       <!-- Transfers tab -->
       <template v-if="activeTab === 'transfers'">
-        <!-- Transfer Filters -->
         <div class="mb-4">
-          <div class="flex items-center justify-between flex-wrap gap-2">
-            <div class="flex items-center gap-2 flex-wrap">
-              <button
-                @click="showTransferFilters = !showTransferFilters"
-                :class="['btn btn-sm btn-ghost', { 'text-accent': hasTransferFilters }]"
-              >
-                <Filter class="h-4 w-4 mr-1" />
-                Filters
-                <span v-if="hasTransferFilters" class="badge badge-accent ml-1 text-xs">Active</span>
-              </button>
-
-              <!-- Quick direction filter -->
-              <select v-model="direction" class="input input-sm w-auto" @change="page = 1">
-                <option value="">All Directions</option>
-                <option value="in">Incoming</option>
-                <option value="out">Outgoing</option>
-              </select>
-
-              <!-- Quick type filter -->
-              <select v-model="transferType" class="input input-sm w-auto" @change="page = 1">
-                <option :value="undefined">All Types</option>
-                <option v-for="type in logTypes" :key="type.value" :value="type.value">
-                  {{ type.name }}
-                </option>
-              </select>
-
-              <!-- Active filter pills -->
-              <span
-                v-if="minAmount !== undefined"
-                class="badge badge-info flex items-center gap-1"
-              >
-                Min: {{ minAmount.toLocaleString() }}
-                <button @click="minAmount = undefined; page = 1" class="hover:text-white">
-                  <X class="h-3 w-3" />
-                </button>
-              </span>
-            </div>
-
-            <button
-              v-if="hasTransferFilters"
-              @click="clearTransferFilters"
-              class="btn btn-sm btn-ghost"
-            >
-              Clear filters
-            </button>
-          </div>
-
-          <!-- Expanded filter panel -->
-          <div v-if="showTransferFilters" class="mt-3 p-3 bg-background-elevated rounded-lg">
-            <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
-              <div>
-                <label class="block text-xs font-medium mb-1">Min Amount (QU)</label>
-                <input
-                  v-model="minAmountInput"
-                  type="number"
-                  min="0"
-                  class="input input-sm w-full"
-                  placeholder="e.g., 1000000"
-                />
-              </div>
-              <div>
-                <label class="block text-xs font-medium mb-1">Direction</label>
-                <select v-model="direction" class="input input-sm w-full">
-                  <option value="">All</option>
-                  <option value="in">Incoming</option>
-                  <option value="out">Outgoing</option>
-                </select>
-              </div>
-              <div>
-                <label class="block text-xs font-medium mb-1">Type</label>
-                <select v-model="transferType" class="input input-sm w-full">
-                  <option :value="undefined">All Types</option>
-                  <option v-for="type in logTypes" :key="type.value" :value="type.value">
-                    {{ type.name }}
-                  </option>
-                </select>
-              </div>
-              <div class="flex items-end">
-                <button @click="applyTransferFilters" class="btn btn-sm btn-primary">Apply</button>
-              </div>
-            </div>
-          </div>
+          <TransferFilters
+            v-model:from-address="transferFromAddress"
+            v-model:to-address="transferToAddress"
+            v-model:selected-type="transferType"
+            v-model:min-amount="minAmount"
+            @reset-page="page = 1"
+          />
         </div>
 
         <div v-if="transfersLoading" class="loading">Loading...</div>
