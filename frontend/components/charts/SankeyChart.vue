@@ -220,11 +220,11 @@ const renderChart = () => {
     .style('cursor', 'pointer')
     .on('mouseenter', function(event: MouseEvent, d: any) {
       d3.select(this).attr('opacity', 1).attr('stroke-width', Math.max(2, d.width + 2))
-      showTooltip(event, `
-        <div class="font-medium">${d.source.name} → ${d.target.name}</div>
-        <div class="text-sm">Amount: ${formatVolume(d.value)}</div>
-        <div class="text-sm">Transactions: ${d.transactionCount || 'N/A'}</div>
-      `)
+      showTooltip(event, [
+        { text: `${d.source.name} → ${d.target.name}`, classes: 'font-medium' },
+        { text: `Amount: ${formatVolume(d.value)}`, classes: 'text-sm' },
+        { text: `Transactions: ${d.transactionCount || 'N/A'}`, classes: 'text-sm' },
+      ])
     })
     .on('mouseleave', function(event: MouseEvent, d: any) {
       const idx = layoutLinks.indexOf(d)
@@ -271,17 +271,17 @@ const renderChart = () => {
     .style('cursor', 'pointer')
     .on('mouseenter', function(event: MouseEvent, d: any) {
       d3.select(this).attr('stroke-width', d.id === selectedNodeId.value ? 4 : 2)
-      const filterHint = d.id === selectedNodeId.value
-        ? '<div class="text-xs text-accent mt-2">Click to clear filter</div>'
-        : '<div class="text-xs text-accent mt-2">Click to filter flow paths</div>'
-      showTooltip(event, `
-        <div class="font-medium">${d.name}</div>
-        <div class="text-xs text-gray-400">${d.address}</div>
-        <div class="text-sm mt-1">Type: ${d.type}</div>
-        <div class="text-sm">Inflow: ${formatVolume(d.totalInflow)}</div>
-        <div class="text-sm">Outflow: ${formatVolume(d.totalOutflow)}</div>
-        ${filterHint}
-      `)
+      const filterHintText = d.id === selectedNodeId.value
+        ? 'Click to clear filter'
+        : 'Click to filter flow paths'
+      showTooltip(event, [
+        { text: d.name, classes: 'font-medium' },
+        { text: d.address, classes: 'text-xs text-gray-400' },
+        { text: `Type: ${d.type}`, classes: 'text-sm mt-1' },
+        { text: `Inflow: ${formatVolume(d.totalInflow)}`, classes: 'text-sm' },
+        { text: `Outflow: ${formatVolume(d.totalOutflow)}`, classes: 'text-sm' },
+        { text: filterHintText, classes: 'text-xs text-accent mt-2' },
+      ])
     })
     .on('mouseleave', function(event: MouseEvent, d: any) {
       d3.select(this).attr('stroke-width', d.id === selectedNodeId.value ? 3 : 1)
@@ -339,9 +339,21 @@ const renderChart = () => {
     .text((d: number) => d === 0 ? 'Computors' : d === 1 ? 'Hop 1' : `Hop ${d}`)
 }
 
-const showTooltip = (event: MouseEvent, content: string) => {
+interface TooltipLine {
+  text: string
+  classes?: string
+}
+
+const showTooltip = (event: MouseEvent, lines: TooltipLine[]) => {
   if (!tooltipRef.value) return
-  tooltipRef.value.innerHTML = content
+  // Clear previous content safely
+  tooltipRef.value.textContent = ''
+  for (const line of lines) {
+    const div = document.createElement('div')
+    if (line.classes) div.className = line.classes
+    div.textContent = line.text
+    tooltipRef.value.appendChild(div)
+  }
   tooltipRef.value.style.display = 'block'
   tooltipRef.value.style.left = `${event.pageX + 10}px`
   tooltipRef.value.style.top = `${event.pageY + 10}px`

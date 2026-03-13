@@ -147,7 +147,9 @@ public class ClickHouseQueryService : IDisposable
                 GROUP BY tick_number
             ) log_counts ON t.tick_number = log_counts.tick_number
             ORDER BY t.tick_number DESC
-            LIMIT {limit} OFFSET {offset}";
+            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "off", (uint)offset);
 
         var items = new List<TickDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -168,11 +170,12 @@ public class ClickHouseQueryService : IDisposable
                 t.tick_number,
                 t.epoch,
                 t.timestamp,
-                if(t.tx_count > 0, t.tx_count, (SELECT toUInt32(count()) FROM transactions WHERE tick_number = {tickNumber})) as tx_count,
-                if(t.log_count > 0, t.log_count, (SELECT toUInt32(count()) FROM logs WHERE tick_number = {tickNumber})) as log_count,
+                if(t.tx_count > 0, t.tx_count, (SELECT toUInt32(count()) FROM transactions WHERE tick_number = {{tick:UInt64}})) as tx_count,
+                if(t.log_count > 0, t.log_count, (SELECT toUInt32(count()) FROM logs WHERE tick_number = {{tick:UInt64}})) as log_count,
                 t.is_empty
             FROM ticks t
-            WHERE t.tick_number = {tickNumber}";
+            WHERE t.tick_number = {{tick:UInt64}}";
+        AddParam(cmd, "tick", tickNumber);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -192,29 +195,35 @@ public class ClickHouseQueryService : IDisposable
         ulong? minAmount = null, bool? executed = null, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
-        var conditions = new List<string> { $"tick_number = {tickNumber}" };
+        var conditions = new List<string> { $"tick_number = {{tick:UInt64}}" };
 
         // Build filter conditions
         if (!string.IsNullOrEmpty(address))
         {
-            var escapedAddr = address.Replace("'", "''");
             if (direction == "from")
-                conditions.Add($"from_address = '{escapedAddr}'");
+                conditions.Add($"from_address = {{addr:String}}");
             else if (direction == "to")
-                conditions.Add($"to_address = '{escapedAddr}'");
+                conditions.Add($"to_address = {{addr:String}}");
             else
-                conditions.Add($"(from_address = '{escapedAddr}' OR to_address = '{escapedAddr}')");
+                conditions.Add($"(from_address = {{addr:String}} OR to_address = {{addr:String}})");
         }
         if (minAmount.HasValue)
-            conditions.Add($"amount >= {minAmount.Value}");
+            conditions.Add($"amount >= {{minAmt:UInt64}}");
         if (executed.HasValue)
-            conditions.Add($"executed = {(executed.Value ? 1 : 0)}");
+            conditions.Add($"executed = {{exec:UInt8}}");
 
         var whereClause = string.Join(" AND ", conditions);
 
         // Get total count
         await using var countCmd = _connection.CreateCommand();
         countCmd.CommandText = $"SELECT count() FROM transactions WHERE {whereClause}";
+        AddParam(countCmd, "tick", tickNumber);
+        if (!string.IsNullOrEmpty(address))
+            AddParam(countCmd, "addr", address);
+        if (minAmount.HasValue)
+            AddParam(countCmd, "minAmt", minAmount.Value);
+        if (executed.HasValue)
+            AddParam(countCmd, "exec", (byte)(executed.Value ? 1 : 0));
         var totalCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct));
 
         // Get paginated items
@@ -224,7 +233,16 @@ public class ClickHouseQueryService : IDisposable
             FROM transactions
             WHERE {whereClause}
             ORDER BY hash
-            LIMIT {limit} OFFSET {offset}";
+            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        AddParam(cmd, "tick", tickNumber);
+        if (!string.IsNullOrEmpty(address))
+            AddParam(cmd, "addr", address);
+        if (minAmount.HasValue)
+            AddParam(cmd, "minAmt", minAmount.Value);
+        if (executed.HasValue)
+            AddParam(cmd, "exec", (byte)(executed.Value ? 1 : 0));
+        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "off", (uint)offset);
 
         var items = new List<TransactionDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -242,23 +260,32 @@ public class ClickHouseQueryService : IDisposable
         byte? logType = null, ulong? minAmount = null, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
-        var conditions = new List<string> { $"tick_number = {tickNumber}" };
+        var conditions = new List<string> { $"tick_number = {{tick:UInt64}}" };
 
         // Build filter conditions
         if (!string.IsNullOrEmpty(fromAddress))
-            conditions.Add($"source_address = '{fromAddress.Replace("'", "''")}'");
+            conditions.Add($"source_address = {{fromAddr:String}}");
         if (!string.IsNullOrEmpty(toAddress))
-            conditions.Add($"dest_address = '{toAddress.Replace("'", "''")}'");
+            conditions.Add($"dest_address = {{toAddr:String}}");
         if (logType.HasValue)
-            conditions.Add($"log_type = {logType.Value}");
+            conditions.Add($"log_type = {{logType:UInt8}}");
         if (minAmount.HasValue)
-            conditions.Add($"amount >= {minAmount.Value}");
+            conditions.Add($"amount >= {{minAmt:UInt64}}");
 
         var whereClause = string.Join(" AND ", conditions);
 
         // Get total count
         await using var countCmd = _connection.CreateCommand();
         countCmd.CommandText = $"SELECT count() FROM logs WHERE {whereClause}";
+        AddParam(countCmd, "tick", tickNumber);
+        if (!string.IsNullOrEmpty(fromAddress))
+            AddParam(countCmd, "fromAddr", fromAddress);
+        if (!string.IsNullOrEmpty(toAddress))
+            AddParam(countCmd, "toAddr", toAddress);
+        if (logType.HasValue)
+            AddParam(countCmd, "logType", logType.Value);
+        if (minAmount.HasValue)
+            AddParam(countCmd, "minAmt", minAmount.Value);
         var totalCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct));
 
         // Get paginated items
@@ -269,7 +296,18 @@ public class ClickHouseQueryService : IDisposable
             FROM logs
             WHERE {whereClause}
             ORDER BY log_id
-            LIMIT {limit} OFFSET {offset}";
+            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        AddParam(cmd, "tick", tickNumber);
+        if (!string.IsNullOrEmpty(fromAddress))
+            AddParam(cmd, "fromAddr", fromAddress);
+        if (!string.IsNullOrEmpty(toAddress))
+            AddParam(cmd, "toAddr", toAddress);
+        if (logType.HasValue)
+            AddParam(cmd, "logType", logType.Value);
+        if (minAmount.HasValue)
+            AddParam(cmd, "minAmt", minAmount.Value);
+        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "off", (uint)offset);
 
         var items = new List<TransferDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -296,36 +334,45 @@ public class ClickHouseQueryService : IDisposable
         if (!string.IsNullOrEmpty(address))
         {
             if (direction == "from")
-                prewhereClause = $"PREWHERE from_address = '{address}'";
+                prewhereClause = $"PREWHERE from_address = {{addr:String}}";
             else if (direction == "to")
-                prewhereClause = $"PREWHERE to_address = '{address}'";
+                prewhereClause = $"PREWHERE to_address = {{addr:String}}";
             else
-                prewhereClause = $"PREWHERE from_address = '{address}' OR to_address = '{address}'";
+                prewhereClause = $"PREWHERE from_address = {{addr:String}} OR to_address = {{addr:String}}";
         }
 
         if (minAmount.HasValue)
-            conditions.Add($"amount >= {minAmount.Value}");
+            conditions.Add($"amount >= {{minAmt:UInt64}}");
 
         if (executed.HasValue)
-            conditions.Add($"executed = {(executed.Value ? 1 : 0)}");
+            conditions.Add($"executed = {{exec:UInt8}}");
 
         if (inputType.HasValue)
-            conditions.Add($"input_type = {inputType.Value}");
+            conditions.Add($"input_type = {{inputType:UInt16}}");
 
         if (!string.IsNullOrEmpty(toAddress))
-            conditions.Add($"to_address = '{toAddress.Replace("'", "''")}'");
+            conditions.Add($"to_address = {{toAddr:String}}");
 
         var whereClause = conditions.Count > 0
             ? "WHERE " + string.Join(" AND ", conditions)
             : "";
 
-        // Run count and data queries in parallel
+        // Create both commands before parallel execution
+        await using var countCmd = _connection.CreateCommand();
+        countCmd.CommandText = $"SELECT count() FROM transactions {prewhereClause} {whereClause}";
+        if (!string.IsNullOrEmpty(address))
+            AddParam(countCmd, "addr", address);
+        if (minAmount.HasValue)
+            AddParam(countCmd, "minAmt", minAmount.Value);
+        if (executed.HasValue)
+            AddParam(countCmd, "exec", (byte)(executed.Value ? 1 : 0));
+        if (inputType.HasValue)
+            AddParam(countCmd, "inputType", (ushort)inputType.Value);
+        if (!string.IsNullOrEmpty(toAddress))
+            AddParam(countCmd, "toAddr", toAddress);
+
         var countTask = Task.Run(async () =>
-        {
-            await using var countCmd = _connection.CreateCommand();
-            countCmd.CommandText = $"SELECT count() FROM transactions {prewhereClause} {whereClause}";
-            return Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
-        }, ct);
+            Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
@@ -334,7 +381,19 @@ public class ClickHouseQueryService : IDisposable
             {prewhereClause}
             {whereClause}
             ORDER BY tick_number DESC, hash
-            LIMIT {limit} OFFSET {offset}";
+            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        if (!string.IsNullOrEmpty(address))
+            AddParam(cmd, "addr", address);
+        if (minAmount.HasValue)
+            AddParam(cmd, "minAmt", minAmount.Value);
+        if (executed.HasValue)
+            AddParam(cmd, "exec", (byte)(executed.Value ? 1 : 0));
+        if (inputType.HasValue)
+            AddParam(cmd, "inputType", (ushort)inputType.Value);
+        if (!string.IsNullOrEmpty(toAddress))
+            AddParam(cmd, "toAddr", toAddress);
+        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "off", (uint)offset);
 
         var items = new List<TransactionDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -362,7 +421,8 @@ public class ClickHouseQueryService : IDisposable
             SELECT hash, tick_number, epoch, from_address, to_address, amount,
                    input_type, input_data, executed, timestamp, log_id_from, log_id_length
             FROM transactions
-            WHERE hash = '{hash}'";
+            WHERE hash = {{hash:String}}";
+        AddParam(cmd, "hash", hash);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -390,10 +450,13 @@ public class ClickHouseQueryService : IDisposable
                 SELECT tick_number, log_id, log_type, tx_hash, source_address,
                        dest_address, amount, asset_name, timestamp
                 FROM logs
-                WHERE tick_number = {tickNumber}
-                  AND log_id >= {logIdFrom}
-                  AND log_id < {logIdFrom + logIdLength}
+                WHERE tick_number = {{tick:UInt64}}
+                  AND log_id >= {{logIdFrom:Int32}}
+                  AND log_id < {{logIdEnd:Int32}}
                 ORDER BY log_id";
+            AddParam(logCmd, "tick", tickNumber);
+            AddParam(logCmd, "logIdFrom", logIdFrom);
+            AddParam(logCmd, "logIdEnd", logIdFrom + logIdLength);
 
             await using var logReader = await logCmd.ExecuteReaderAsync(ct);
             while (await logReader.ReadAsync(ct))
@@ -426,8 +489,9 @@ public class ClickHouseQueryService : IDisposable
             SELECT tick_number, log_id, log_type, tx_hash, source_address,
                    dest_address, amount, asset_name, timestamp
             FROM logs
-            WHERE tx_hash = '{txHash}'
+            WHERE tx_hash = {{txHash:String}}
             ORDER BY log_id";
+        AddParam(cmd, "txHash", txHash);
 
         var logs = new List<LogDto>();
         DateTime? timestamp = null;
@@ -443,7 +507,8 @@ public class ClickHouseQueryService : IDisposable
         if (!timestamp.HasValue)
         {
             await using var tickCmd = _connection.CreateCommand();
-            tickCmd.CommandText = $"SELECT timestamp FROM ticks WHERE tick_number = {tickNumber} LIMIT 1";
+            tickCmd.CommandText = "SELECT timestamp FROM ticks WHERE tick_number = {tick:UInt64} LIMIT 1";
+            AddParam(tickCmd, "tick", tickNumber);
             var tickResult = await tickCmd.ExecuteScalarAsync(ct);
             timestamp = tickResult is DateTime ts ? ts : DateTime.UtcNow;
         }
@@ -472,17 +537,19 @@ public class ClickHouseQueryService : IDisposable
 
         // Epoch filter (enables partition pruning)
         if (epoch.HasValue)
-            conditions.Add($"epoch = {epoch.Value}");
+            conditions.Add($"epoch = {{epoch:UInt32}}");
 
         // Specific from/to address filters
         if (!string.IsNullOrEmpty(fromAddress))
-            prewhereConditions.Add($"source_address = '{fromAddress}'");
+            prewhereConditions.Add($"source_address = {{fromAddr:String}}");
         if (!string.IsNullOrEmpty(toAddress))
-            prewhereConditions.Add($"dest_address = '{toAddress}'");
+            prewhereConditions.Add($"dest_address = {{toAddr:String}}");
 
         // Generic address filter: matches either source or dest (used by address page)
         if (prewhereConditions.Count == 0 && !string.IsNullOrEmpty(address))
-            prewhereConditions.Add($"(source_address = '{address}' OR dest_address = '{address}')");
+        {
+            prewhereConditions.Add($"(source_address = {{addr:String}} OR dest_address = {{addr:String}})");
+        }
 
         var prewhereClause = prewhereConditions.Count > 0
             ? "PREWHERE " + string.Join(" AND ", prewhereConditions)
@@ -490,26 +557,37 @@ public class ClickHouseQueryService : IDisposable
 
         // Single log type filter (for backwards compatibility)
         if (logType.HasValue)
-            conditions.Add($"log_type = {logType.Value}");
+            conditions.Add($"log_type = {{logType:UInt8}}");
 
         // Multiple log types filter (e.g., logTypes=0,1,2)
         if (logTypes != null && logTypes.Count > 0)
             conditions.Add($"log_type IN ({string.Join(",", logTypes)})");
 
         if (minAmount.HasValue)
-            conditions.Add($"amount >= {minAmount.Value}");
+            conditions.Add($"amount >= {{minAmt:UInt64}}");
 
         var whereClause = conditions.Count > 0
             ? "WHERE " + string.Join(" AND ", conditions)
             : "";
 
-        // Run count and data queries in parallel
+        // Create both commands before parallel execution
+        await using var countCmd = _connection.CreateCommand();
+        countCmd.CommandText = $"SELECT count() FROM logs {prewhereClause} {whereClause}";
+        if (!string.IsNullOrEmpty(fromAddress))
+            AddParam(countCmd, "fromAddr", fromAddress);
+        if (!string.IsNullOrEmpty(toAddress))
+            AddParam(countCmd, "toAddr", toAddress);
+        if (prewhereConditions.Count > 0 && string.IsNullOrEmpty(fromAddress) && string.IsNullOrEmpty(toAddress) && !string.IsNullOrEmpty(address))
+            AddParam(countCmd, "addr", address);
+        if (epoch.HasValue)
+            AddParam(countCmd, "epoch", epoch.Value);
+        if (logType.HasValue)
+            AddParam(countCmd, "logType", logType.Value);
+        if (minAmount.HasValue)
+            AddParam(countCmd, "minAmt", minAmount.Value);
+
         var countTask = Task.Run(async () =>
-        {
-            await using var countCmd = _connection.CreateCommand();
-            countCmd.CommandText = $"SELECT count() FROM logs {prewhereClause} {whereClause}";
-            return Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
-        }, ct);
+            Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
@@ -519,7 +597,21 @@ public class ClickHouseQueryService : IDisposable
             {prewhereClause}
             {whereClause}
             ORDER BY tick_number DESC, log_id DESC
-            LIMIT {limit} OFFSET {offset}";
+            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        if (!string.IsNullOrEmpty(fromAddress))
+            AddParam(cmd, "fromAddr", fromAddress);
+        if (!string.IsNullOrEmpty(toAddress))
+            AddParam(cmd, "toAddr", toAddress);
+        if (prewhereConditions.Count > 0 && string.IsNullOrEmpty(fromAddress) && string.IsNullOrEmpty(toAddress) && !string.IsNullOrEmpty(address))
+            AddParam(cmd, "addr", address);
+        if (epoch.HasValue)
+            AddParam(cmd, "epoch", epoch.Value);
+        if (logType.HasValue)
+            AddParam(cmd, "logType", logType.Value);
+        if (minAmount.HasValue)
+            AddParam(cmd, "minAmt", minAmount.Value);
+        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "off", (uint)offset);
 
         var items = new List<TransferDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -540,17 +632,19 @@ public class ClickHouseQueryService : IDisposable
         txCmd.CommandText = $@"
             SELECT count()
             FROM transactions
-            WHERE from_address = '{address}' OR to_address = '{address}'";
+            WHERE from_address = {{addr:String}} OR to_address = {{addr:String}}";
+        AddParam(txCmd, "addr", address);
         var txCount = Convert.ToUInt32(await txCmd.ExecuteScalarAsync(ct));
 
         await using var logCmd = _connection.CreateCommand();
         logCmd.CommandText = $@"
             SELECT
-                COALESCE(sumIf(amount, dest_address = '{address}' AND log_type = 0), 0) as incoming,
-                COALESCE(sumIf(amount, source_address = '{address}' AND log_type = 0), 0) as outgoing,
+                COALESCE(sumIf(amount, dest_address = {{addr:String}} AND log_type = 0), 0) as incoming,
+                COALESCE(sumIf(amount, source_address = {{addr:String}} AND log_type = 0), 0) as outgoing,
                 count() as transfer_count
             FROM logs
-            PREWHERE source_address = '{address}' OR dest_address = '{address}'";
+            PREWHERE source_address = {{addr:String}} OR dest_address = {{addr:String}}";
+        AddParam(logCmd, "addr", address);
 
         ulong incomingAmount = 0, outgoingAmount = 0;
         uint transferCount = 0;
@@ -613,8 +707,9 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = $@"
             SELECT date, tx_count, total_volume
             FROM daily_tx_volume
-            WHERE date >= today() - {days}
+            WHERE date >= today() - {{days:UInt32}}
             ORDER BY date";
+        AddParam(cmd, "days", (uint)days);
 
         var items = new List<ChartDataPointDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -657,7 +752,8 @@ public class ClickHouseQueryService : IDisposable
         {
             // Tick lookup
             await using var tickCmd = _connection.CreateCommand();
-            tickCmd.CommandText = $"SELECT tick_number FROM ticks WHERE tick_number = {tickNumber} LIMIT 1";
+            tickCmd.CommandText = "SELECT tick_number FROM ticks WHERE tick_number = {tick:UInt64} LIMIT 1";
+            AddParam(tickCmd, "tick", tickNumber);
             var tickResult = await tickCmd.ExecuteScalarAsync(ct);
             if (tickResult != null)
                 results.Add(new SearchResultDto(SearchResultType.Tick, tickNumber.ToString(), $"Tick {tickNumber}"));
@@ -666,7 +762,8 @@ public class ClickHouseQueryService : IDisposable
         {
             // Transaction hash lookup (uses bloom filter index on hash)
             await using var txCmd = _connection.CreateCommand();
-            txCmd.CommandText = $"SELECT hash FROM transactions PREWHERE hash = '{query}' LIMIT 1";
+            txCmd.CommandText = $"SELECT hash FROM transactions PREWHERE hash = {{q:String}} LIMIT 1";
+            AddParam(txCmd, "q", query);
             var txResult = await txCmd.ExecuteScalarAsync(ct);
             if (txResult != null)
                 results.Add(new SearchResultDto(SearchResultType.Transaction, query, "Transaction"));
@@ -745,7 +842,8 @@ public class ClickHouseQueryService : IDisposable
                 GROUP BY epoch
             ) tx ON em.epoch = tx.epoch
             ORDER BY em.epoch DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<EpochSummaryDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -801,7 +899,7 @@ public class ClickHouseQueryService : IDisposable
                     maxMerge(end_time_state) as end_time,
                     maxMerge(last_tick_state) as last_tick
                 FROM epoch_tick_stats
-                WHERE epoch = {epoch}
+                WHERE epoch = {{epoch:UInt32}}
                 GROUP BY epoch
             ) ts ON em.epoch = ts.epoch
             LEFT JOIN (
@@ -812,7 +910,7 @@ public class ClickHouseQueryService : IDisposable
                     uniqMerge(unique_senders_state) as unique_senders,
                     uniqMerge(unique_receivers_state) as unique_receivers
                 FROM epoch_tx_stats FINAL
-                WHERE epoch = {epoch}
+                WHERE epoch = {{epoch:UInt32}}
                 GROUP BY epoch
             ) tx ON em.epoch = tx.epoch
             LEFT JOIN (
@@ -821,7 +919,7 @@ public class ClickHouseQueryService : IDisposable
                     sum(transfer_count) as transfer_count,
                     sum(qu_transferred) as qu_transferred
                 FROM epoch_transfer_stats FINAL
-                WHERE epoch = {epoch}
+                WHERE epoch = {{epoch:UInt32}}
                 GROUP BY epoch
             ) tr ON em.epoch = tr.epoch
             LEFT JOIN (
@@ -829,10 +927,11 @@ public class ClickHouseQueryService : IDisposable
                     epoch,
                     sum(count) as asset_transfer_count
                 FROM epoch_transfer_by_type FINAL
-                WHERE epoch = {epoch} AND log_type != 0
+                WHERE epoch = {{epoch:UInt32}} AND log_type != 0
                 GROUP BY epoch
             ) asset ON em.epoch = asset.epoch
-            WHERE em.epoch = {epoch}";
+            WHERE em.epoch = {{epoch:UInt32}}";
+        AddParam(cmd, "epoch", epoch);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -867,9 +966,10 @@ public class ClickHouseQueryService : IDisposable
                 sum(count) as count,
                 sum(total_amount) as total_amount
             FROM epoch_transfer_by_type FINAL
-            WHERE epoch = {epoch}
+            WHERE epoch = {{epoch:UInt32}}
             GROUP BY epoch, log_type
             ORDER BY count DESC";
+        AddParam(cmd, "epoch", epoch);
 
         var items = new List<EpochTransferByTypeDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -933,7 +1033,7 @@ public class ClickHouseQueryService : IDisposable
         // Build WHERE clause for filtering START markers (log_type = 255 is in PREWHERE)
         var startConditions = new List<string>();
         if (epoch.HasValue)
-            startConditions.Add($"epoch = {epoch.Value}");
+            startConditions.Add($"epoch = {{epoch:UInt32}}");
 
         var startWhereClause = startConditions.Count > 0
             ? string.Join(" AND ", startConditions) + " AND"
@@ -941,7 +1041,7 @@ public class ClickHouseQueryService : IDisposable
 
         // Build WHERE clause for filtering by contract address (applied to transfers)
         var contractFilter = contractAddress != null
-            ? $"AND t.source_address = '{contractAddress}'"
+            ? $"AND t.source_address = {{contractAddr:String}}"
             : "";
 
         // Query to find reward START markers and calculate totals
@@ -953,6 +1053,10 @@ public class ClickHouseQueryService : IDisposable
         // Strategy: Use CROSS JOIN with WHERE to pair START/END markers (ClickHouse doesn't support inequality in JOIN ON),
         // then find the minimum END for each START, and extract contract address from the first transfer
         await using var cmd = _connection.CreateCommand();
+        if (contractAddress != null)
+            AddParam(cmd, "contractAddr", contractAddress);
+        if (epoch.HasValue)
+            AddParam(cmd, "epoch", epoch.Value);
         cmd.CommandText = $@"
             WITH start_markers AS (
                 SELECT
@@ -962,7 +1066,7 @@ public class ClickHouseQueryService : IDisposable
                     timestamp
                 FROM logs
                 PREWHERE log_type = 255
-                WHERE {startWhereClause} JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpStartDistributeRewards}
+                WHERE {startWhereClause} JSONExtractUInt(raw_data, 'customMessage') = {{startOp:UInt64}}
             ),
             end_markers AS (
                 SELECT
@@ -970,7 +1074,7 @@ public class ClickHouseQueryService : IDisposable
                     log_id as end_log_id
                 FROM logs
                 PREWHERE log_type = 255
-                WHERE JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpEndDistributeRewards}
+                WHERE JSONExtractUInt(raw_data, 'customMessage') = {{endOp:UInt64}}
             ),
             reward_ranges AS (
                 SELECT
@@ -1006,6 +1110,8 @@ public class ClickHouseQueryService : IDisposable
                 {contractFilter}
             GROUP BY dr.epoch, dr.tick_number, dr.start_log_id, dr.end_log_id, dr.timestamp
             ORDER BY dr.tick_number DESC";
+        AddParam(cmd, "startOp", LogTypes.CustomMessageOpStartDistributeRewards);
+        AddParam(cmd, "endOp", LogTypes.CustomMessageOpEndDistributeRewards);
 
         var items = new List<RewardDistributionDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1035,6 +1141,7 @@ public class ClickHouseQueryService : IDisposable
         // Query to find reward distributions for a specific contract address with pagination
         // Uses same logic as GetRewardDistributionsAsync but with COUNT and LIMIT/OFFSET
         await using var cmd = _connection.CreateCommand();
+        AddParam(cmd, "contractAddr", contractAddress);
         cmd.CommandText = $@"
             WITH start_markers AS (
                 SELECT
@@ -1044,7 +1151,7 @@ public class ClickHouseQueryService : IDisposable
                     timestamp
                 FROM logs
                 PREWHERE log_type = 255
-                WHERE JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpStartDistributeRewards}
+                WHERE JSONExtractUInt(raw_data, 'customMessage') = {{startOp:UInt64}}
             ),
             end_markers AS (
                 SELECT
@@ -1052,7 +1159,7 @@ public class ClickHouseQueryService : IDisposable
                     log_id as end_log_id
                 FROM logs
                 PREWHERE log_type = 255
-                WHERE JSONExtractUInt(raw_data, 'customMessage') = {LogTypes.CustomMessageOpEndDistributeRewards}
+                WHERE JSONExtractUInt(raw_data, 'customMessage') = {{endOp:UInt64}}
             ),
             reward_ranges AS (
                 SELECT
@@ -1073,7 +1180,7 @@ public class ClickHouseQueryService : IDisposable
                     source_address,
                     amount
                 FROM logs
-                PREWHERE source_address = '{contractAddress}' AND log_type = 0
+                PREWHERE source_address = {{contractAddr:String}} AND log_type = 0
             ),
             aggregated AS (
                 SELECT
@@ -1099,7 +1206,11 @@ public class ClickHouseQueryService : IDisposable
                 sum(total_amount) OVER () as total_all_time
             FROM aggregated
             ORDER BY tick_number DESC
-            LIMIT {limit} OFFSET {offset}";
+            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "off", (uint)offset);
+        AddParam(cmd, "startOp", LogTypes.CustomMessageOpStartDistributeRewards);
+        AddParam(cmd, "endOp", LogTypes.CustomMessageOpEndDistributeRewards);
 
         var items = new List<RewardDistributionDto>();
         long totalCount = 0;
@@ -1140,10 +1251,11 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<TopAddressDto>> GetTopAddressesByVolumeAsync(
         int limit = 20, uint? epoch = null, CancellationToken ct = default)
     {
-        var epochFilter = epoch.HasValue ? $"WHERE epoch = {epoch.Value}" : "";
-        var epochFilterAnd = epoch.HasValue ? $"AND epoch = {epoch.Value}" : "";
+        var epochFilterAnd = epoch.HasValue ? $"AND epoch = {{epoch:UInt32}}" : "";
 
         await using var cmd = _connection.CreateCommand();
+        if (epoch.HasValue)
+            AddParam(cmd, "epoch", epoch.Value);
         cmd.CommandText = $@"
             WITH sent AS (
                 SELECT
@@ -1176,7 +1288,8 @@ public class ClickHouseQueryService : IDisposable
             FROM sent s
             FULL OUTER JOIN received r ON s.address = r.address
             ORDER BY total_volume DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<TopAddressDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1216,10 +1329,12 @@ public class ClickHouseQueryService : IDisposable
                 count() as tx_count
             FROM logs
             PREWHERE log_type = 0
-            WHERE dest_address = '{address}' AND source_address != ''
+            WHERE dest_address = {{addr:String}} AND source_address != ''
             GROUP BY source_address
             ORDER BY total_amount DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(inboundCmd, "addr", address);
+        AddParam(inboundCmd, "lim", (uint)limit);
 
         var inbound = new List<FlowNodeDto>();
         await using var inReader = await inboundCmd.ExecuteReaderAsync(ct);
@@ -1245,10 +1360,12 @@ public class ClickHouseQueryService : IDisposable
                 count() as tx_count
             FROM logs
             PREWHERE log_type = 0
-            WHERE source_address = '{address}' AND dest_address != ''
+            WHERE source_address = {{addr:String}} AND dest_address != ''
             GROUP BY dest_address
             ORDER BY total_amount DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(outboundCmd, "addr", address);
+        AddParam(outboundCmd, "lim", (uint)limit);
 
         var outbound = new List<FlowNodeDto>();
         await using var outReader = await outboundCmd.ExecuteReaderAsync(ct);
@@ -1281,9 +1398,11 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<SmartContractUsageDto>> GetSmartContractUsageAsync(
         uint? epoch = null, CancellationToken ct = default)
     {
-        var epochFilter = epoch.HasValue ? $"AND epoch = {epoch.Value}" : "";
+        var epochFilter = epoch.HasValue ? $"AND epoch = {{epoch:UInt32}}" : "";
 
         await using var cmd = _connection.CreateCommand();
+        if (epoch.HasValue)
+            AddParam(cmd, "epoch", epoch.Value);
         cmd.CommandText = $@"
             SELECT
                 to_address,
@@ -1429,7 +1548,9 @@ public class ClickHouseQueryService : IDisposable
             SELECT address, balance
             FROM current_balances
             ORDER BY balance DESC
-            LIMIT {limit} OFFSET {offset}";
+            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        AddParam(listCmd, "lim", (uint)limit);
+        AddParam(listCmd, "off", (uint)offset);
 
         var entries = new List<RichListEntryDto>();
         var rank = offset + 1;
@@ -1594,7 +1715,7 @@ public class ClickHouseQueryService : IDisposable
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var targetAddresses = new HashSet<string>(donationAddresses, StringComparer.OrdinalIgnoreCase) { ArbAddress };
-        var targetAddressesIn = string.Join("', '", targetAddresses);
+        var targetAddressesIn = string.Join("', '", targetAddresses.Select(EscapeSql));
 
         var currentEpoch = await GetCurrentEpochAsync(ct);
         if (currentEpoch == null) return (0, new List<uint>());
@@ -1630,10 +1751,11 @@ public class ClickHouseQueryService : IDisposable
 
             // Get computor emission total
             await using var compCmd = _connection.CreateCommand();
-            compCmd.CommandText = $@"
+            compCmd.CommandText = @"
                 SELECT sum(emission_amount), count()
                 FROM computor_emissions
-                WHERE epoch = {epoch}";
+                WHERE epoch = {epoch:UInt32}";
+            AddParam(compCmd, "epoch", epoch);
             decimal computorEmission = 0;
             int computorCount = 0;
             await using (var reader = await compCmd.ExecuteReaderAsync(ct))
@@ -1651,12 +1773,14 @@ public class ClickHouseQueryService : IDisposable
                 SELECT l.dest_address, sum(l.amount) as total_amount
                 FROM logs l
                 WHERE l.tick_number IN (
-                    SELECT emission_tick FROM emission_imports WHERE epoch = {epoch}
+                    SELECT emission_tick FROM emission_imports WHERE epoch = {{epoch:UInt32}}
                 )
-                AND l.source_address = '{AddressLabelService.BurnAddress}'
+                AND l.source_address = {{burnAddr:String}}
                 AND l.log_type = 0
                 AND l.dest_address IN ('{targetAddressesIn}')
                 GROUP BY l.dest_address";
+            AddParam(transferCmd, "epoch", epoch);
+            AddParam(transferCmd, "burnAddr", AddressLabelService.BurnAddress);
 
             var arbRevenue = 0m;
             var donations = new List<EmissionDonationDto>();
@@ -1683,14 +1807,19 @@ public class ClickHouseQueryService : IDisposable
 
             var donationTotal = donations.Sum(d => d.Amount);
             var donationsJson = System.Text.Json.JsonSerializer.Serialize(donations);
-            var escapedJson = donationsJson.Replace("'", "\\'");
 
             await using var insertCmd = _connection.CreateCommand();
-            insertCmd.CommandText = $@"
+            insertCmd.CommandText = @"
                 INSERT INTO epoch_emission_stats
                 (epoch, computor_emission, computor_count, arb_revenue, donation_total, donations)
                 VALUES
-                ({epoch}, {computorEmission}, {computorCount}, {arbRevenue}, {donationTotal}, '{escapedJson}')";
+                ({epoch:UInt32}, {computorEmission:Float64}, {computorCount:Int32}, {arbRevenue:Float64}, {donationTotal:Float64}, {donJson:String})";
+            AddParam(insertCmd, "epoch", epoch);
+            AddParam(insertCmd, "computorEmission", (double)computorEmission);
+            AddParam(insertCmd, "computorCount", computorCount);
+            AddParam(insertCmd, "arbRevenue", (double)arbRevenue);
+            AddParam(insertCmd, "donationTotal", (double)donationTotal);
+            AddParam(insertCmd, "donJson", donationsJson);
 
             await insertCmd.ExecuteNonQueryAsync(ct);
             backfilled.Add(epoch);
@@ -1710,7 +1839,8 @@ public class ClickHouseQueryService : IDisposable
     {
         // Check if already persisted
         await using var checkCmd = _connection.CreateCommand();
-        checkCmd.CommandText = $"SELECT count() FROM epoch_emission_stats WHERE epoch = {epoch}";
+        checkCmd.CommandText = "SELECT count() FROM epoch_emission_stats WHERE epoch = {epoch:UInt32}";
+        AddParam(checkCmd, "epoch", epoch);
         var existing = Convert.ToInt64(await checkCmd.ExecuteScalarAsync(ct));
         if (existing > 0)
         {
@@ -1723,14 +1853,15 @@ public class ClickHouseQueryService : IDisposable
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var targetAddresses = new HashSet<string>(donationAddresses, StringComparer.OrdinalIgnoreCase) { ArbAddress };
-        var targetAddressesIn = string.Join("', '", targetAddresses);
+        var targetAddressesIn = string.Join("', '", targetAddresses.Select(EscapeSql));
 
         // Get computor emission total
         await using var compCmd = _connection.CreateCommand();
-        compCmd.CommandText = $@"
+        compCmd.CommandText = @"
             SELECT sum(emission_amount), count()
             FROM computor_emissions
-            WHERE epoch = {epoch}";
+            WHERE epoch = {epoch:UInt32}";
+        AddParam(compCmd, "epoch", epoch);
         decimal computorEmission = 0;
         int computorCount = 0;
         await using (var reader = await compCmd.ExecuteReaderAsync(ct))
@@ -1754,12 +1885,14 @@ public class ClickHouseQueryService : IDisposable
             SELECT l.dest_address, sum(l.amount) as total_amount
             FROM logs l
             WHERE l.tick_number IN (
-                SELECT emission_tick FROM emission_imports WHERE epoch = {epoch}
+                SELECT emission_tick FROM emission_imports WHERE epoch = {{epoch:UInt32}}
             )
-            AND l.source_address = '{AddressLabelService.BurnAddress}'
+            AND l.source_address = {{burnAddr:String}}
             AND l.log_type = 0
             AND l.dest_address IN ('{targetAddressesIn}')
             GROUP BY l.dest_address";
+        AddParam(transferCmd, "epoch", epoch);
+        AddParam(transferCmd, "burnAddr", AddressLabelService.BurnAddress);
 
         var arbRevenue = 0m;
         var donations = new List<EmissionDonationDto>();
@@ -1786,14 +1919,19 @@ public class ClickHouseQueryService : IDisposable
 
         var donationTotal = donations.Sum(d => d.Amount);
         var donationsJson = System.Text.Json.JsonSerializer.Serialize(donations);
-        var escapedJson = donationsJson.Replace("'", "\\'");
 
         await using var insertCmd = _connection.CreateCommand();
-        insertCmd.CommandText = $@"
+        insertCmd.CommandText = @"
             INSERT INTO epoch_emission_stats
             (epoch, computor_emission, computor_count, arb_revenue, donation_total, donations)
             VALUES
-            ({epoch}, {computorEmission}, {computorCount}, {arbRevenue}, {donationTotal}, '{escapedJson}')";
+            ({epoch:UInt32}, {computorEmission:Float64}, {computorCount:Int32}, {arbRevenue:Float64}, {donationTotal:Float64}, {donJson:String})";
+        AddParam(insertCmd, "epoch", epoch);
+        AddParam(insertCmd, "computorEmission", (double)computorEmission);
+        AddParam(insertCmd, "computorCount", computorCount);
+        AddParam(insertCmd, "arbRevenue", (double)arbRevenue);
+        AddParam(insertCmd, "donationTotal", (double)donationTotal);
+        AddParam(insertCmd, "donJson", donationsJson);
 
         await insertCmd.ExecuteNonQueryAsync(ct);
         _logger.LogInformation("Persisted emission stats for epoch {Epoch}: computor={Computor}, arb={Arb}, donations={Donations}",
@@ -1807,18 +1945,30 @@ public class ClickHouseQueryService : IDisposable
     public async Task<AddressActivityRangeDto> GetAddressActivityRangeAsync(
         string address, CancellationToken ct = default)
     {
+        // Create both commands before parallel execution
+        await using var firstCmd = _connection.CreateCommand();
+        firstCmd.CommandText = $@"
+            SELECT
+                min(first_tick) as first_tick,
+                min(first_timestamp) as first_timestamp,
+                min(first_epoch) as first_epoch
+            FROM address_first_seen FINAL
+            WHERE address = {{addr:String}}";
+        AddParam(firstCmd, "addr", address);
+
+        await using var lastCmd = _connection.CreateCommand();
+        lastCmd.CommandText = $@"
+            SELECT
+                max(tick_number) as last_tick,
+                max(timestamp) as last_timestamp,
+                max(epoch) as last_epoch
+            FROM logs
+            PREWHERE source_address = {{addr:String}} OR dest_address = {{addr:String}}";
+        AddParam(lastCmd, "addr", address);
+
         // Run first-seen and last-seen queries in parallel
         var firstTask = Task.Run(async () =>
         {
-            await using var firstCmd = _connection.CreateCommand();
-            firstCmd.CommandText = $@"
-                SELECT
-                    min(first_tick) as first_tick,
-                    min(first_timestamp) as first_timestamp,
-                    min(first_epoch) as first_epoch
-                FROM address_first_seen FINAL
-                WHERE address = '{address}'";
-
             await using var reader = await firstCmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct) && !reader.IsDBNull(0))
                 return (ToUInt64(reader.GetValue(0)), (DateTime?)reader.GetDateTime(1), (uint?)Convert.ToUInt32(reader.GetValue(2)));
@@ -1827,15 +1977,6 @@ public class ClickHouseQueryService : IDisposable
 
         var lastTask = Task.Run(async () =>
         {
-            await using var lastCmd = _connection.CreateCommand();
-            lastCmd.CommandText = $@"
-                SELECT
-                    max(tick_number) as last_tick,
-                    max(timestamp) as last_timestamp,
-                    max(epoch) as last_epoch
-                FROM logs
-                PREWHERE source_address = '{address}' OR dest_address = '{address}'";
-
             await using var reader = await lastCmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct) && !reader.IsDBNull(0))
             {
@@ -1936,7 +2077,7 @@ public class ClickHouseQueryService : IDisposable
                 PREWHERE log_type = 0
                 GROUP BY date
                 ORDER BY date DESC
-                LIMIT {limit}";
+                LIMIT {{lim:UInt32}}";
         }
         else
         {
@@ -1950,8 +2091,9 @@ public class ClickHouseQueryService : IDisposable
                 FROM epoch_tx_stats FINAL
                 GROUP BY epoch
                 ORDER BY epoch DESC
-                LIMIT {limit}";
+                LIMIT {{lim:UInt32}}";
         }
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<ActiveAddressTrendDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -2024,7 +2166,8 @@ public class ClickHouseQueryService : IDisposable
             JOIN first_appearance fa ON ea.address = fa.address
             GROUP BY ea.epoch
             ORDER BY ea.epoch DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<NewVsReturningDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -2058,7 +2201,7 @@ public class ClickHouseQueryService : IDisposable
             return new ExchangeFlowDto(new List<ExchangeFlowDataPointDto>(), 0, 0);
         }
 
-        var addressList = string.Join("','", exchangeAddresses.Select(e => e.Address));
+        var addressList = string.Join("','", exchangeAddresses.Select(e => EscapeSql(e.Address)));
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
@@ -2091,7 +2234,8 @@ public class ClickHouseQueryService : IDisposable
             FROM inflows i
             FULL OUTER JOIN outflows o ON i.epoch = o.epoch
             ORDER BY epoch DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<ExchangeFlowDataPointDto>();
         ulong totalInflow = 0;
@@ -2294,7 +2438,7 @@ public class ClickHouseQueryService : IDisposable
                 WHERE log_type = 0 AND amount > 0
                 GROUP BY date
                 ORDER BY date DESC
-                LIMIT {limit}";
+                LIMIT {{lim:UInt32}}";
         }
         else
         {
@@ -2309,8 +2453,9 @@ public class ClickHouseQueryService : IDisposable
                 WHERE log_type = 0 AND amount > 0
                 GROUP BY epoch
                 ORDER BY epoch DESC
-                LIMIT {limit}";
+                LIMIT {{lim:UInt32}}";
         }
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<AvgTxSizeTrendDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -2544,7 +2689,8 @@ public class ClickHouseQueryService : IDisposable
             FROM holder_distribution_history
             {whereClause}
             ORDER BY snapshot_at DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<HolderDistributionHistoryDto>();
 
@@ -2634,7 +2780,8 @@ public class ClickHouseQueryService : IDisposable
             FROM network_stats_history
             {whereClause}
             ORDER BY snapshot_at DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<NetworkStatsHistoryDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -2720,7 +2867,8 @@ public class ClickHouseQueryService : IDisposable
             FROM burn_stats_history
             {whereClause}
             ORDER BY snapshot_at DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<BurnStatsHistoryDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -2796,10 +2944,11 @@ public class ClickHouseQueryService : IDisposable
     public async Task<(ulong MinTick, ulong MaxTick)?> GetTickRangeForEpochAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT min(tick_number), max(tick_number)
             FROM ticks
-            WHERE epoch = {epoch}";
+            WHERE epoch = {epoch:UInt32}";
+        AddParam(cmd, "epoch", epoch);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct) || reader.IsDBNull(0) || reader.IsDBNull(1))
@@ -2818,12 +2967,13 @@ public class ClickHouseQueryService : IDisposable
     public async Task<EpochMetaDto?> GetEpochMetaAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
                    is_complete, updated_at,
                    tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
             FROM epoch_meta FINAL
-            WHERE epoch = {epoch}";
+            WHERE epoch = {epoch:UInt32}";
+        AddParam(cmd, "epoch", epoch);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -2859,7 +3009,8 @@ public class ClickHouseQueryService : IDisposable
                    tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
             FROM epoch_meta FINAL
             ORDER BY epoch DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
 
         var items = new List<EpochMetaDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -2892,16 +3043,29 @@ public class ClickHouseQueryService : IDisposable
     public async Task UpsertEpochMetaAsync(EpochMetaDto epochMeta, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             INSERT INTO epoch_meta
             (epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id, is_complete,
              tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred)
             VALUES
-            ({epochMeta.Epoch}, {epochMeta.InitialTick}, {epochMeta.EndTick},
-             {epochMeta.EndTickStartLogId}, {epochMeta.EndTickEndLogId},
-             {(epochMeta.IsComplete ? 1 : 0)},
-             {epochMeta.TickCount}, {epochMeta.EmptyTickCount}, {epochMeta.TxCount}, {epochMeta.TotalVolume},
-             {epochMeta.ActiveAddresses}, {epochMeta.TransferCount}, {epochMeta.QuTransferred})";
+            ({epoch:UInt32}, {initialTick:UInt64}, {endTick:UInt64},
+             {startLogId:UInt64}, {endLogId:UInt64},
+             {isComplete:UInt8},
+             {tickCount:UInt64}, {emptyTickCount:UInt64}, {txCount:UInt64}, {totalVolume:Float64},
+             {activeAddresses:UInt64}, {transferCount:UInt64}, {quTransferred:Float64})";
+        AddParam(cmd, "epoch", epochMeta.Epoch);
+        AddParam(cmd, "initialTick", epochMeta.InitialTick);
+        AddParam(cmd, "endTick", epochMeta.EndTick);
+        AddParam(cmd, "startLogId", epochMeta.EndTickStartLogId);
+        AddParam(cmd, "endLogId", epochMeta.EndTickEndLogId);
+        AddParam(cmd, "isComplete", (byte)(epochMeta.IsComplete ? 1 : 0));
+        AddParam(cmd, "tickCount", epochMeta.TickCount);
+        AddParam(cmd, "emptyTickCount", epochMeta.EmptyTickCount);
+        AddParam(cmd, "txCount", epochMeta.TxCount);
+        AddParam(cmd, "totalVolume", (double)epochMeta.TotalVolume);
+        AddParam(cmd, "activeAddresses", epochMeta.ActiveAddresses);
+        AddParam(cmd, "transferCount", epochMeta.TransferCount);
+        AddParam(cmd, "quTransferred", (double)epochMeta.QuTransferred);
 
         await cmd.ExecuteNonQueryAsync(ct);
         _logger.LogInformation("Upserted epoch metadata for epoch {Epoch} (initial_tick={InitialTick}, end_tick={EndTick}, complete={IsComplete})",
@@ -2976,7 +3140,7 @@ public class ClickHouseQueryService : IDisposable
                     countMerge(tick_count_state) as tick_count,
                     sumMerge(empty_tick_count_state) as empty_tick_count
                 FROM epoch_tick_stats
-                WHERE epoch = {epoch}
+                WHERE epoch = {{epoch:UInt32}}
             ) ts ON 1=1
             LEFT JOIN (
                 SELECT
@@ -2985,15 +3149,16 @@ public class ClickHouseQueryService : IDisposable
                     uniqMerge(unique_senders_state) as unique_senders,
                     uniqMerge(unique_receivers_state) as unique_receivers
                 FROM epoch_tx_stats FINAL
-                WHERE epoch = {epoch}
+                WHERE epoch = {{epoch:UInt32}}
             ) tx ON 1=1
             LEFT JOIN (
                 SELECT
                     sum(transfer_count) as transfer_count,
                     sum(qu_transferred) as qu_transferred
                 FROM epoch_transfer_stats FINAL
-                WHERE epoch = {epoch}
+                WHERE epoch = {{epoch:UInt32}}
             ) tr ON 1=1";
+        AddParam(cmd, "epoch", epoch);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -3031,7 +3196,8 @@ public class ClickHouseQueryService : IDisposable
     public async Task<ulong> GetMaxLogIdForEpochAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"SELECT max(log_id) FROM logs WHERE epoch = {epoch}";
+        cmd.CommandText = "SELECT max(log_id) FROM logs WHERE epoch = {epoch:UInt32}";
+        AddParam(cmd, "epoch", epoch);
         var result = await cmd.ExecuteScalarAsync(ct);
         if (result == null || result == DBNull.Value)
             return 0;
@@ -3044,7 +3210,10 @@ public class ClickHouseQueryService : IDisposable
     public async Task<ulong> CountLogsInRangeAsync(uint epoch, ulong startLogId, ulong endLogId, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"SELECT count() FROM logs WHERE epoch = {epoch} AND log_id >= {startLogId} AND log_id <= {endLogId}";
+        cmd.CommandText = "SELECT count() FROM logs WHERE epoch = {epoch:UInt32} AND log_id >= {startLogId:UInt64} AND log_id <= {endLogId:UInt64}";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "startLogId", startLogId);
+        AddParam(cmd, "endLogId", endLogId);
         var result = await cmd.ExecuteScalarAsync(ct);
         return result == null || result == DBNull.Value ? 0 : Convert.ToUInt64(result);
     }
@@ -3056,14 +3225,18 @@ public class ClickHouseQueryService : IDisposable
     public async Task<bool> HasEndEpochLogAsync(uint epoch, ulong startLogId, ulong endLogId, ulong endEpochOpCode, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT count() > 0
             FROM logs
-            WHERE epoch = {epoch}
-              AND log_id >= {startLogId}
-              AND log_id <= {endLogId}
+            WHERE epoch = {epoch:UInt32}
+              AND log_id >= {startLogId:UInt64}
+              AND log_id <= {endLogId:UInt64}
               AND log_type = 255
-              AND JSONExtractUInt(raw_data, 'customMessage') = {endEpochOpCode}";
+              AND JSONExtractUInt(raw_data, 'customMessage') = {endEpochOpCode:UInt64}";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "startLogId", startLogId);
+        AddParam(cmd, "endLogId", endLogId);
+        AddParam(cmd, "endEpochOpCode", endEpochOpCode);
 
         var result = await cmd.ExecuteScalarAsync(ct);
         return result != null && Convert.ToBoolean(result);
@@ -3100,7 +3273,13 @@ public class ClickHouseQueryService : IDisposable
 
     private static string EscapeSql(string value)
     {
-        return value.Replace("'", "\\'").Replace("\\", "\\\\");
+        return value.Replace("'", "''");
+    }
+
+    private static void AddParam(System.Data.Common.DbCommand cmd, string name, object value)
+    {
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = name, Value = value });
     }
 
     // =====================================================
@@ -3113,7 +3292,8 @@ public class ClickHouseQueryService : IDisposable
     public async Task<bool> IsComputorListImportedAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"SELECT count() FROM computor_imports WHERE epoch = {epoch}";
+        cmd.CommandText = "SELECT count() FROM computor_imports WHERE epoch = {epoch:UInt32}";
+        AddParam(cmd, "epoch", epoch);
         var count = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct));
         return count > 0;
     }
@@ -3140,7 +3320,9 @@ public class ClickHouseQueryService : IDisposable
         await cmd.ExecuteNonQueryAsync(ct);
 
         await using var importCmd = _connection.CreateCommand();
-        importCmd.CommandText = $@"INSERT INTO computor_imports (epoch, computor_count) VALUES ({epoch}, {addresses.Count})";
+        importCmd.CommandText = @"INSERT INTO computor_imports (epoch, computor_count) VALUES ({epoch:UInt32}, {cnt:UInt32})";
+        AddParam(importCmd, "epoch", epoch);
+        AddParam(importCmd, "cnt", (uint)addresses.Count);
         await importCmd.ExecuteNonQueryAsync(ct);
 
         _logger.LogInformation("Saved {Count} computors for epoch {Epoch}", addresses.Count, epoch);
@@ -3152,11 +3334,12 @@ public class ClickHouseQueryService : IDisposable
     public async Task<ComputorListDto?> GetComputorsAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT address, computor_index
             FROM computors
-            WHERE epoch = {epoch}
+            WHERE epoch = {epoch:UInt32}
             ORDER BY computor_index";
+        AddParam(cmd, "epoch", epoch);
 
         var computors = new List<ComputorDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -3176,7 +3359,8 @@ public class ClickHouseQueryService : IDisposable
 
         // Get import timestamp
         await using var importCmd = _connection.CreateCommand();
-        importCmd.CommandText = $"SELECT imported_at FROM computor_imports WHERE epoch = {epoch} LIMIT 1";
+        importCmd.CommandText = "SELECT imported_at FROM computor_imports WHERE epoch = {epoch:UInt32} LIMIT 1";
+        AddParam(importCmd, "epoch", epoch);
         var importedAt = await importCmd.ExecuteScalarAsync(ct);
 
         return new ComputorListDto(
@@ -3227,8 +3411,9 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = $@"
             SELECT input_type, input_data
             FROM transactions
-            WHERE hash = '{EscapeSql(txHash)}'
+            WHERE hash = {{txHash:String}}
             LIMIT 1";
+        AddParam(cmd, "txHash", txHash);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
@@ -3258,10 +3443,14 @@ public class ClickHouseQueryService : IDisposable
                 source_address, dest_address, amount,
                 origin_address, origin_type, hop_level, dest_type, dest_label
             FROM flow_hops
-            WHERE epoch = {epoch}
-              AND tick_number BETWEEN {tickStart} AND {tickEnd}
-              AND hop_level <= {maxDepth}
+            WHERE epoch = {{epoch:UInt32}}
+              AND tick_number BETWEEN {{tickStart:UInt64}} AND {{tickEnd:UInt64}}
+              AND hop_level <= {{maxDepth:UInt32}}
             ORDER BY hop_level, tick_number";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "tickStart", tickStart);
+        AddParam(cmd, "tickEnd", tickEnd);
+        AddParam(cmd, "maxDepth", (uint)maxDepth);
 
         var result = new List<FlowHopDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -3314,9 +3503,11 @@ public class ClickHouseQueryService : IDisposable
                 source_address, dest_address, amount,
                 origin_address, origin_type, hop_level, dest_type, dest_label
             FROM flow_hops FINAL
-            WHERE emission_epoch = {emissionEpoch}
-              AND hop_level <= {maxDepth}
+            WHERE emission_epoch = {{emissionEpoch:UInt32}}
+              AND hop_level <= {{maxDepth:UInt32}}
             ORDER BY hop_level, tick_number";
+        AddParam(cmd, "emissionEpoch", emissionEpoch);
+        AddParam(cmd, "maxDepth", (uint)maxDepth);
 
         var result = new List<FlowHopDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -3371,7 +3562,8 @@ public class ClickHouseQueryService : IDisposable
             FROM miner_flow_stats
             {whereClause}
             ORDER BY snapshot_at DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "lim", (uint)limit);
 
         var result = new List<MinerFlowStatsDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -3415,7 +3607,8 @@ public class ClickHouseQueryService : IDisposable
     public async Task<bool> IsEmissionImportedAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"SELECT count() FROM emission_imports WHERE epoch = {epoch}";
+        cmd.CommandText = "SELECT count() FROM emission_imports WHERE epoch = {epoch:UInt32}";
+        AddParam(cmd, "epoch", epoch);
         var result = await cmd.ExecuteScalarAsync(ct);
         return Convert.ToInt64(result ?? 0) > 0;
     }
@@ -3444,10 +3637,12 @@ public class ClickHouseQueryService : IDisposable
                 max(timestamp) as emission_timestamp
             FROM logs
             WHERE log_type = 0
-              AND tick_number = {endTick}
-              AND source_address = '{AddressLabelService.BurnAddress}'
+              AND tick_number = {{endTick:UInt64}}
+              AND source_address = {{burnAddr:String}}
               AND dest_address IN ({addressList})
             GROUP BY dest_address";
+        AddParam(queryCmd, "endTick", endTick);
+        AddParam(queryCmd, "burnAddr", AddressLabelService.BurnAddress);
 
         var emissions = new List<(string Address, int Index, decimal Amount, DateTime Timestamp)>();
         decimal totalEmission = 0;
@@ -3495,9 +3690,13 @@ public class ClickHouseQueryService : IDisposable
 
         // Save import record
         await using var importCmd = _connection.CreateCommand();
-        importCmd.CommandText = $@"
+        importCmd.CommandText = @"
             INSERT INTO emission_imports (epoch, computor_count, total_emission, emission_tick)
-            VALUES ({epoch}, {emissions.Count}, {totalEmission}, {endTick})";
+            VALUES ({epoch:UInt32}, {cnt:UInt32}, {totalEmission:Float64}, {endTick:UInt64})";
+        AddParam(importCmd, "epoch", epoch);
+        AddParam(importCmd, "cnt", (uint)emissions.Count);
+        AddParam(importCmd, "totalEmission", (double)totalEmission);
+        AddParam(importCmd, "endTick", endTick);
         await importCmd.ExecuteNonQueryAsync(ct);
 
         _logger.LogInformation(
@@ -3535,7 +3734,9 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = $@"
             SELECT COALESCE(emission_amount, 0)
             FROM computor_emissions
-            WHERE epoch = {epoch} AND address = '{EscapeSql(address)}'";
+            WHERE epoch = {{epoch:UInt32}} AND address = {{addr:String}}";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "addr", address);
 
         var result = await cmd.ExecuteScalarAsync(ct);
         return ToBigDecimal(result ?? 0);
@@ -3547,12 +3748,13 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<ComputorEmissionDto>> GetEmissionsForEpochAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT
                 epoch, computor_index, address, emission_amount, emission_tick, emission_timestamp
             FROM computor_emissions
-            WHERE epoch = {epoch}
+            WHERE epoch = {epoch:UInt32}
             ORDER BY computor_index";
+        AddParam(cmd, "epoch", epoch);
 
         var result = new List<ComputorEmissionDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -3581,10 +3783,11 @@ public class ClickHouseQueryService : IDisposable
     public async Task<EmissionSummaryDto?> GetEmissionSummaryAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT computor_count, total_emission, emission_tick, imported_at
             FROM emission_imports
-            WHERE epoch = {epoch}";
+            WHERE epoch = {epoch:UInt32}";
+        AddParam(cmd, "epoch", epoch);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
@@ -3608,25 +3811,28 @@ public class ClickHouseQueryService : IDisposable
     public async Task CreateCustomFlowJobAsync(string jobId, List<string> addresses, List<ulong> balances,
         ulong startTick, string alias, byte maxHops, CancellationToken ct = default)
     {
-        var addrArray = string.Join(",", addresses.Select(a => $"'{EscapeSql(a)}'"));
-        var balArray = string.Join(",", balances);
-
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             INSERT INTO custom_flow_jobs (
                 job_id, alias, start_tick, addresses, balances, max_hops,
                 status, last_processed_tick, total_hops_recorded,
                 total_terminal_amount, total_pending_amount, error_message
             ) VALUES (
-                '{EscapeSql(jobId)}',
-                '{EscapeSql(alias)}',
-                {startTick},
-                [{addrArray}],
-                [{balArray}],
-                {maxHops},
+                {jobId:String},
+                {alias:String},
+                {startTick:UInt64},
+                {addresses:Array(String)},
+                {balances:Array(UInt64)},
+                {maxHops:UInt8},
                 'pending',
                 0, 0, 0, 0, ''
             )";
+        AddParam(cmd, "jobId", jobId);
+        AddParam(cmd, "alias", alias);
+        AddParam(cmd, "startTick", startTick);
+        AddParam(cmd, "addresses", addresses.ToArray());
+        AddParam(cmd, "balances", balances.ToArray());
+        AddParam(cmd, "maxHops", maxHops);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -3638,7 +3844,8 @@ public class ClickHouseQueryService : IDisposable
                    last_processed_tick, total_hops_recorded, total_terminal_amount, total_pending_amount,
                    error_message, created_at, updated_at
             FROM custom_flow_jobs FINAL
-            WHERE job_id = '{EscapeSql(jobId)}'";
+            WHERE job_id = {{jobId:String}}";
+        AddParam(cmd, "jobId", jobId);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
@@ -3672,9 +3879,11 @@ public class ClickHouseQueryService : IDisposable
                    source_address, dest_address, amount,
                    origin_address, hop_level, dest_type, dest_label
             FROM custom_flow_hops FINAL
-            WHERE job_id = '{EscapeSql(jobId)}'
-              AND hop_level <= {maxDepth}
+            WHERE job_id = {{jobId:String}}
+              AND hop_level <= {{maxDepth:UInt32}}
             ORDER BY hop_level, tick_number";
+        AddParam(cmd, "jobId", jobId);
+        AddParam(cmd, "maxDepth", (uint)maxDepth);
 
         var result = new List<CustomFlowHopDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -3709,8 +3918,9 @@ public class ClickHouseQueryService : IDisposable
                    received_amount, sent_amount, pending_amount,
                    hop_level, last_tick, is_terminal, is_complete
             FROM custom_flow_state FINAL
-            WHERE job_id = '{EscapeSql(jobId)}'
+            WHERE job_id = {{jobId:String}}
             ORDER BY hop_level ASC, address";
+        AddParam(cmd, "jobId", jobId);
 
         var result = new List<CustomFlowTrackingStateDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -3750,14 +3960,14 @@ public class ClickHouseQueryService : IDisposable
             return new ExchangeSendersDto(new List<AddressClusterDto>(), new List<ExchangeSenderDto>(), epochs, minAmount);
 
         var exchangeAddrSet = exchangeAddresses.Select(e => e.Address).ToHashSet();
-        var addressList = string.Join("','", exchangeAddrSet);
+        var addressList = string.Join("','", exchangeAddrSet.Select(EscapeSql));
 
         // Build exclude list for clustering: exchanges + known addresses
         var knownAddresses = _labelService.GetAddressesByType(AddressType.Known);
         var excludeFromClustering = new HashSet<string>(exchangeAddrSet);
         foreach (var k in knownAddresses)
             excludeFromClustering.Add(k.Address);
-        var excludeList = string.Join("','", excludeFromClustering);
+        var excludeList = string.Join("','", excludeFromClustering.Select(EscapeSql));
 
         // Get current epoch
         await using var epochCmd = _connection.CreateCommand();
@@ -3788,7 +3998,7 @@ public class ClickHouseQueryService : IDisposable
 
         if (clusterCandidates.Count >= 2)
         {
-            var candidateList = string.Join("','", clusterCandidates);
+            var candidateList = string.Join("','", clusterCandidates.Select(EscapeSql));
 
             // Direct transfers between candidate addresses
             await using var directCmd = _connection.CreateCommand();
@@ -3800,9 +4010,10 @@ public class ClickHouseQueryService : IDisposable
                   AND amount > 0
                   AND source_address IN ('{candidateList}')
                   AND dest_address IN ('{candidateList}')
-                  AND epoch >= {minEpoch}
+                  AND epoch >= {{minEpoch:UInt32}}
                 GROUP BY source_address, dest_address
                 ORDER BY volume DESC";
+            AddParam(directCmd, "minEpoch", minEpoch);
 
             await using var directReader = await directCmd.ExecuteReaderAsync(ct);
             while (await directReader.ReadAsync(ct))
@@ -3829,11 +4040,12 @@ public class ClickHouseQueryService : IDisposable
                   AND dest_address IN ('{candidateList}')
                   AND source_address NOT IN ('{excludeList}')
                   AND source_address NOT IN ('{candidateList}')
-                  AND epoch >= {minEpoch}
+                  AND epoch >= {{minEpoch:UInt32}}
                 GROUP BY source_address
                 HAVING length(groupUniqArray(dest_address)) >= 2
                 ORDER BY total_volume DESC
                 LIMIT 50";
+            AddParam(funderCmd, "minEpoch", minEpoch);
 
             await using var funderReader = await funderCmd.ExecuteReaderAsync(ct);
             while (await funderReader.ReadAsync(ct))
@@ -3895,15 +4107,19 @@ public class ClickHouseQueryService : IDisposable
                 uniq(epoch) as epoch_count
             FROM logs FINAL
             WHERE log_type = 0
-              AND amount >= {minAmount}
+              AND amount >= {{minAmt:UInt64}}
               AND dest_address IN ('{exchangeList}')
-              AND epoch >= {minEpoch}
-              AND epoch <= {maxEpoch}
+              AND epoch >= {{minEpoch:UInt32}}
+              AND epoch <= {{maxEpoch:UInt32}}
               AND source_address NOT IN ('{exchangeList}')
             GROUP BY source_address
-            HAVING total_volume >= {minAmount}
+            HAVING total_volume >= {{minAmt:UInt64}}
             ORDER BY total_volume DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "minAmt", minAmount);
+        AddParam(cmd, "minEpoch", minEpoch);
+        AddParam(cmd, "maxEpoch", maxEpoch);
+        AddParam(cmd, "lim", (uint)limit);
 
         var senders = new List<ExchangeSenderDto>();
         var addresses = new HashSet<string>();
@@ -3943,8 +4159,10 @@ public class ClickHouseQueryService : IDisposable
               AND amount > 0
               AND dest_address IN ('{exchangeList}')
               AND source_address NOT IN ('{exchangeList}')
-              AND epoch >= {minEpoch}
-              AND epoch <= {maxEpoch}";
+              AND epoch >= {{minEpoch:UInt32}}
+              AND epoch <= {{maxEpoch:UInt32}}";
+        AddParam(depositCmd, "minEpoch", minEpoch);
+        AddParam(depositCmd, "maxEpoch", maxEpoch);
 
         var depositAddresses = new HashSet<string>();
         await using var depositReader = await depositCmd.ExecuteReaderAsync(ct);
@@ -3954,7 +4172,7 @@ public class ClickHouseQueryService : IDisposable
         if (depositAddresses.Count == 0)
             return (new List<ExchangeSenderDto>(), new HashSet<string>());
 
-        var depositList = string.Join("','", depositAddresses);
+        var depositList = string.Join("','", depositAddresses.Select(EscapeSql));
 
         // Step 2: Find addresses that funded those deposit addresses
         // Exclude exchanges and the deposit addresses themselves
@@ -3972,12 +4190,16 @@ public class ClickHouseQueryService : IDisposable
               AND dest_address IN ('{depositList}')
               AND source_address NOT IN ('{exchangeList}')
               AND source_address NOT IN ('{depositList}')
-              AND epoch >= {minEpoch}
-              AND epoch <= {maxEpoch}
+              AND epoch >= {{minEpoch:UInt32}}
+              AND epoch <= {{maxEpoch:UInt32}}
             GROUP BY source_address
-            HAVING total_volume >= {minAmount}
+            HAVING total_volume >= {{minAmt:UInt64}}
             ORDER BY total_volume DESC
-            LIMIT {limit}";
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "minEpoch", minEpoch);
+        AddParam(cmd, "maxEpoch", maxEpoch);
+        AddParam(cmd, "minAmt", minAmount);
+        AddParam(cmd, "lim", (uint)limit);
 
         var senders = new List<ExchangeSenderDto>();
         var addresses = new HashSet<string>();
@@ -4160,10 +4382,8 @@ public class ClickHouseQueryService : IDisposable
             GROUP BY counterparty
             ORDER BY total_amount DESC
             LIMIT {{limit:UInt32}}";
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "address", Value = address });
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "limit", Value = (uint)limit });
+        AddParam(cmd, "address", address);
+        AddParam(cmd, "limit", (uint)limit);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -4237,11 +4457,9 @@ public class ClickHouseQueryService : IDisposable
               AND record_type IN ('issuance', 'ownership', 'possession')
             GROUP BY asset_name, issuer_address, number_of_decimal_places
             LIMIT 1";
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "name", Value = assetName });
+        AddParam(cmd, "name", assetName);
         if (issuer != null)
-            cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-                { ParameterName = "issuer", Value = issuer });
+            AddParam(cmd, "issuer", issuer);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -4282,8 +4500,7 @@ public class ClickHouseQueryService : IDisposable
                  WHERE epoch = (SELECT max(epoch) FROM universe_imports)
                    AND asset_name = {{name:String}} AND record_type = 'issuance'
                  LIMIT 1) AS resolved_issuer";
-        metaCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "name", Value = assetName });
+        AddParam(metaCmd, "name", assetName);
 
         await using var metaReader = await metaCmd.ExecuteReaderAsync(ct);
         if (!await metaReader.ReadAsync(ct) || metaReader.IsDBNull(0))
@@ -4310,12 +4527,9 @@ public class ClickHouseQueryService : IDisposable
               AND issuer_address = {{issuer:String}}
               AND record_type = 'possession'
               AND number_of_shares > 0";
-        countCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "epoch", Value = epoch });
-        countCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "name", Value = assetName });
-        countCmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "issuer", Value = issuerAddress });
+        AddParam(countCmd, "epoch", epoch);
+        AddParam(countCmd, "name", assetName);
+        AddParam(countCmd, "issuer", issuerAddress);
         var totalCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct));
 
         // Get holders with both ownership and possession shares
@@ -4335,16 +4549,11 @@ public class ClickHouseQueryService : IDisposable
             HAVING possessed > 0
             ORDER BY possessed DESC
             LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}";
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "epoch", Value = epoch });
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "name", Value = assetName });
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "issuer", Value = issuerAddress });
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "limit", Value = (uint)limit });
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "offset", Value = (uint)offset });
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "name", assetName);
+        AddParam(cmd, "issuer", issuerAddress);
+        AddParam(cmd, "limit", (uint)limit);
+        AddParam(cmd, "offset", (uint)offset);
 
         var holders = new List<AssetHolderDetailDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -4383,10 +4592,8 @@ public class ClickHouseQueryService : IDisposable
               AND amount >= {{threshold:UInt64}}
             ORDER BY tick_number DESC
             LIMIT {{limit:UInt32}}";
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "threshold", Value = threshold });
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "limit", Value = (uint)limit });
+        AddParam(cmd, "threshold", threshold);
+        AddParam(cmd, "limit", (uint)limit);
 
         var results = new List<WhaleAlertDto>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -4437,11 +4644,9 @@ public class ClickHouseQueryService : IDisposable
               {epochFilter}
             ORDER BY tick_number DESC
             LIMIT 100000";
-        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-            { ParameterName = "address", Value = address });
+        AddParam(cmd, "address", address);
         if (epoch.HasValue)
-            cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
-                { ParameterName = "epoch", Value = epoch.Value });
+            AddParam(cmd, "epoch", epoch.Value);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -4550,20 +4755,22 @@ public class ClickHouseQueryService : IDisposable
         if (currentEpoch != null)
         {
             await using var liveCmd = _connection.CreateCommand();
-            liveCmd.CommandText = $@"
+            liveCmd.CommandText = @"
                 SELECT
-                    sumIf(amount, log_type = 8 AND source_address = '{QearnAddress}') AS total_burned,
-                    countIf(log_type = 8 AND source_address = '{QearnAddress}') AS burn_count,
-                    sumIf(amount, log_type = 0 AND dest_address = '{QearnAddress}') AS total_input,
-                    countIf(log_type = 0 AND dest_address = '{QearnAddress}') AS input_count,
-                    sumIf(amount, log_type = 0 AND source_address = '{QearnAddress}') AS total_output,
-                    countIf(log_type = 0 AND source_address = '{QearnAddress}') AS output_count,
-                    uniqIf(source_address, log_type = 0 AND dest_address = '{QearnAddress}') AS unique_lockers,
-                    uniqIf(dest_address, log_type = 0 AND source_address = '{QearnAddress}') AS unique_unlockers
+                    sumIf(amount, log_type = 8 AND source_address = {qearn:String}) AS total_burned,
+                    countIf(log_type = 8 AND source_address = {qearn:String}) AS burn_count,
+                    sumIf(amount, log_type = 0 AND dest_address = {qearn:String}) AS total_input,
+                    countIf(log_type = 0 AND dest_address = {qearn:String}) AS input_count,
+                    sumIf(amount, log_type = 0 AND source_address = {qearn:String}) AS total_output,
+                    countIf(log_type = 0 AND source_address = {qearn:String}) AS output_count,
+                    uniqIf(source_address, log_type = 0 AND dest_address = {qearn:String}) AS unique_lockers,
+                    uniqIf(dest_address, log_type = 0 AND source_address = {qearn:String}) AS unique_unlockers
                 FROM logs FINAL
-                WHERE epoch = {currentEpoch.Value}
-                  AND (source_address = '{QearnAddress}' OR dest_address = '{QearnAddress}')
+                WHERE epoch = {currentEpoch:UInt32}
+                  AND (source_address = {qearn:String} OR dest_address = {qearn:String})
                   AND log_type IN (0, 8)";
+            AddParam(liveCmd, "currentEpoch", currentEpoch.Value);
+            AddParam(liveCmd, "qearn", QearnAddress);
 
             await using var liveReader = await liveCmd.ExecuteReaderAsync(ct);
             if (await liveReader.ReadAsync(ct))
@@ -4625,20 +4832,22 @@ public class ClickHouseQueryService : IDisposable
             if (persisted.Contains(epoch)) continue;
 
             await using var queryCmd = _connection.CreateCommand();
-            queryCmd.CommandText = $@"
+            queryCmd.CommandText = @"
                 SELECT
-                    sumIf(amount, log_type = 8 AND source_address = '{QearnAddress}') AS total_burned,
-                    countIf(log_type = 8 AND source_address = '{QearnAddress}') AS burn_count,
-                    sumIf(amount, log_type = 0 AND dest_address = '{QearnAddress}') AS total_input,
-                    countIf(log_type = 0 AND dest_address = '{QearnAddress}') AS input_count,
-                    sumIf(amount, log_type = 0 AND source_address = '{QearnAddress}') AS total_output,
-                    countIf(log_type = 0 AND source_address = '{QearnAddress}') AS output_count,
-                    uniqIf(source_address, log_type = 0 AND dest_address = '{QearnAddress}') AS unique_lockers,
-                    uniqIf(dest_address, log_type = 0 AND source_address = '{QearnAddress}') AS unique_unlockers
+                    sumIf(amount, log_type = 8 AND source_address = {qearn:String}) AS total_burned,
+                    countIf(log_type = 8 AND source_address = {qearn:String}) AS burn_count,
+                    sumIf(amount, log_type = 0 AND dest_address = {qearn:String}) AS total_input,
+                    countIf(log_type = 0 AND dest_address = {qearn:String}) AS input_count,
+                    sumIf(amount, log_type = 0 AND source_address = {qearn:String}) AS total_output,
+                    countIf(log_type = 0 AND source_address = {qearn:String}) AS output_count,
+                    uniqIf(source_address, log_type = 0 AND dest_address = {qearn:String}) AS unique_lockers,
+                    uniqIf(dest_address, log_type = 0 AND source_address = {qearn:String}) AS unique_unlockers
                 FROM logs FINAL
-                WHERE epoch = {epoch}
-                  AND (source_address = '{QearnAddress}' OR dest_address = '{QearnAddress}')
+                WHERE epoch = {epoch:UInt32}
+                  AND (source_address = {qearn:String} OR dest_address = {qearn:String})
                   AND log_type IN (0, 8)";
+            AddParam(queryCmd, "epoch", epoch);
+            AddParam(queryCmd, "qearn", QearnAddress);
 
             await using var reader = await queryCmd.ExecuteReaderAsync(ct);
             if (!await reader.ReadAsync(ct)) continue;
@@ -4650,15 +4859,24 @@ public class ClickHouseQueryService : IDisposable
             if (totalBurned == 0 && totalInput == 0 && totalOutput == 0) continue;
 
             await using var insertCmd = _connection.CreateCommand();
-            insertCmd.CommandText = $@"
+            insertCmd.CommandText = @"
                 INSERT INTO qearn_epoch_stats
                 (epoch, total_burned, burn_count, total_input, input_count,
                  total_output, output_count, unique_lockers, unique_unlockers)
                 VALUES
-                ({epoch}, {totalBurned}, {ToUInt64(reader.GetValue(1))},
-                 {totalInput}, {ToUInt64(reader.GetValue(3))},
-                 {totalOutput}, {ToUInt64(reader.GetValue(5))},
-                 {ToUInt64(reader.GetValue(6))}, {ToUInt64(reader.GetValue(7))})";
+                ({epoch:UInt32}, {totalBurned:UInt64}, {burnCount:UInt64},
+                 {totalInput:UInt64}, {inputCount:UInt64},
+                 {totalOutput:UInt64}, {outputCount:UInt64},
+                 {uniqueLockers:UInt64}, {uniqueUnlockers:UInt64})";
+            AddParam(insertCmd, "epoch", epoch);
+            AddParam(insertCmd, "totalBurned", totalBurned);
+            AddParam(insertCmd, "burnCount", ToUInt64(reader.GetValue(1)));
+            AddParam(insertCmd, "totalInput", totalInput);
+            AddParam(insertCmd, "inputCount", ToUInt64(reader.GetValue(3)));
+            AddParam(insertCmd, "totalOutput", totalOutput);
+            AddParam(insertCmd, "outputCount", ToUInt64(reader.GetValue(5)));
+            AddParam(insertCmd, "uniqueLockers", ToUInt64(reader.GetValue(6)));
+            AddParam(insertCmd, "uniqueUnlockers", ToUInt64(reader.GetValue(7)));
 
             await insertCmd.ExecuteNonQueryAsync(ct);
             backfilled.Add(epoch);
@@ -4791,12 +5009,13 @@ public class ClickHouseQueryService : IDisposable
     public async Task<ComputorRevenueDto?> GetComputorRevenueAsync(uint epoch, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT epoch, computor_count, issuance_rate,
                    tx_quorum_score, vote_quorum_score, mining_quorum_score,
                    total_computor_revenue, arb_revenue, computors
             FROM computor_revenue FINAL
-            WHERE epoch = {epoch}";
+            WHERE epoch = {epoch:UInt32}";
+        AddParam(cmd, "epoch", epoch);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
