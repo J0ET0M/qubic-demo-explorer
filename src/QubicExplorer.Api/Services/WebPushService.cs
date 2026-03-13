@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using ClickHouse.Client.ADO;
 using Microsoft.Extensions.Options;
@@ -65,14 +64,21 @@ public class WebPushService : IDisposable
         CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        var addrArray = "[" + string.Join(",", addresses.Select(a => $"'{a}'")) + "]";
-        var evtArray = "[" + string.Join(",", events.Select(e => $"'{e}'")) + "]";
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             INSERT INTO push_subscriptions
             (subscription_id, endpoint, p256dh, auth, addresses, events, large_transfer_threshold, balance_min_threshold, balance_max_threshold)
             VALUES
-            ('{EscapeSql(subscriptionId)}', '{EscapeSql(endpoint)}', '{EscapeSql(p256dh)}',
-             '{EscapeSql(auth)}', {addrArray}, {evtArray}, {largeTransferThreshold}, {balanceMinThreshold}, {balanceMaxThreshold})";
+            ({subId:String}, {endpoint:String}, {p256dh:String},
+             {auth:String}, {addresses:Array(String)}, {events:Array(String)}, {threshold:UInt64}, {balMin:UInt64}, {balMax:UInt64})";
+        AddParam(cmd, "subId", subscriptionId);
+        AddParam(cmd, "endpoint", endpoint);
+        AddParam(cmd, "p256dh", p256dh);
+        AddParam(cmd, "auth", auth);
+        AddParam(cmd, "addresses", addresses);
+        AddParam(cmd, "events", events);
+        AddParam(cmd, "threshold", largeTransferThreshold);
+        AddParam(cmd, "balMin", balanceMinThreshold);
+        AddParam(cmd, "balMax", balanceMaxThreshold);
         await cmd.ExecuteNonQueryAsync(ct);
 
         _logger.LogInformation("Saved push subscription {Id} watching {Count} addresses",
@@ -85,7 +91,8 @@ public class WebPushService : IDisposable
     public async Task RemoveSubscriptionAsync(string subscriptionId, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"ALTER TABLE push_subscriptions DELETE WHERE subscription_id = '{EscapeSql(subscriptionId)}'";
+        cmd.CommandText = "ALTER TABLE push_subscriptions DELETE WHERE subscription_id = {subId:String}";
+        AddParam(cmd, "subId", subscriptionId);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -96,11 +103,12 @@ public class WebPushService : IDisposable
         string address, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT subscription_id, endpoint, p256dh, auth, events, large_transfer_threshold,
                    balance_min_threshold, balance_max_threshold
             FROM push_subscriptions FINAL
-            WHERE has(addresses, '{EscapeSql(address)}')";
+            WHERE has(addresses, {addr:String})";
+        AddParam(cmd, "addr", address);
 
         var results = new List<PushSubscriptionRecord>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -167,11 +175,14 @@ public class WebPushService : IDisposable
         CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             SELECT count() FROM notification_log
-            WHERE subscription_id = '{EscapeSql(subscriptionId)}'
-              AND address = '{EscapeSql(address)}'
-              AND tick_number = {tickNumber}";
+            WHERE subscription_id = {subId:String}
+              AND address = {addr:String}
+              AND tick_number = {tick:UInt64}";
+        AddParam(cmd, "subId", subscriptionId);
+        AddParam(cmd, "addr", address);
+        AddParam(cmd, "tick", tickNumber);
         var count = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct));
         return count > 0;
     }
@@ -185,16 +196,24 @@ public class WebPushService : IDisposable
         CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
+        cmd.CommandText = @"
             INSERT INTO notification_log
             (subscription_id, address, tick_number, event_type, amount)
             VALUES
-            ('{EscapeSql(subscriptionId)}', '{EscapeSql(address)}', {tickNumber}, '{eventType}', {amount})";
+            ({subId:String}, {addr:String}, {tick:UInt64}, {eventType:String}, {amount:UInt64})";
+        AddParam(cmd, "subId", subscriptionId);
+        AddParam(cmd, "addr", address);
+        AddParam(cmd, "tick", tickNumber);
+        AddParam(cmd, "eventType", eventType);
+        AddParam(cmd, "amount", amount);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    private static string EscapeSql(string value)
-        => value.Replace("'", "\\'");
+    private static void AddParam(System.Data.Common.DbCommand cmd, string name, object value)
+    {
+        cmd.Parameters.Add(new ClickHouse.Client.ADO.Parameters.ClickHouseDbParameter
+            { ParameterName = name, Value = value });
+    }
 
     public void Dispose()
     {
