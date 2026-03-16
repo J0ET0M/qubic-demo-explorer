@@ -112,7 +112,32 @@ public class AddressController : ControllerBase
         var result = await _cache.GetOrSetAsync(
             $"address:activity-range:{address}",
             AnalyticsCacheService.AddressActivityRangeTtl,
-            () => _queryService.GetAddressActivityRangeAsync(address, ct));
+            async () =>
+            {
+                // First-seen: cheap query from address_first_seen table (already fast)
+                var firstSeenTask = _queryService.GetAddressFirstSeenAsync(address, ct);
+
+                // Last-seen: use Bob's LatestIncoming/OutgoingTransferTick (no ClickHouse scan!)
+                var bobData = await _bobProxyService.GetBalanceAsync(address, ct);
+
+                var (firstTick, firstTimestamp, firstEpoch) = await firstSeenTask;
+
+                if (bobData != null)
+                {
+                    var lastTick = Math.Max(bobData.LatestIncomingTransferTick, bobData.LatestOutgoingTransferTick);
+                    if (lastTick > 0)
+                    {
+                        // Look up timestamp/epoch for the tick (single-row PK lookup, very fast)
+                        var (lastTimestamp, lastEpoch) = await _queryService.GetTickTimestampAndEpochAsync(lastTick, ct);
+                        return new AddressActivityRangeDto(
+                            firstTick, firstTimestamp, firstEpoch,
+                            lastTick, lastTimestamp, lastEpoch);
+                    }
+                }
+
+                // Fallback: if Bob unavailable, use the expensive ClickHouse logs scan
+                return await _queryService.GetAddressActivityRangeAsync(address, ct);
+            });
         return Ok(result);
     }
 

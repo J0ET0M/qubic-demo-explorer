@@ -350,35 +350,28 @@ public class ClickHouseQueryService : IDisposable
             ? "WHERE " + string.Join(" AND ", conditions)
             : "";
 
-        // Create both commands before parallel execution
-        await using var countCmd = _connection.CreateCommand();
-        if (useUnionApproach)
-        {
-            // UNION approach: each branch uses its own bloom filter
-            countCmd.CommandText = $@"
-                SELECT sum(cnt) FROM (
-                    SELECT count() as cnt FROM transactions PREWHERE from_address = {{addr:String}} {whereClause}
-                    UNION ALL
-                    SELECT count() as cnt FROM transactions PREWHERE to_address = {{addr:String}} {whereClause}
-                )";
-        }
-        else
-        {
-            countCmd.CommandText = $"SELECT count() FROM transactions {prewhereClause} {whereClause}";
-        }
-        if (!string.IsNullOrEmpty(address))
-            AddParam(countCmd, "addr", address);
-        if (minAmount.HasValue)
-            AddParam(countCmd, "minAmt", minAmount.Value);
-        if (executed.HasValue)
-            AddParam(countCmd, "exec", (byte)(executed.Value ? 1 : 0));
-        if (inputType.HasValue)
-            AddParam(countCmd, "inputType", (ushort)inputType.Value);
-        if (!string.IsNullOrEmpty(toAddress))
-            AddParam(countCmd, "toAddr", toAddress);
+        // For address-scoped queries, skip the expensive count() — fetch limit+1 to detect hasMore.
+        // For global queries (no address), count is cheap.
+        var skipCount = !string.IsNullOrEmpty(address);
+        var fetchLimit = skipCount ? limit + 1 : limit;
 
-        var countTask = Task.Run(async () =>
-            Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
+        Task<long>? countTask = null;
+        if (!skipCount)
+        {
+            await using var countCmd = _connection.CreateCommand();
+            countCmd.CommandText = $"SELECT count() FROM transactions {prewhereClause} {whereClause}";
+            if (minAmount.HasValue)
+                AddParam(countCmd, "minAmt", minAmount.Value);
+            if (executed.HasValue)
+                AddParam(countCmd, "exec", (byte)(executed.Value ? 1 : 0));
+            if (inputType.HasValue)
+                AddParam(countCmd, "inputType", (ushort)inputType.Value);
+            if (!string.IsNullOrEmpty(toAddress))
+                AddParam(countCmd, "toAddr", toAddress);
+
+            countTask = Task.Run(async () =>
+                Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
+        }
 
         await using var cmd = _connection.CreateCommand();
         if (useUnionApproach)
@@ -417,7 +410,7 @@ public class ClickHouseQueryService : IDisposable
             AddParam(cmd, "inputType", (ushort)inputType.Value);
         if (!string.IsNullOrEmpty(toAddress))
             AddParam(cmd, "toAddr", toAddress);
-        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "lim", (uint)fetchLimit);
         AddParam(cmd, "off", (uint)offset);
 
         var items = new List<TransactionDto>();
@@ -427,9 +420,20 @@ public class ClickHouseQueryService : IDisposable
             items.Add(ReadTransactionDto(reader));
         }
 
-        var totalCount = await countTask;
-        return new PaginatedResponse<TransactionDto>(
-            items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+        if (skipCount)
+        {
+            var hasMore = items.Count > limit;
+            if (hasMore) items.RemoveAt(items.Count - 1);
+            // totalCount=-1 signals "unknown" to the frontend; totalPages based on hasMore
+            var totalPages = hasMore ? page + 1 : page;
+            return new PaginatedResponse<TransactionDto>(items, page, limit, -1, totalPages);
+        }
+        else
+        {
+            var totalCount = await countTask!;
+            return new PaginatedResponse<TransactionDto>(
+                items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+        }
     }
 
     public async Task<TransactionDetailDto?> GetTransactionByHashAsync(string hash, CancellationToken ct = default)
@@ -597,36 +601,32 @@ public class ClickHouseQueryService : IDisposable
             ? "WHERE " + string.Join(" AND ", conditions)
             : "";
 
-        // Create both commands before parallel execution
-        await using var countCmd = _connection.CreateCommand();
-        if (useUnionForLogs)
-        {
-            countCmd.CommandText = $@"
-                SELECT sum(cnt) FROM (
-                    SELECT count() as cnt FROM logs PREWHERE source_address = {{addr:String}} {whereClause}
-                    UNION ALL
-                    SELECT count() as cnt FROM logs PREWHERE dest_address = {{addr:String}} {whereClause}
-                )";
-        }
-        else
-        {
-            countCmd.CommandText = $"SELECT count() FROM logs {prewhereClause} {whereClause}";
-        }
-        if (!string.IsNullOrEmpty(fromAddress))
-            AddParam(countCmd, "fromAddr", fromAddress);
-        if (!string.IsNullOrEmpty(toAddress))
-            AddParam(countCmd, "toAddr", toAddress);
-        if (useUnionForLogs || (prewhereConditions.Count > 0 && string.IsNullOrEmpty(fromAddress) && string.IsNullOrEmpty(toAddress) && !string.IsNullOrEmpty(address)))
-            AddParam(countCmd, "addr", address!);
-        if (epoch.HasValue)
-            AddParam(countCmd, "epoch", epoch.Value);
-        if (logType.HasValue)
-            AddParam(countCmd, "logType", logType.Value);
-        if (minAmount.HasValue)
-            AddParam(countCmd, "minAmt", minAmount.Value);
+        // For address-scoped queries, skip the expensive count() — fetch limit+1 to detect hasMore.
+        // For global/specific-filter queries, count is acceptable.
+        var skipCount = useUnionForLogs;
+        var fetchLimit = skipCount ? limit + 1 : limit;
 
-        var countTask = Task.Run(async () =>
-            Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
+        Task<long>? countTask = null;
+        if (!skipCount)
+        {
+            await using var countCmd = _connection.CreateCommand();
+            countCmd.CommandText = $"SELECT count() FROM logs {prewhereClause} {whereClause}";
+            if (!string.IsNullOrEmpty(fromAddress))
+                AddParam(countCmd, "fromAddr", fromAddress);
+            if (!string.IsNullOrEmpty(toAddress))
+                AddParam(countCmd, "toAddr", toAddress);
+            if (prewhereConditions.Count > 0 && string.IsNullOrEmpty(fromAddress) && string.IsNullOrEmpty(toAddress) && !string.IsNullOrEmpty(address))
+                AddParam(countCmd, "addr", address!);
+            if (epoch.HasValue)
+                AddParam(countCmd, "epoch", epoch.Value);
+            if (logType.HasValue)
+                AddParam(countCmd, "logType", logType.Value);
+            if (minAmount.HasValue)
+                AddParam(countCmd, "minAmt", minAmount.Value);
+
+            countTask = Task.Run(async () =>
+                Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
+        }
 
         await using var cmd = _connection.CreateCommand();
         if (useUnionForLogs)
@@ -671,7 +671,7 @@ public class ClickHouseQueryService : IDisposable
             AddParam(cmd, "logType", logType.Value);
         if (minAmount.HasValue)
             AddParam(cmd, "minAmt", minAmount.Value);
-        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "lim", (uint)fetchLimit);
         AddParam(cmd, "off", (uint)offset);
 
         var items = new List<TransferDto>();
@@ -681,9 +681,19 @@ public class ClickHouseQueryService : IDisposable
             items.Add(ReadTransferDto(reader));
         }
 
-        var totalCount = await countTask;
-        return new PaginatedResponse<TransferDto>(
-            items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+        if (skipCount)
+        {
+            var hasMore = items.Count > limit;
+            if (hasMore) items.RemoveAt(items.Count - 1);
+            var totalPages = hasMore ? page + 1 : page;
+            return new PaginatedResponse<TransferDto>(items, page, limit, -1, totalPages);
+        }
+        else
+        {
+            var totalCount = await countTask!;
+            return new PaginatedResponse<TransferDto>(
+                items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+        }
     }
 
     public async Task<AddressDto> GetAddressSummaryAsync(string address, CancellationToken ct = default)
@@ -2014,6 +2024,44 @@ public class ClickHouseQueryService : IDisposable
         _logger.LogInformation("Persisted emission stats for epoch {Epoch}: computor={Computor}, arb={Arb}, donations={Donations}",
             epoch, computorEmission, arbRevenue, donationTotal);
         return true;
+    }
+
+    /// <summary>
+    /// Get only the first-seen data from address_first_seen (cheap, pre-computed).
+    /// </summary>
+    public async Task<(ulong? Tick, DateTime? Timestamp, uint? Epoch)> GetAddressFirstSeenAsync(
+        string address, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                min(first_tick) as first_tick,
+                min(first_timestamp) as first_timestamp,
+                min(first_epoch) as first_epoch
+            FROM address_first_seen FINAL
+            WHERE address = {addr:String}";
+        AddParam(cmd, "addr", address);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct) && !reader.IsDBNull(0))
+            return (ToUInt64(reader.GetValue(0)), reader.GetDateTime(1), Convert.ToUInt32(reader.GetValue(2)));
+        return (null, null, null);
+    }
+
+    /// <summary>
+    /// Look up timestamp and epoch for a single tick number (PK lookup, very fast).
+    /// </summary>
+    public async Task<(DateTime? Timestamp, uint? Epoch)> GetTickTimestampAndEpochAsync(
+        uint tickNumber, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT timestamp, epoch FROM ticks WHERE tick_number = {tick:UInt64} LIMIT 1";
+        AddParam(cmd, "tick", (ulong)tickNumber);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct))
+            return (reader.GetDateTime(0), Convert.ToUInt32(reader.GetValue(1)));
+        return (null, null);
     }
 
     /// <summary>
