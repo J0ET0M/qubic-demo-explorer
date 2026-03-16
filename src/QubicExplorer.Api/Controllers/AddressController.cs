@@ -21,26 +21,26 @@ public class AddressController : ControllerBase
     [HttpGet("{address}")]
     public async Task<IActionResult> GetAddress(string address, CancellationToken ct = default)
     {
-        // Parallel fetch: ClickHouse summary + live Bob balance
-        var summaryTask = _cache.GetOrSetAsync(
+        // Get balance from Bob (live network data) — no ClickHouse queries needed.
+        // Bob provides balance, in/out amounts, and transfer counts directly.
+        var liveData = await _bobProxyService.GetBalanceAsync(address, ct);
+        if (liveData != null)
+        {
+            return Ok(new AddressDto(
+                address,
+                liveData.Balance,
+                liveData.IncomingAmount,
+                liveData.OutgoingAmount,
+                liveData.NumberOfIncomingTransfers + liveData.NumberOfOutgoingTransfers,
+                liveData.NumberOfIncomingTransfers + liveData.NumberOfOutgoingTransfers
+            ));
+        }
+
+        // Fallback to ClickHouse if Bob is unavailable
+        var result = await _cache.GetOrSetAsync(
             $"address:summary:{address}",
             AnalyticsCacheService.AddressSummaryTtl,
             () => _queryService.GetAddressSummaryAsync(address, ct));
-        var liveTask = _bobProxyService.GetBalanceAsync(address, ct);
-        await Task.WhenAll(summaryTask, liveTask);
-
-        var result = summaryTask.Result;
-        var liveData = liveTask.Result;
-        if (liveData != null)
-        {
-            result = result with
-            {
-                Balance = liveData.Balance,
-                IncomingAmount = liveData.IncomingAmount,
-                OutgoingAmount = liveData.OutgoingAmount
-            };
-        }
-
         return Ok(result);
     }
 
@@ -57,7 +57,10 @@ public class AddressController : ControllerBase
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetTransactionsAsync(page, limit, address, direction, minAmount, executed, ct: ct);
+        var result = await _cache.GetOrSetAsync(
+            $"address:tx:{address}:{page}:{limit}:{direction}:{minAmount}:{executed}",
+            AnalyticsCacheService.AddressSummaryTtl,
+            () => _queryService.GetTransactionsAsync(page, limit, address, direction, minAmount, executed, ct: ct));
         return Ok(result);
     }
 
@@ -76,7 +79,10 @@ public class AddressController : ControllerBase
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetTransfersAsync(page, limit, address, type, minAmount, null, epoch, fromAddress, toAddress, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"address:transfers:{address}:{page}:{limit}:{type}:{fromAddress}:{toAddress}:{minAmount}:{epoch}",
+            AnalyticsCacheService.AddressSummaryTtl,
+            () => _queryService.GetTransfersAsync(page, limit, address, type, minAmount, null, epoch, fromAddress, toAddress, ct));
         return Ok(result);
     }
 
@@ -187,22 +193,19 @@ public class AddressController : ControllerBase
         {
             try
             {
-                var summaryTask = _queryService.GetAddressSummaryAsync(addr, ct);
-                var liveTask = _bobProxyService.GetBalanceAsync(addr, ct);
-                await Task.WhenAll(summaryTask, liveTask);
-
-                var summary = summaryTask.Result;
-                var liveData = liveTask.Result;
+                var liveData = await _bobProxyService.GetBalanceAsync(addr, ct);
                 if (liveData != null)
                 {
-                    summary = summary with
-                    {
-                        Balance = liveData.Balance,
-                        IncomingAmount = liveData.IncomingAmount,
-                        OutgoingAmount = liveData.OutgoingAmount
-                    };
+                    return (object?)new AddressDto(
+                        addr,
+                        liveData.Balance,
+                        liveData.IncomingAmount,
+                        liveData.OutgoingAmount,
+                        liveData.NumberOfIncomingTransfers + liveData.NumberOfOutgoingTransfers,
+                        liveData.NumberOfIncomingTransfers + liveData.NumberOfOutgoingTransfers
+                    );
                 }
-                return (object?)summary;
+                return (object?)await _queryService.GetAddressSummaryAsync(addr, ct);
             }
             catch
             {
