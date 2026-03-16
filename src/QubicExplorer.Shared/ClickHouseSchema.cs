@@ -59,6 +59,10 @@ public static class ClickHouseSchema
         $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_to to_address TYPE bloom_filter GRANULARITY 4",
         $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_hash hash TYPE bloom_filter GRANULARITY 4",
 
+        // Projections: alternate sort order for fast address lookups (avoids scanning 30M+ rows)
+        $"ALTER TABLE {DatabaseName}.transactions ADD PROJECTION IF NOT EXISTS proj_from_address (SELECT * ORDER BY from_address, tick_number)",
+        $"ALTER TABLE {DatabaseName}.transactions ADD PROJECTION IF NOT EXISTS proj_to_address (SELECT * ORDER BY to_address, tick_number)",
+
         // Logs table
         $"""
         CREATE TABLE IF NOT EXISTS {DatabaseName}.logs (
@@ -88,6 +92,10 @@ public static class ClickHouseSchema
         $"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_dest dest_address TYPE bloom_filter GRANULARITY 4",
         $"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_type log_type TYPE set(20) GRANULARITY 4",
         $"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_tx_hash tx_hash TYPE bloom_filter GRANULARITY 4",
+
+        // Projections: alternate sort order for fast address lookups on logs
+        $"ALTER TABLE {DatabaseName}.logs ADD PROJECTION IF NOT EXISTS proj_source_address (SELECT * ORDER BY source_address, tick_number)",
+        $"ALTER TABLE {DatabaseName}.logs ADD PROJECTION IF NOT EXISTS proj_dest_address (SELECT * ORDER BY dest_address, tick_number)",
 
         // Assets table
         $"""
