@@ -958,20 +958,10 @@ public class AnalyticsQueryService : IDisposable
     public async Task<(ulong NewAddresses, ulong ReturningAddresses)> GetNewVsReturningForEpochAsync(
         uint epoch, CancellationToken ct = default)
     {
+        // Use pre-computed address_first_seen table instead of scanning all transactions
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            WITH first_appearance AS (
-                SELECT
-                    address,
-                    min(epoch) as first_epoch
-                FROM (
-                    SELECT from_address as address, epoch FROM transactions WHERE from_address != ''
-                    UNION ALL
-                    SELECT to_address as address, epoch FROM transactions WHERE to_address != ''
-                )
-                GROUP BY address
-            ),
-            epoch_addresses AS (
+            WITH epoch_addresses AS (
                 SELECT DISTINCT address
                 FROM (
                     SELECT from_address as address FROM transactions WHERE from_address != '' AND epoch = {epoch}
@@ -983,7 +973,7 @@ public class AnalyticsQueryService : IDisposable
                 countIf(fa.first_epoch = {epoch}) as new_addresses,
                 countIf(fa.first_epoch < {epoch}) as returning_addresses
             FROM epoch_addresses ea
-            JOIN first_appearance fa ON ea.address = fa.address";
+            JOIN address_first_seen FINAL fa ON ea.address = fa.address";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
@@ -1003,20 +993,10 @@ public class AnalyticsQueryService : IDisposable
     public async Task<(ulong NewAddresses, ulong ReturningAddresses)> GetNewVsReturningForTickRangeAsync(
         ulong tickStart, ulong tickEnd, CancellationToken ct = default)
     {
+        // Use pre-computed address_first_seen table instead of scanning all transactions
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            WITH first_appearance AS (
-                SELECT
-                    address,
-                    min(tick_number) as first_tick
-                FROM (
-                    SELECT from_address as address, tick_number FROM transactions WHERE from_address != ''
-                    UNION ALL
-                    SELECT to_address as address, tick_number FROM transactions WHERE to_address != ''
-                )
-                GROUP BY address
-            ),
-            window_addresses AS (
+            WITH window_addresses AS (
                 SELECT DISTINCT address
                 FROM (
                     SELECT from_address as address FROM transactions WHERE from_address != '' AND tick_number >= {tickStart} AND tick_number <= {tickEnd}
@@ -1028,7 +1008,7 @@ public class AnalyticsQueryService : IDisposable
                 countIf(fa.first_tick >= {tickStart} AND fa.first_tick <= {tickEnd}) as new_addresses,
                 countIf(fa.first_tick < {tickStart}) as returning_addresses
             FROM window_addresses wa
-            JOIN first_appearance fa ON wa.address = fa.address";
+            JOIN address_first_seen FINAL fa ON wa.address = fa.address";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))

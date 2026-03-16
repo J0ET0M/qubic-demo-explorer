@@ -125,28 +125,19 @@ public class ClickHouseQueryService : IDisposable
         countCmd.CommandText = "SELECT count() FROM ticks";
         var totalCount = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
 
-        // Query with computed tx/log counts from actual data if stored counts are 0
+        // Use stored tx/log counts directly — they are populated by the indexer.
+        // Fallback to 0 if not set (legacy ticks before counts were tracked).
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
             SELECT
-                t.tick_number,
-                t.epoch,
-                t.timestamp,
-                if(t.tx_count > 0, t.tx_count, coalesce(tx_counts.cnt, 0)) as tx_count,
-                if(t.log_count > 0, t.log_count, coalesce(log_counts.cnt, 0)) as log_count,
-                t.is_empty
-            FROM ticks t
-            LEFT JOIN (
-                SELECT tick_number, toUInt32(count()) as cnt
-                FROM transactions
-                GROUP BY tick_number
-            ) tx_counts ON t.tick_number = tx_counts.tick_number
-            LEFT JOIN (
-                SELECT tick_number, toUInt32(count()) as cnt
-                FROM logs
-                GROUP BY tick_number
-            ) log_counts ON t.tick_number = log_counts.tick_number
-            ORDER BY t.tick_number DESC
+                tick_number,
+                epoch,
+                timestamp,
+                tx_count,
+                log_count,
+                is_empty
+            FROM ticks
+            ORDER BY tick_number DESC
             LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
         AddParam(cmd, "lim", (uint)limit);
         AddParam(cmd, "off", (uint)offset);
@@ -331,14 +322,16 @@ public class ClickHouseQueryService : IDisposable
         var prewhereClause = "";
         var conditions = new List<string>();
 
-        if (!string.IsNullOrEmpty(address))
+        // Use UNION approach for undirected address queries to allow bloom filter usage.
+        // OR across two columns (from=X OR to=X) defeats bloom filters.
+        var useUnionApproach = !string.IsNullOrEmpty(address) && string.IsNullOrEmpty(direction);
+
+        if (!string.IsNullOrEmpty(address) && !useUnionApproach)
         {
             if (direction == "from")
                 prewhereClause = $"PREWHERE from_address = {{addr:String}}";
             else if (direction == "to")
                 prewhereClause = $"PREWHERE to_address = {{addr:String}}";
-            else
-                prewhereClause = $"PREWHERE from_address = {{addr:String}} OR to_address = {{addr:String}}";
         }
 
         if (minAmount.HasValue)
@@ -359,7 +352,20 @@ public class ClickHouseQueryService : IDisposable
 
         // Create both commands before parallel execution
         await using var countCmd = _connection.CreateCommand();
-        countCmd.CommandText = $"SELECT count() FROM transactions {prewhereClause} {whereClause}";
+        if (useUnionApproach)
+        {
+            // UNION approach: each branch uses its own bloom filter
+            countCmd.CommandText = $@"
+                SELECT sum(cnt) FROM (
+                    SELECT count() as cnt FROM transactions PREWHERE from_address = {{addr:String}} {whereClause}
+                    UNION ALL
+                    SELECT count() as cnt FROM transactions PREWHERE to_address = {{addr:String}} {whereClause}
+                )";
+        }
+        else
+        {
+            countCmd.CommandText = $"SELECT count() FROM transactions {prewhereClause} {whereClause}";
+        }
         if (!string.IsNullOrEmpty(address))
             AddParam(countCmd, "addr", address);
         if (minAmount.HasValue)
@@ -375,13 +381,32 @@ public class ClickHouseQueryService : IDisposable
             Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
 
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
-            SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
-            FROM transactions
-            {prewhereClause}
-            {whereClause}
-            ORDER BY tick_number DESC, hash
-            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        if (useUnionApproach)
+        {
+            // UNION + dedup for listing (address may appear as both from and to)
+            cmd.CommandText = $@"
+                SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                FROM (
+                    SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                    FROM transactions PREWHERE from_address = {{addr:String}} {whereClause}
+                    UNION ALL
+                    SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                    FROM transactions PREWHERE to_address = {{addr:String}} {whereClause}
+                )
+                GROUP BY hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                ORDER BY tick_number DESC, hash
+                LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        }
+        else
+        {
+            cmd.CommandText = $@"
+                SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                FROM transactions
+                {prewhereClause}
+                {whereClause}
+                ORDER BY tick_number DESC, hash
+                LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        }
         if (!string.IsNullOrEmpty(address))
             AddParam(cmd, "addr", address);
         if (minAmount.HasValue)
@@ -545,8 +570,10 @@ public class ClickHouseQueryService : IDisposable
         if (!string.IsNullOrEmpty(toAddress))
             prewhereConditions.Add($"dest_address = {{toAddr:String}}");
 
-        // Generic address filter: matches either source or dest (used by address page)
-        if (prewhereConditions.Count == 0 && !string.IsNullOrEmpty(address))
+        // Generic address filter: use UNION approach so each branch can use bloom filter
+        var useUnionForLogs = prewhereConditions.Count == 0 && !string.IsNullOrEmpty(address);
+
+        if (!useUnionForLogs && prewhereConditions.Count == 0 && !string.IsNullOrEmpty(address))
         {
             prewhereConditions.Add($"(source_address = {{addr:String}} OR dest_address = {{addr:String}})");
         }
@@ -572,13 +599,25 @@ public class ClickHouseQueryService : IDisposable
 
         // Create both commands before parallel execution
         await using var countCmd = _connection.CreateCommand();
-        countCmd.CommandText = $"SELECT count() FROM logs {prewhereClause} {whereClause}";
+        if (useUnionForLogs)
+        {
+            countCmd.CommandText = $@"
+                SELECT sum(cnt) FROM (
+                    SELECT count() as cnt FROM logs PREWHERE source_address = {{addr:String}} {whereClause}
+                    UNION ALL
+                    SELECT count() as cnt FROM logs PREWHERE dest_address = {{addr:String}} {whereClause}
+                )";
+        }
+        else
+        {
+            countCmd.CommandText = $"SELECT count() FROM logs {prewhereClause} {whereClause}";
+        }
         if (!string.IsNullOrEmpty(fromAddress))
             AddParam(countCmd, "fromAddr", fromAddress);
         if (!string.IsNullOrEmpty(toAddress))
             AddParam(countCmd, "toAddr", toAddress);
-        if (prewhereConditions.Count > 0 && string.IsNullOrEmpty(fromAddress) && string.IsNullOrEmpty(toAddress) && !string.IsNullOrEmpty(address))
-            AddParam(countCmd, "addr", address);
+        if (useUnionForLogs || (prewhereConditions.Count > 0 && string.IsNullOrEmpty(fromAddress) && string.IsNullOrEmpty(toAddress) && !string.IsNullOrEmpty(address)))
+            AddParam(countCmd, "addr", address!);
         if (epoch.HasValue)
             AddParam(countCmd, "epoch", epoch.Value);
         if (logType.HasValue)
@@ -590,20 +629,42 @@ public class ClickHouseQueryService : IDisposable
             Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
 
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
-            SELECT tick_number, epoch, log_id, log_type, tx_hash, source_address,
-                   dest_address, amount, asset_name, timestamp
-            FROM logs
-            {prewhereClause}
-            {whereClause}
-            ORDER BY tick_number DESC, log_id DESC
-            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        if (useUnionForLogs)
+        {
+            cmd.CommandText = $@"
+                SELECT tick_number, epoch, log_id, log_type, tx_hash, source_address,
+                       dest_address, amount, asset_name, timestamp
+                FROM (
+                    SELECT tick_number, epoch, log_id, log_type, tx_hash, source_address,
+                           dest_address, amount, asset_name, timestamp
+                    FROM logs PREWHERE source_address = {{addr:String}} {whereClause}
+                    UNION ALL
+                    SELECT tick_number, epoch, log_id, log_type, tx_hash, source_address,
+                           dest_address, amount, asset_name, timestamp
+                    FROM logs PREWHERE dest_address = {{addr:String}} {whereClause}
+                )
+                GROUP BY tick_number, epoch, log_id, log_type, tx_hash, source_address,
+                         dest_address, amount, asset_name, timestamp
+                ORDER BY tick_number DESC, log_id DESC
+                LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        }
+        else
+        {
+            cmd.CommandText = $@"
+                SELECT tick_number, epoch, log_id, log_type, tx_hash, source_address,
+                       dest_address, amount, asset_name, timestamp
+                FROM logs
+                {prewhereClause}
+                {whereClause}
+                ORDER BY tick_number DESC, log_id DESC
+                LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        }
         if (!string.IsNullOrEmpty(fromAddress))
             AddParam(cmd, "fromAddr", fromAddress);
         if (!string.IsNullOrEmpty(toAddress))
             AddParam(cmd, "toAddr", toAddress);
-        if (prewhereConditions.Count > 0 && string.IsNullOrEmpty(fromAddress) && string.IsNullOrEmpty(toAddress) && !string.IsNullOrEmpty(address))
-            AddParam(cmd, "addr", address);
+        if (useUnionForLogs || (prewhereConditions.Count > 0 && string.IsNullOrEmpty(fromAddress) && string.IsNullOrEmpty(toAddress) && !string.IsNullOrEmpty(address)))
+            AddParam(cmd, "addr", address!);
         if (epoch.HasValue)
             AddParam(cmd, "epoch", epoch.Value);
         if (logType.HasValue)
@@ -627,23 +688,38 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<AddressDto> GetAddressSummaryAsync(string address, CancellationToken ct = default)
     {
-        // Single query: transaction count from transactions table, transfer stats from logs table
+        // Split OR into UNION so each branch can use its own bloom_filter index.
+        // OR across two columns (from_address=X OR to_address=X) defeats bloom filters
+        // and causes full table scans (~120M rows).
         await using var txCmd = _connection.CreateCommand();
         txCmd.CommandText = $@"
-            SELECT count()
-            FROM transactions
-            WHERE from_address = {{addr:String}} OR to_address = {{addr:String}}";
+            SELECT toUInt32(sum(cnt)) FROM (
+                SELECT count() as cnt FROM transactions PREWHERE from_address = {{addr:String}}
+                UNION ALL
+                SELECT count() as cnt FROM transactions PREWHERE to_address = {{addr:String}}
+            )";
         AddParam(txCmd, "addr", address);
         var txCount = Convert.ToUInt32(await txCmd.ExecuteScalarAsync(ct));
 
         await using var logCmd = _connection.CreateCommand();
         logCmd.CommandText = $@"
             SELECT
-                COALESCE(sumIf(amount, dest_address = {{addr:String}} AND log_type = 0), 0) as incoming,
-                COALESCE(sumIf(amount, source_address = {{addr:String}} AND log_type = 0), 0) as outgoing,
-                count() as transfer_count
-            FROM logs
-            PREWHERE source_address = {{addr:String}} OR dest_address = {{addr:String}}";
+                COALESCE(sum(incoming), 0) as incoming,
+                COALESCE(sum(outgoing), 0) as outgoing,
+                toUInt32(sum(cnt)) as transfer_count
+            FROM (
+                SELECT
+                    sumIf(amount, log_type = 0) as incoming,
+                    0 as outgoing,
+                    count() as cnt
+                FROM logs PREWHERE dest_address = {{addr:String}}
+                UNION ALL
+                SELECT
+                    0 as incoming,
+                    sumIf(amount, log_type = 0) as outgoing,
+                    count() as cnt
+                FROM logs PREWHERE source_address = {{addr:String}}
+            )";
         AddParam(logCmd, "addr", address);
 
         ulong incomingAmount = 0, outgoingAmount = 0;
@@ -669,13 +745,14 @@ public class ClickHouseQueryService : IDisposable
     public async Task<NetworkStatsDto> GetNetworkStatsAsync(CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
+        // Use materialized views instead of full table scans on transactions/logs
         cmd.CommandText = @"
             SELECT
                 (SELECT max(tick_number) FROM ticks) as latest_tick,
                 (SELECT max(epoch) FROM ticks) as current_epoch,
-                (SELECT count() FROM transactions) as total_txs,
-                (SELECT count() FROM logs) as total_logs,
-                (SELECT COALESCE(sum(amount), 0) FROM transactions) as total_volume";
+                (SELECT sum(tx_count) FROM daily_tx_volume) as total_txs,
+                (SELECT sum(log_count) FROM daily_log_stats) as total_logs,
+                (SELECT sum(total_volume) FROM daily_tx_volume) as total_volume";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
@@ -1957,13 +2034,19 @@ public class ClickHouseQueryService : IDisposable
         AddParam(firstCmd, "addr", address);
 
         await using var lastCmd = _connection.CreateCommand();
+        // Split OR into UNION so each branch uses its own bloom_filter index
         lastCmd.CommandText = $@"
             SELECT
-                max(tick_number) as last_tick,
-                max(timestamp) as last_timestamp,
-                max(epoch) as last_epoch
-            FROM logs
-            PREWHERE source_address = {{addr:String}} OR dest_address = {{addr:String}}";
+                max(last_tick) as last_tick,
+                max(last_timestamp) as last_timestamp,
+                max(last_epoch) as last_epoch
+            FROM (
+                SELECT max(tick_number) as last_tick, max(timestamp) as last_timestamp, max(epoch) as last_epoch
+                FROM logs PREWHERE source_address = {{addr:String}}
+                UNION ALL
+                SELECT max(tick_number) as last_tick, max(timestamp) as last_timestamp, max(epoch) as last_epoch
+                FROM logs PREWHERE dest_address = {{addr:String}}
+            )";
         AddParam(lastCmd, "addr", address);
 
         // Run first-seen and last-seen queries in parallel
@@ -2133,39 +2216,41 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<NewVsReturningDto>> GetNewVsReturningAddressesAsync(
         int limit = 50, CancellationToken ct = default)
     {
-        // First, get the first epoch each address appeared in
+        // Use the pre-computed address_first_seen table + epoch_sender/receiver stats
+        // instead of scanning the entire transactions table 4x
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            WITH first_appearance AS (
+            WITH
+            -- Count new addresses per epoch from the address_first_seen table
+            new_per_epoch AS (
                 SELECT
-                    address,
-                    min(epoch) as first_epoch
-                FROM (
-                    SELECT from_address as address, epoch FROM transactions WHERE from_address != ''
-                    UNION ALL
-                    SELECT to_address as address, epoch FROM transactions WHERE to_address != ''
-                )
-                GROUP BY address
+                    first_epoch as epoch,
+                    count() as new_addresses
+                FROM address_first_seen FINAL
+                GROUP BY first_epoch
             ),
-            epoch_addresses AS (
-                SELECT DISTINCT
+            -- Get total unique active addresses per epoch from materialized views
+            active_per_epoch AS (
+                SELECT
                     epoch,
-                    address
+                    uniqMerge(sender_addresses_state) + uniqMerge(receiver_addresses_state) as total_addresses
                 FROM (
-                    SELECT from_address as address, epoch FROM transactions WHERE from_address != ''
+                    SELECT epoch, sender_addresses_state, null as receiver_addresses_state
+                    FROM epoch_sender_stats FINAL
                     UNION ALL
-                    SELECT to_address as address, epoch FROM transactions WHERE to_address != ''
+                    SELECT epoch, null as sender_addresses_state, receiver_addresses_state
+                    FROM epoch_receiver_stats FINAL
                 )
+                GROUP BY epoch
             )
             SELECT
-                ea.epoch,
-                countIf(fa.first_epoch = ea.epoch) as new_addresses,
-                countIf(fa.first_epoch < ea.epoch) as returning_addresses,
-                count() as total_addresses
-            FROM epoch_addresses ea
-            JOIN first_appearance fa ON ea.address = fa.address
-            GROUP BY ea.epoch
-            ORDER BY ea.epoch DESC
+                a.epoch,
+                coalesce(n.new_addresses, 0) as new_addresses,
+                greatest(a.total_addresses - coalesce(n.new_addresses, 0), 0) as returning_addresses,
+                a.total_addresses as total_addresses
+            FROM active_per_epoch a
+            LEFT JOIN new_per_epoch n ON a.epoch = n.epoch
+            ORDER BY a.epoch DESC
             LIMIT {{lim:UInt32}}";
         AddParam(cmd, "lim", (uint)limit);
 
