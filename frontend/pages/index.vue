@@ -171,6 +171,9 @@ onUnmounted(async () => {
     <!-- Epoch Countdown -->
     <EpochCountdown />
 
+    <!-- Empty Tick Summary for Current Epoch -->
+    <EmptyTickSummary />
+
     <!-- Charts Section -->
     <div v-if="!epochsLoading && epochs?.length" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- Transactions Chart -->

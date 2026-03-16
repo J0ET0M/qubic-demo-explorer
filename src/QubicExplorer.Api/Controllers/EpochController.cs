@@ -108,9 +108,18 @@ public class EpochController : ControllerBase
         uint epoch,
         CancellationToken ct = default)
     {
+        // Ensure computors are imported (fetches from Bob if not already in ClickHouse)
+        await _flowService.EnsureComputorsImportedAsync(epoch, ct);
+
+        // Use shorter TTL for current epoch (data is still changing), longer for past epochs
+        var currentEpoch = await _queryService.GetCurrentEpochAsync(ct);
+        var ttl = epoch == currentEpoch
+            ? TimeSpan.FromMinutes(5)
+            : AnalyticsCacheService.EpochStatsTtl;
+
         var result = await _cache.GetOrSetAsync(
             $"epoch:empty-ticks:{epoch}",
-            AnalyticsCacheService.EpochStatsTtl,
+            ttl,
             () => _queryService.GetEmptyTickStatsAsync(epoch, ct));
 
         if (result == null)

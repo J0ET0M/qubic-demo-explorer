@@ -3523,11 +3523,10 @@ public class ClickHouseQueryService : IDisposable
     /// </summary>
     public async Task<EpochEmptyTickStatsDto?> GetEmptyTickStatsAsync(uint epoch, CancellationToken ct = default)
     {
-        // Get computor list for the epoch (needed for addresses/labels)
+        // Get computor list for the epoch (optional — may not exist for current epoch)
         var computorList = await GetComputorsAsync(epoch, ct);
-        if (computorList == null) return null;
-
-        var computorMap = computorList.Computors.ToDictionary(c => c.Index);
+        var computorMap = computorList?.Computors.ToDictionary(c => c.Index)
+            ?? new Dictionary<ushort, ComputorDto>();
 
         // Query empty tick counts and total tick counts per computor index
         await using var cmd = _connection.CreateCommand();
@@ -3557,10 +3556,12 @@ public class ClickHouseQueryService : IDisposable
             totalTicks += tickCount;
 
             var address = computorMap.TryGetValue(idx, out var comp) ? comp.Address : "";
-            var label = computorMap.TryGetValue(idx, out var comp2) ? comp2.Label : null;
+            var label = comp?.Label;
 
             computors.Add(new ComputorEmptyTickDto(idx, address, label, emptyCount, tickCount));
         }
+
+        if (totalTicks == 0) return null;
 
         return new EpochEmptyTickStatsDto(epoch, totalEmpty, totalTicks, computors);
     }
