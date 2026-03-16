@@ -356,9 +356,9 @@ public class ClickHouseQueryService : IDisposable
         var fetchLimit = skipCount ? limit + 1 : limit;
 
         Task<long>? countTask = null;
-        if (!skipCount)
+        var countCmd = skipCount ? null : _connection.CreateCommand();
+        if (countCmd != null)
         {
-            await using var countCmd = _connection.CreateCommand();
             countCmd.CommandText = $"SELECT count() FROM transactions {prewhereClause} {whereClause}";
             if (minAmount.HasValue)
                 AddParam(countCmd, "minAmt", minAmount.Value);
@@ -420,19 +420,25 @@ public class ClickHouseQueryService : IDisposable
             items.Add(ReadTransactionDto(reader));
         }
 
-        if (skipCount)
+        try
         {
-            var hasMore = items.Count > limit;
-            if (hasMore) items.RemoveAt(items.Count - 1);
-            // totalCount=-1 signals "unknown" to the frontend; totalPages based on hasMore
-            var totalPages = hasMore ? page + 1 : page;
-            return new PaginatedResponse<TransactionDto>(items, page, limit, -1, totalPages);
+            if (skipCount)
+            {
+                var hasMore = items.Count > limit;
+                if (hasMore) items.RemoveAt(items.Count - 1);
+                var totalPages = hasMore ? page + 1 : page;
+                return new PaginatedResponse<TransactionDto>(items, page, limit, -1, totalPages);
+            }
+            else
+            {
+                var totalCount = await countTask!;
+                return new PaginatedResponse<TransactionDto>(
+                    items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+            }
         }
-        else
+        finally
         {
-            var totalCount = await countTask!;
-            return new PaginatedResponse<TransactionDto>(
-                items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+            if (countCmd != null) await countCmd.DisposeAsync();
         }
     }
 
@@ -607,9 +613,9 @@ public class ClickHouseQueryService : IDisposable
         var fetchLimit = skipCount ? limit + 1 : limit;
 
         Task<long>? countTask = null;
-        if (!skipCount)
+        var countCmd = skipCount ? null : _connection.CreateCommand();
+        if (countCmd != null)
         {
-            await using var countCmd = _connection.CreateCommand();
             countCmd.CommandText = $"SELECT count() FROM logs {prewhereClause} {whereClause}";
             if (!string.IsNullOrEmpty(fromAddress))
                 AddParam(countCmd, "fromAddr", fromAddress);
@@ -681,18 +687,25 @@ public class ClickHouseQueryService : IDisposable
             items.Add(ReadTransferDto(reader));
         }
 
-        if (skipCount)
+        try
         {
-            var hasMore = items.Count > limit;
-            if (hasMore) items.RemoveAt(items.Count - 1);
-            var totalPages = hasMore ? page + 1 : page;
-            return new PaginatedResponse<TransferDto>(items, page, limit, -1, totalPages);
+            if (skipCount)
+            {
+                var hasMore = items.Count > limit;
+                if (hasMore) items.RemoveAt(items.Count - 1);
+                var totalPages = hasMore ? page + 1 : page;
+                return new PaginatedResponse<TransferDto>(items, page, limit, -1, totalPages);
+            }
+            else
+            {
+                var totalCount = await countTask!;
+                return new PaginatedResponse<TransferDto>(
+                    items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+            }
         }
-        else
+        finally
         {
-            var totalCount = await countTask!;
-            return new PaginatedResponse<TransferDto>(
-                items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+            if (countCmd != null) await countCmd.DisposeAsync();
         }
     }
 
