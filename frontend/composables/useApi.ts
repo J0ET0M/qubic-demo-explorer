@@ -159,6 +159,9 @@ export const useApi = () => {
   const getEpochRewards = (epoch: number) =>
     fetchApi<EpochRewardSummaryDto>(`/api/epoch/${epoch}/rewards`)
 
+  const getEpochEmptyTicks = (epoch: number) =>
+    fetchApi<EpochEmptyTickStatsDto>(`/api/epoch/${epoch}/empty-ticks`)
+
   // Epoch Metadata
   const getEpochMeta = (epoch: number) =>
     fetchApi<EpochMetaDto>(`/api/epoch/${epoch}/meta`)
@@ -412,6 +415,7 @@ export const useApi = () => {
     getEpoch,
     getEpochTransfersByType,
     getEpochRewards,
+    getEpochEmptyTicks,
     getEpochCountdown,
     getEpochMeta,
     getAllEpochMeta,
@@ -674,6 +678,21 @@ interface EpochRewardSummaryDto {
   epoch: number
   distributions: RewardDistributionDto[]
   totalRewardsDistributed: number
+}
+
+interface ComputorEmptyTickDto {
+  computorIndex: number
+  address: string
+  label: string | null
+  emptyTickCount: number
+  totalTickCount: number
+}
+
+interface EpochEmptyTickStatsDto {
+  epoch: number
+  totalEmptyTicks: number
+  totalTicks: number
+  computors: ComputorEmptyTickDto[]
 }
 
 interface ContractRewardHistoryDto {
@@ -1320,6 +1339,8 @@ export type {
   EpochTransferByTypeDto,
   RewardDistributionDto,
   EpochRewardSummaryDto,
+  EpochEmptyTickStatsDto,
+  ComputorEmptyTickDto,
   ContractRewardHistoryDto,
   AddressLabelDto,
   KnownAddressDto,

@@ -3518,6 +3518,54 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
+    /// Get empty tick statistics per computor for an epoch.
+    /// Tick leader = tick_number % 676. Queries only the ticks table (fast, partition-pruned).
+    /// </summary>
+    public async Task<EpochEmptyTickStatsDto?> GetEmptyTickStatsAsync(uint epoch, CancellationToken ct = default)
+    {
+        // Get computor list for the epoch (needed for addresses/labels)
+        var computorList = await GetComputorsAsync(epoch, ct);
+        if (computorList == null) return null;
+
+        var computorMap = computorList.Computors.ToDictionary(c => c.Index);
+
+        // Query empty tick counts and total tick counts per computor index
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                toUInt16(tick_number % 676) as computor_index,
+                countIf(is_empty = 1) as empty_count,
+                count() as total_count
+            FROM ticks
+            WHERE epoch = {epoch:UInt32}
+            GROUP BY computor_index
+            ORDER BY computor_index";
+        AddParam(cmd, "epoch", epoch);
+
+        var computors = new List<ComputorEmptyTickDto>();
+        uint totalEmpty = 0;
+        uint totalTicks = 0;
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var idx = reader.GetFieldValue<ushort>(0);
+            var emptyCount = Convert.ToUInt32(reader.GetValue(1));
+            var tickCount = Convert.ToUInt32(reader.GetValue(2));
+
+            totalEmpty += emptyCount;
+            totalTicks += tickCount;
+
+            var address = computorMap.TryGetValue(idx, out var comp) ? comp.Address : "";
+            var label = computorMap.TryGetValue(idx, out var comp2) ? comp2.Label : null;
+
+            computors.Add(new ComputorEmptyTickDto(idx, address, label, emptyCount, tickCount));
+        }
+
+        return new EpochEmptyTickStatsDto(epoch, totalEmpty, totalTicks, computors);
+    }
+
+    /// <summary>
     /// Gets addresses by type from label service
     /// </summary>
     public Task<HashSet<string>> GetAddressesByTypeAsync(string type, CancellationToken ct = default)

@@ -103,6 +103,22 @@ public class EpochController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("{epoch}/empty-ticks")]
+    public async Task<IActionResult> GetEmptyTickStats(
+        uint epoch,
+        CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            $"epoch:empty-ticks:{epoch}",
+            AnalyticsCacheService.EpochStatsTtl,
+            () => _queryService.GetEmptyTickStatsAsync(epoch, ct));
+
+        if (result == null)
+            return NotFound();
+
+        return Ok(result);
+    }
+
     [HttpGet("meta/current")]
     public async Task<IActionResult> GetCurrentEpochMeta(CancellationToken ct = default)
     {

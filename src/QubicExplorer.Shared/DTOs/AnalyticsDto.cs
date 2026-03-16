@@ -574,6 +574,31 @@ public record EpochEmissionDto(
 );
 
 // =====================================================
+// EMPTY TICK STATS DTOs
+// =====================================================
+
+/// <summary>
+/// Empty tick count for a single computor in an epoch
+/// </summary>
+public record ComputorEmptyTickDto(
+    ushort ComputorIndex,
+    string Address,
+    string? Label,
+    uint EmptyTickCount,
+    uint TotalTickCount
+);
+
+/// <summary>
+/// Empty tick statistics for an entire epoch, broken down per computor
+/// </summary>
+public record EpochEmptyTickStatsDto(
+    uint Epoch,
+    uint TotalEmptyTicks,
+    uint TotalTicks,
+    List<ComputorEmptyTickDto> Computors
+);
+
+// =====================================================
 // FLOW TRACKING STATE DTOs
 // =====================================================
 

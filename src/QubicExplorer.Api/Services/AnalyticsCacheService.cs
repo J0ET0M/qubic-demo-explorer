@@ -66,6 +66,7 @@ public class AnalyticsCacheService
     public static readonly TimeSpan MinerFlowVisualizationTtl = TimeSpan.FromHours(1);
     public static readonly TimeSpan ComputorsTtl = TimeSpan.FromHours(1);
     public static readonly TimeSpan EmissionsTtl = TimeSpan.FromHours(1);
+    public static readonly TimeSpan EpochStatsTtl = TimeSpan.FromHours(1);
 
     public AnalyticsCacheService(IMemoryCache cache, ILogger<AnalyticsCacheService> logger)
     {

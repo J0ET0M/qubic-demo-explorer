@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Calendar, ArrowLeftRight, Users, Blocks, TrendingUp, Coins, Gift } from 'lucide-vue-next'
+import { Calendar, ArrowLeftRight, Users, Blocks, TrendingUp, Coins, Gift, AlertTriangle } from 'lucide-vue-next'
 
 const api = useApi()
 const route = useRoute()
@@ -9,8 +9,8 @@ const { fetchLabels, getLabel } = useAddressLabels()
 const epoch = Number(route.params.epoch)
 
 // Initialize tab state from URL query params
-const activeTab = ref<'transfers' | 'rewards'>(
-  (route.query.tab as 'transfers' | 'rewards') || 'transfers'
+const activeTab = ref<'transfers' | 'rewards' | 'empty-ticks'>(
+  (route.query.tab as 'transfers' | 'rewards' | 'empty-ticks') || 'transfers'
 )
 
 // Sync tab state to URL
@@ -36,6 +36,62 @@ const { data: rewards } = await useAsyncData(
   `epoch-${epoch}-rewards`,
   () => api.getEpochRewards(epoch)
 )
+
+// Lazy-load empty tick stats only when tab is activated
+const emptyTickStats = ref<Awaited<ReturnType<typeof api.getEpochEmptyTicks>> | null>(null)
+const emptyTicksLoading = ref(false)
+const emptyTicksSortBy = ref<'index' | 'empty' | 'rate'>('empty')
+const emptyTicksSortDesc = ref(true)
+
+watch(activeTab, async (tab) => {
+  if (tab === 'empty-ticks' && !emptyTickStats.value) {
+    emptyTicksLoading.value = true
+    try {
+      emptyTickStats.value = await api.getEpochEmptyTicks(epoch)
+      // Fetch labels for all computor addresses
+      if (emptyTickStats.value?.computors?.length) {
+        const addresses = emptyTickStats.value.computors
+          .map(c => c.address)
+          .filter(a => a)
+        await fetchLabels(addresses)
+        labelsLoaded.value++
+      }
+    } finally {
+      emptyTicksLoading.value = false
+    }
+  }
+}, { immediate: true })
+
+const sortedComputors = computed(() => {
+  if (!emptyTickStats.value?.computors) return []
+  const list = [...emptyTickStats.value.computors]
+  const desc = emptyTicksSortDesc.value ? -1 : 1
+  switch (emptyTicksSortBy.value) {
+    case 'index':
+      list.sort((a, b) => desc * (a.computorIndex - b.computorIndex))
+      break
+    case 'empty':
+      list.sort((a, b) => desc * (a.emptyTickCount - b.emptyTickCount) || a.computorIndex - b.computorIndex)
+      break
+    case 'rate':
+      list.sort((a, b) => {
+        const rateA = a.totalTickCount > 0 ? a.emptyTickCount / a.totalTickCount : 0
+        const rateB = b.totalTickCount > 0 ? b.emptyTickCount / b.totalTickCount : 0
+        return desc * (rateA - rateB) || a.computorIndex - b.computorIndex
+      })
+      break
+  }
+  return list
+})
+
+const toggleSort = (col: 'index' | 'empty' | 'rate') => {
+  if (emptyTicksSortBy.value === col) {
+    emptyTicksSortDesc.value = !emptyTicksSortDesc.value
+  } else {
+    emptyTicksSortBy.value = col
+    emptyTicksSortDesc.value = true
+  }
+}
 
 // Fetch labels for reward contract addresses
 const labelsLoaded = ref(0)
@@ -205,6 +261,13 @@ const { formatVolume, formatDate, getLogTypeBadgeClass, formatEpochDuration } = 
             <Gift class="h-4 w-4 inline mr-1" />
             SC Rewards
           </button>
+          <button
+            :class="{ active: activeTab === 'empty-ticks' }"
+            @click="activeTab = 'empty-ticks'"
+          >
+            <AlertTriangle class="h-4 w-4 inline mr-1" />
+            Empty Ticks
+          </button>
         </div>
 
         <!-- Transfers by Type Tab -->
@@ -263,6 +326,76 @@ const { formatVolume, formatDate, getLogTypeBadgeClass, formatEpochDuration } = 
                     <td>{{ formatVolume(group.totalPerShare) }} QU</td>
                     <td>{{ group.distributions.length }}</td>
                     <td>{{ group.totalTransfers.toLocaleString() }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </template>
+
+        <!-- Empty Ticks Tab -->
+        <template v-if="activeTab === 'empty-ticks'">
+          <div v-if="emptyTicksLoading" class="loading">Loading empty tick data...</div>
+          <div v-else-if="!emptyTickStats" class="text-center py-8 text-foreground-muted">
+            No empty tick data available for this epoch.
+          </div>
+          <template v-else>
+            <!-- Summary -->
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
+              <div class="card-elevated text-center">
+                <div class="text-2xl font-bold text-destructive">{{ emptyTickStats.totalEmptyTicks.toLocaleString() }}</div>
+                <div class="text-xs text-foreground-muted uppercase mt-1">Empty Ticks</div>
+              </div>
+              <div class="card-elevated text-center">
+                <div class="text-2xl font-bold text-accent">{{ emptyTickStats.totalTicks.toLocaleString() }}</div>
+                <div class="text-xs text-foreground-muted uppercase mt-1">Total Ticks</div>
+              </div>
+              <div class="card-elevated text-center">
+                <div class="text-2xl font-bold text-warning">
+                  {{ emptyTickStats.totalTicks > 0 ? ((emptyTickStats.totalEmptyTicks / emptyTickStats.totalTicks) * 100).toFixed(1) : 0 }}%
+                </div>
+                <div class="text-xs text-foreground-muted uppercase mt-1">Empty Rate</div>
+              </div>
+            </div>
+
+            <!-- Per-Computor Table -->
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="cursor-pointer select-none" @click="toggleSort('index')">
+                      # {{ emptyTicksSortBy === 'index' ? (emptyTicksSortDesc ? '▼' : '▲') : '' }}
+                    </th>
+                    <th>Address</th>
+                    <th class="cursor-pointer select-none" @click="toggleSort('empty')">
+                      Empty {{ emptyTicksSortBy === 'empty' ? (emptyTicksSortDesc ? '▼' : '▲') : '' }}
+                    </th>
+                    <th>Total</th>
+                    <th class="cursor-pointer select-none" @click="toggleSort('rate')">
+                      Empty Rate {{ emptyTicksSortBy === 'rate' ? (emptyTicksSortDesc ? '▼' : '▲') : '' }}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="comp in sortedComputors" :key="comp.computorIndex">
+                    <td class="text-foreground-muted">{{ comp.computorIndex }}</td>
+                    <td>
+                      <AddressDisplay
+                        v-if="comp.address"
+                        :address="comp.address"
+                        :label="getLabel(comp.address)"
+                      />
+                      <span v-else class="text-foreground-muted">-</span>
+                    </td>
+                    <td :class="comp.emptyTickCount > 0 ? 'text-destructive font-semibold' : 'text-foreground-muted'">
+                      {{ comp.emptyTickCount.toLocaleString() }}
+                    </td>
+                    <td>{{ comp.totalTickCount.toLocaleString() }}</td>
+                    <td>
+                      <span :class="comp.totalTickCount > 0 && (comp.emptyTickCount / comp.totalTickCount) > 0.5 ? 'text-destructive font-semibold' : ''">
+                        {{ comp.totalTickCount > 0 ? ((comp.emptyTickCount / comp.totalTickCount) * 100).toFixed(1) : '0.0' }}%
+                      </span>
+                    </td>
                   </tr>
                 </tbody>
               </table>
