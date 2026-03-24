@@ -174,17 +174,18 @@ public class ClickHouseQueryService : IDisposable
 
         var tick = ReadTickDto(reader);
 
-        var transactions = await GetTransactionsByTickPagedAsync(tickNumber, 1, 1000, ct: ct);
+        var transactions = (PaginatedResponse<TransactionDto>)await GetTransactionsByTickPagedAsync(tickNumber, 1, 1000, ct: ct);
 
         return new TickDetailDto(
             tick.TickNumber, tick.Epoch, tick.Timestamp,
             tick.TxCount, tick.LogCount, tick.IsEmpty, transactions.Items);
     }
 
-    public async Task<PaginatedResponse<TransactionDto>> GetTransactionsByTickPagedAsync(
+    public async Task<object> GetTransactionsByTickPagedAsync(
         ulong tickNumber, int page, int limit, string? address = null, string? direction = null,
         ulong? minAmount = null, bool? executed = null, int? inputType = null,
-        string? toAddress = null, bool coreOnly = false, CancellationToken ct = default)
+        string? toAddress = null, bool coreOnly = false, bool detailed = false,
+        CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
         var conditions = new List<string> { $"tick_number = {{tick:UInt64}}" };
@@ -212,57 +213,165 @@ public class ClickHouseQueryService : IDisposable
 
         var whereClause = string.Join(" AND ", conditions);
 
+        void AddFilterParams(System.Data.Common.DbCommand c)
+        {
+            AddParam(c, "tick", tickNumber);
+            if (!string.IsNullOrEmpty(address))
+                AddParam(c, "addr", address);
+            if (minAmount.HasValue)
+                AddParam(c, "minAmt", minAmount.Value);
+            if (executed.HasValue)
+                AddParam(c, "exec", (byte)(executed.Value ? 1 : 0));
+            if (inputType.HasValue)
+                AddParam(c, "inputType", (ushort)inputType.Value);
+            if (!string.IsNullOrEmpty(toAddress))
+                AddParam(c, "toAddr", toAddress);
+            if (coreOnly)
+                AddParam(c, "burnAddr", AddressLabelService.BurnAddress);
+        }
+
         // Get total count
         await using var countCmd = _connection.CreateCommand();
         countCmd.CommandText = $"SELECT count() FROM transactions WHERE {whereClause}";
-        AddParam(countCmd, "tick", tickNumber);
-        if (!string.IsNullOrEmpty(address))
-            AddParam(countCmd, "addr", address);
-        if (minAmount.HasValue)
-            AddParam(countCmd, "minAmt", minAmount.Value);
-        if (executed.HasValue)
-            AddParam(countCmd, "exec", (byte)(executed.Value ? 1 : 0));
-        if (inputType.HasValue)
-            AddParam(countCmd, "inputType", (ushort)inputType.Value);
-        if (!string.IsNullOrEmpty(toAddress))
-            AddParam(countCmd, "toAddr", toAddress);
-        if (coreOnly)
-            AddParam(countCmd, "burnAddr", AddressLabelService.BurnAddress);
+        AddFilterParams(countCmd);
         var totalCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct));
+
+        var columns = detailed
+            ? "hash, tick_number, epoch, from_address, to_address, amount, input_type, input_data, executed, timestamp, log_id_from, log_id_length"
+            : "hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp";
 
         // Get paginated items
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+            SELECT {columns}
             FROM transactions
             WHERE {whereClause}
             ORDER BY hash
             LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
-        AddParam(cmd, "tick", tickNumber);
-        if (!string.IsNullOrEmpty(address))
-            AddParam(cmd, "addr", address);
-        if (minAmount.HasValue)
-            AddParam(cmd, "minAmt", minAmount.Value);
-        if (executed.HasValue)
-            AddParam(cmd, "exec", (byte)(executed.Value ? 1 : 0));
-        if (inputType.HasValue)
-            AddParam(cmd, "inputType", (ushort)inputType.Value);
-        if (!string.IsNullOrEmpty(toAddress))
-            AddParam(cmd, "toAddr", toAddress);
-        if (coreOnly)
-            AddParam(cmd, "burnAddr", AddressLabelService.BurnAddress);
+        AddFilterParams(cmd);
         AddParam(cmd, "lim", (uint)limit);
         AddParam(cmd, "off", (uint)offset);
 
-        var items = new List<TransactionDto>();
+        var totalPages = (int)Math.Ceiling((double)totalCount / limit);
+
+        if (detailed)
+        {
+            var items = await ReadDetailedTransactions(cmd, ct);
+            return new PaginatedResponse<TransactionDetailDto>(items, page, limit, totalCount, totalPages);
+        }
+        else
+        {
+            var items = new List<TransactionDto>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                items.Add(ReadTransactionDto(reader));
+            }
+            return new PaginatedResponse<TransactionDto>(items, page, limit, totalCount, totalPages);
+        }
+    }
+
+    private async Task<List<TransactionDetailDto>> ReadDetailedTransactions(
+        System.Data.Common.DbCommand cmd, CancellationToken ct)
+    {
+        var txRows = new List<(string Hash, ulong Tick, uint Epoch, string From, string To,
+            ulong Amount, ushort InputType, string? InputData, bool Executed, DateTime Timestamp,
+            int LogIdFrom, ushort LogIdLength)>();
+
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            items.Add(ReadTransactionDto(reader));
+            txRows.Add((
+                reader.GetString(0),
+                reader.GetFieldValue<ulong>(1),
+                reader.GetFieldValue<uint>(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetFieldValue<ulong>(5),
+                reader.GetFieldValue<ushort>(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.GetFieldValue<byte>(8) == 1,
+                reader.GetDateTime(9),
+                reader.GetFieldValue<int>(10),
+                reader.GetFieldValue<ushort>(11)
+            ));
         }
 
-        var totalPages = (int)Math.Ceiling((double)totalCount / limit);
-        return new PaginatedResponse<TransactionDto>(items, page, limit, totalCount, totalPages);
+        // Batch-fetch all logs for these transactions
+        var logsByKey = new Dictionary<(ulong Tick, int LogIdFrom, int LogIdEnd), List<LogDto>>();
+        var logRanges = txRows
+            .Where(t => t.LogIdFrom >= 0 && t.LogIdLength > 0)
+            .Select(t => (t.Tick, t.LogIdFrom, LogIdEnd: t.LogIdFrom + t.LogIdLength))
+            .Distinct()
+            .ToList();
+
+        if (logRanges.Count > 0)
+        {
+            // Build a single query with OR conditions for all log ranges
+            // Since all transactions in a tick-scoped query share the same tick, this is efficient
+            var tickGroups = logRanges.GroupBy(r => r.Tick);
+            foreach (var group in tickGroups)
+            {
+                var tick = group.Key;
+                var minLogId = group.Min(r => r.LogIdFrom);
+                var maxLogId = group.Max(r => r.LogIdEnd);
+
+                await using var logCmd = _connection.CreateCommand();
+                logCmd.CommandText = $@"
+                    SELECT tick_number, log_id, log_type, tx_hash, source_address,
+                           dest_address, amount, asset_name, timestamp
+                    FROM logs
+                    WHERE tick_number = {{tick:UInt64}}
+                      AND log_id >= {{minLogId:Int32}}
+                      AND log_id < {{maxLogId:Int32}}
+                    ORDER BY log_id";
+                AddParam(logCmd, "tick", tick);
+                AddParam(logCmd, "minLogId", minLogId);
+                AddParam(logCmd, "maxLogId", maxLogId);
+
+                var allLogs = new List<(uint LogId, LogDto Log)>();
+                await using var logReader = await logCmd.ExecuteReaderAsync(ct);
+                while (await logReader.ReadAsync(ct))
+                {
+                    var logId = logReader.GetFieldValue<uint>(1);
+                    allLogs.Add((logId, ReadLogDto(logReader)));
+                }
+
+                // Distribute logs to their transactions
+                foreach (var range in group)
+                {
+                    var key = (range.Tick, range.LogIdFrom, range.LogIdEnd);
+                    logsByKey[key] = allLogs
+                        .Where(l => l.LogId >= range.LogIdFrom && l.LogId < range.LogIdEnd)
+                        .Select(l => l.Log)
+                        .ToList();
+                }
+            }
+        }
+
+        var items = new List<TransactionDetailDto>();
+        foreach (var tx in txRows)
+        {
+            var isCoreTransaction = string.Equals(tx.To, AddressLabelService.BurnAddress, StringComparison.OrdinalIgnoreCase);
+            var inputTypeName = isCoreTransaction && CoreTransactionInputTypes.IsKnownType(tx.InputType)
+                ? CoreTransactionInputTypes.GetDisplayName(tx.InputType) : null;
+            var parsedInput = isCoreTransaction ? TransactionInputParser.Parse(tx.InputType, tx.InputData) : null;
+
+            var logs = new List<LogDto>();
+            if (tx.LogIdFrom >= 0 && tx.LogIdLength > 0)
+            {
+                var key = (tx.Tick, tx.LogIdFrom, tx.LogIdFrom + (int)tx.LogIdLength);
+                logsByKey.TryGetValue(key, out logs!);
+                logs ??= new List<LogDto>();
+            }
+
+            items.Add(new TransactionDetailDto(
+                tx.Hash, tx.Tick, tx.Epoch, tx.From, tx.To, tx.Amount,
+                tx.InputType, inputTypeName, tx.InputData, parsedInput,
+                tx.Executed, tx.Timestamp, logs));
+        }
+
+        return items;
     }
 
     public async Task<PaginatedResponse<TransferDto>> GetLogsByTickPagedAsync(
@@ -330,10 +439,11 @@ public class ClickHouseQueryService : IDisposable
         return new PaginatedResponse<TransferDto>(items, page, limit, totalCount, totalPages);
     }
 
-    public async Task<PaginatedResponse<TransactionDto>> GetTransactionsAsync(
+    public async Task<object> GetTransactionsAsync(
         int page, int limit, string? address = null, string? direction = null,
         ulong? minAmount = null, bool? executed = null, int? inputType = null,
-        string? toAddress = null, bool coreOnly = false, CancellationToken ct = default)
+        string? toAddress = null, bool coreOnly = false, bool detailed = false,
+        CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
 
@@ -396,27 +506,34 @@ public class ClickHouseQueryService : IDisposable
                 Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
         }
 
+        var columns = detailed
+            ? "hash, tick_number, epoch, from_address, to_address, amount, input_type, input_data, executed, timestamp, log_id_from, log_id_length"
+            : "hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp";
+        var groupByColumns = detailed
+            ? "hash, tick_number, epoch, from_address, to_address, amount, input_type, input_data, executed, timestamp, log_id_from, log_id_length"
+            : "hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp";
+
         await using var cmd = _connection.CreateCommand();
         if (useUnionApproach)
         {
             // UNION + dedup for listing (address may appear as both from and to)
             cmd.CommandText = $@"
-                SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                SELECT {columns}
                 FROM (
-                    SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                    SELECT {columns}
                     FROM transactions PREWHERE from_address = {{addr:String}} {whereClause}
                     UNION ALL
-                    SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                    SELECT {columns}
                     FROM transactions PREWHERE to_address = {{addr:String}} {whereClause}
                 )
-                GROUP BY hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                GROUP BY {groupByColumns}
                 ORDER BY tick_number DESC, hash
                 LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
         }
         else
         {
             cmd.CommandText = $@"
-                SELECT hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp
+                SELECT {columns}
                 FROM transactions
                 {prewhereClause}
                 {whereClause}
@@ -438,27 +555,47 @@ public class ClickHouseQueryService : IDisposable
         AddParam(cmd, "lim", (uint)fetchLimit);
         AddParam(cmd, "off", (uint)offset);
 
-        var items = new List<TransactionDto>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            items.Add(ReadTransactionDto(reader));
-        }
-
         try
         {
-            if (skipCount)
+            if (detailed)
             {
-                var hasMore = items.Count > limit;
-                if (hasMore) items.RemoveAt(items.Count - 1);
-                var totalPages = hasMore ? page + 1 : page;
-                return new PaginatedResponse<TransactionDto>(items, page, limit, -1, totalPages);
+                var items = await ReadDetailedTransactions(cmd, ct);
+                if (skipCount)
+                {
+                    var hasMore = items.Count > limit;
+                    if (hasMore) items.RemoveAt(items.Count - 1);
+                    var totalPages = hasMore ? page + 1 : page;
+                    return new PaginatedResponse<TransactionDetailDto>(items, page, limit, -1, totalPages);
+                }
+                else
+                {
+                    var totalCount = await countTask!;
+                    return new PaginatedResponse<TransactionDetailDto>(
+                        items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+                }
             }
             else
             {
-                var totalCount = await countTask!;
-                return new PaginatedResponse<TransactionDto>(
-                    items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+                var items = new List<TransactionDto>();
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    items.Add(ReadTransactionDto(reader));
+                }
+
+                if (skipCount)
+                {
+                    var hasMore = items.Count > limit;
+                    if (hasMore) items.RemoveAt(items.Count - 1);
+                    var totalPages = hasMore ? page + 1 : page;
+                    return new PaginatedResponse<TransactionDto>(items, page, limit, -1, totalPages);
+                }
+                else
+                {
+                    var totalCount = await countTask!;
+                    return new PaginatedResponse<TransactionDto>(
+                        items, page, limit, totalCount, (int)Math.Ceiling((double)totalCount / limit));
+                }
             }
         }
         finally

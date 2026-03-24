@@ -49,12 +49,13 @@ public class TicksController : ControllerBase
         [FromQuery] int? inputType = null,
         [FromQuery] string? toAddress = null,
         [FromQuery] bool coreOnly = false,
+        [FromQuery] bool detailed = false,
         CancellationToken ct = default)
     {
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetTransactionsByTickPagedAsync(tickNumber, page, limit, address, direction, minAmount, executed, inputType, toAddress, coreOnly, ct);
+        var result = await _queryService.GetTransactionsByTickPagedAsync(tickNumber, page, limit, address, direction, minAmount, executed, inputType, toAddress, coreOnly, detailed, ct);
         return Ok(result);
     }
 

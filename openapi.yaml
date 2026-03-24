@@ -1,0 +1,2749 @@
+openapi: 3.0.3
+info:
+  title: Qubic Explorer API
+  description: API for exploring the Qubic network — transactions, addresses, epochs, smart contracts, analytics, and more.
+  version: 1.0.0
+
+servers:
+  - url: /
+
+paths:
+  # ── Search ──────────────────────────────────────────────────────────────
+  /api/search:
+    get:
+      tags: [Search]
+      summary: Search for addresses, transactions, ticks, or assets
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchResponse' }
+
+  # ── Transactions ────────────────────────────────────────────────────────
+  /api/transactions:
+    get:
+      tags: [Transactions]
+      summary: List transactions with filters
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: address
+          in: query
+          schema: { type: string }
+          description: Filter by sender or receiver address
+        - name: direction
+          in: query
+          schema: { type: string, enum: [from, to] }
+        - name: minAmount
+          in: query
+          schema: { type: integer, format: uint64 }
+        - name: executed
+          in: query
+          schema: { type: boolean }
+        - name: inputType
+          in: query
+          schema: { type: integer }
+          description: Filter by input type (core) or procedure ID (contract)
+        - name: toAddress
+          in: query
+          schema: { type: string }
+          description: Filter by destination address (e.g. smart contract address)
+        - name: coreOnly
+          in: query
+          schema: { type: boolean, default: false }
+          description: Only return core transactions (to_address = burn address)
+        - name: detailed
+          in: query
+          schema: { type: boolean, default: false }
+          description: When true, returns full TransactionDetailDto with inputData, parsedInput, and logs
+      responses:
+        '200':
+          description: Paginated transactions (items are TransactionDetailDto when detailed=true)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginatedTransactionResponse' }
+
+  /api/transactions/{hash}:
+    get:
+      tags: [Transactions]
+      summary: Get transaction by hash
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Transaction detail (or special transaction)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TransactionDetailDto'
+                  - $ref: '#/components/schemas/SpecialTransactionDto'
+        '404':
+          description: Transaction not found
+
+  # ── Transfers ───────────────────────────────────────────────────────────
+  /api/transfers:
+    get:
+      tags: [Transfers]
+      summary: List transfers / logs with filters
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: fromAddress
+          in: query
+          schema: { type: string }
+        - name: toAddress
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          schema: { type: integer }
+          description: Single log type filter
+        - name: types
+          in: query
+          schema: { type: string }
+          description: Comma-separated log type IDs
+        - name: minAmount
+          in: query
+          schema: { type: integer, format: uint64 }
+        - name: epoch
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Paginated transfers
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginatedTransferResponse' }
+
+  # ── Ticks ───────────────────────────────────────────────────────────────
+  /api/ticks:
+    get:
+      tags: [Ticks]
+      summary: List ticks
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        '200':
+          description: Paginated ticks
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginatedTickResponse' }
+
+  /api/ticks/{tickNumber}:
+    get:
+      tags: [Ticks]
+      summary: Get tick details
+      parameters:
+        - name: tickNumber
+          in: path
+          required: true
+          schema: { type: integer, format: uint64 }
+      responses:
+        '200':
+          description: Tick detail with transactions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TickDetailDto' }
+        '404':
+          description: Tick not found
+
+  /api/ticks/{tickNumber}/transactions:
+    get:
+      tags: [Ticks]
+      summary: List transactions in a tick
+      parameters:
+        - name: tickNumber
+          in: path
+          required: true
+          schema: { type: integer, format: uint64 }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: address
+          in: query
+          schema: { type: string }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [from, to] }
+        - name: minAmount
+          in: query
+          schema: { type: integer, format: uint64 }
+        - name: executed
+          in: query
+          schema: { type: boolean }
+        - name: inputType
+          in: query
+          schema: { type: integer }
+        - name: toAddress
+          in: query
+          schema: { type: string }
+        - name: coreOnly
+          in: query
+          schema: { type: boolean, default: false }
+        - name: detailed
+          in: query
+          schema: { type: boolean, default: false }
+          description: When true, returns full TransactionDetailDto with inputData, parsedInput, and logs
+      responses:
+        '200':
+          description: Paginated transactions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginatedTransactionResponse' }
+
+  /api/ticks/{tickNumber}/logs:
+    get:
+      tags: [Ticks]
+      summary: List logs / transfers in a tick
+      parameters:
+        - name: tickNumber
+          in: path
+          required: true
+          schema: { type: integer, format: uint64 }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: fromAddress
+          in: query
+          schema: { type: string }
+        - name: toAddress
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          schema: { type: integer }
+        - name: minAmount
+          in: query
+          schema: { type: integer, format: uint64 }
+      responses:
+        '200':
+          description: Paginated logs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginatedTransferResponse' }
+
+  # ── Address ─────────────────────────────────────────────────────────────
+  /api/address/{address}:
+    get:
+      tags: [Address]
+      summary: Get address summary
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Address info
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AddressDto' }
+
+  /api/address/{address}/transactions:
+    get:
+      tags: [Address]
+      summary: Get address transactions
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [from, to] }
+        - name: minAmount
+          in: query
+          schema: { type: integer, format: uint64 }
+        - name: executed
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Paginated transactions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginatedTransactionResponse' }
+
+  /api/address/{address}/transfers:
+    get:
+      tags: [Address]
+      summary: Get address transfers
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: type
+          in: query
+          schema: { type: integer }
+        - name: fromAddress
+          in: query
+          schema: { type: string }
+        - name: toAddress
+          in: query
+          schema: { type: string }
+        - name: minAmount
+          in: query
+          schema: { type: integer, format: uint64 }
+        - name: epoch
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Paginated transfers
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginatedTransferResponse' }
+
+  /api/address/{address}/rewards:
+    get:
+      tags: [Address]
+      summary: Get address rewards
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        '200':
+          description: Paginated rewards
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedRewardDistributionResponse'
+
+  /api/address/{address}/activity-range:
+    get:
+      tags: [Address]
+      summary: Get first/last activity for an address
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Activity range
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AddressActivityRangeDto' }
+
+  /api/address/{address}/export:
+    get:
+      tags: [Address]
+      summary: Export address data as CSV
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: format
+          in: query
+          schema: { type: string, default: csv }
+        - name: type
+          in: query
+          schema: { type: string, default: transfers, enum: [transfers] }
+        - name: epoch
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: CSV file
+          content:
+            text/csv:
+              schema: { type: string }
+
+  /api/address/{address}/flow:
+    get:
+      tags: [Address]
+      summary: Get address transaction flows
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 10 }
+      responses:
+        '200':
+          description: Flow data
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AddressFlowDto' }
+
+  /api/address/{address}/graph:
+    get:
+      tags: [Address]
+      summary: Get transaction graph for visualization
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: hops
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: Graph data
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionGraphDto' }
+
+  /api/address/batch:
+    post:
+      tags: [Address]
+      summary: Batch fetch multiple addresses (max 20)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BatchAddressRequest' }
+      responses:
+        '200':
+          description: Array of address info
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AddressDto' }
+
+  # ── Epochs ──────────────────────────────────────────────────────────────
+  /api/epoch:
+    get:
+      tags: [Epochs]
+      summary: List epochs
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Epoch summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EpochSummaryDto' }
+
+  /api/epoch/countdown:
+    get:
+      tags: [Epochs]
+      summary: Get epoch countdown info
+      responses:
+        '200':
+          description: Countdown data
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EpochCountdownDto' }
+
+  /api/epoch/{epoch}:
+    get:
+      tags: [Epochs]
+      summary: Get epoch statistics
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Epoch stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EpochStatsDto' }
+
+  /api/epoch/{epoch}/transfers-by-type:
+    get:
+      tags: [Epochs]
+      summary: Get transfers grouped by type for an epoch
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Transfer type breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EpochTransferByTypeDto' }
+
+  /api/epoch/{epoch}/rewards:
+    get:
+      tags: [Epochs]
+      summary: Get epoch rewards
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Epoch reward summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EpochRewardSummaryDto' }
+
+  /api/epoch/{epoch}/meta:
+    get:
+      tags: [Epochs]
+      summary: Get epoch metadata
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Epoch metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EpochMetaDto' }
+
+  /api/epoch/meta:
+    get:
+      tags: [Epochs]
+      summary: List all epoch metadata
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+      responses:
+        '200':
+          description: Epoch metadata list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EpochMetaDto' }
+
+  /api/epoch/meta/current:
+    get:
+      tags: [Epochs]
+      summary: Get current epoch metadata
+      responses:
+        '200':
+          description: Current epoch metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EpochMetaDto' }
+
+  /api/epoch/{epoch}/empty-ticks:
+    get:
+      tags: [Epochs]
+      summary: Get empty tick statistics for an epoch
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Empty tick stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EpochEmptyTickStatsDto' }
+
+  /api/epoch/{epoch}/meta (POST):
+    post:
+      tags: [Epochs, Admin]
+      summary: Upsert epoch metadata (requires admin API key)
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EpochMetaRequest' }
+      responses:
+        '200':
+          description: Success
+      security:
+        - AdminApiKey: []
+
+  /api/epoch/{epoch}/fetch-end-logs:
+    post:
+      tags: [Epochs, Admin]
+      summary: Fetch and insert end-epoch logs (requires admin API key)
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Success
+      security:
+        - AdminApiKey: []
+
+  /api/epoch/backfill-stats:
+    post:
+      tags: [Epochs, Admin]
+      summary: Backfill epoch stats for completed epochs (requires admin API key)
+      responses:
+        '200':
+          description: Success
+      security:
+        - AdminApiKey: []
+
+  # ── Labels ──────────────────────────────────────────────────────────────
+  /api/labels:
+    get:
+      tags: [Labels]
+      summary: Get all known addresses with optional type filter
+      parameters:
+        - name: type
+          in: query
+          schema: { type: string }
+          description: Filter by address type (e.g. smartcontract, exchange)
+      responses:
+        '200':
+          description: Array of labelled addresses
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/KnownAddressDto' }
+
+  /api/labels/{address}:
+    get:
+      tags: [Labels]
+      summary: Get label info for a single address
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Label info
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KnownAddressDto' }
+
+  /api/labels/batch:
+    post:
+      tags: [Labels]
+      summary: Batch fetch labels for multiple addresses (max 100)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                addresses:
+                  type: array
+                  items: { type: string }
+                  maxItems: 100
+      responses:
+        '200':
+          description: Array of label info
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/KnownAddressDto' }
+
+  /api/labels/stats:
+    get:
+      tags: [Labels]
+      summary: Get label statistics
+      responses:
+        '200':
+          description: Label stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalLabels: { type: integer }
+                  byType:
+                    type: object
+                    additionalProperties: { type: integer }
+
+  /api/labels/refresh:
+    post:
+      tags: [Labels, Admin]
+      summary: Refresh all labels from source (requires admin API key)
+      responses:
+        '200':
+          description: Refresh result
+      security:
+        - AdminApiKey: []
+
+  /api/labels/procedure/{contractAddress}/{inputType}:
+    get:
+      tags: [Labels]
+      summary: Get procedure name for a contract input type
+      parameters:
+        - name: contractAddress
+          in: path
+          required: true
+          schema: { type: string }
+        - name: inputType
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Procedure info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  procedureName: { type: string }
+
+  # ── Assets ──────────────────────────────────────────────────────────────
+  /api/assets:
+    get:
+      tags: [Assets]
+      summary: Get all assets from latest universe snapshot
+      responses:
+        '200':
+          description: Array of assets
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AssetSummaryDto' }
+
+  /api/assets/{name}:
+    get:
+      tags: [Assets]
+      summary: Get detailed asset info
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: issuer
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Asset detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetDetailDto' }
+
+  /api/assets/{name}/holders:
+    get:
+      tags: [Assets]
+      summary: Get paginated asset holders
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+        - name: issuer
+          in: query
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Paginated holders
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetHoldersPageDto' }
+
+  # ── Stats ───────────────────────────────────────────────────────────────
+  /api/stats:
+    get:
+      tags: [Stats]
+      summary: Get network stats
+      responses:
+        '200':
+          description: Network stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NetworkStatsDto' }
+
+  /api/stats/chart/tx-volume:
+    get:
+      tags: [Stats]
+      summary: Transaction volume chart data
+      parameters:
+        - name: period
+          in: query
+          schema: { type: string, enum: [day, week, month], default: day }
+      responses:
+        '200':
+          description: Chart data points
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ChartDataPointDto' }
+
+  /api/stats/top-addresses:
+    get:
+      tags: [Stats]
+      summary: Top addresses by volume
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: epoch
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Top addresses
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TopAddressDto' }
+
+  /api/stats/rich-list:
+    get:
+      tags: [Stats]
+      summary: Rich list with pagination
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Rich list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RichListDto' }
+
+  /api/stats/supply:
+    get:
+      tags: [Stats]
+      summary: Supply dashboard
+      responses:
+        '200':
+          description: Supply info
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupplyDashboardDto' }
+
+  /api/stats/whale-alerts:
+    get:
+      tags: [Stats]
+      summary: Large transfer alerts
+      parameters:
+        - name: threshold
+          in: query
+          schema: { type: integer, format: uint64, default: 10000000000 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Whale alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/WhaleAlertDto' }
+
+  /api/stats/smart-contract-usage:
+    get:
+      tags: [Stats]
+      summary: Smart contract usage stats
+      parameters:
+        - name: epoch
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: SC usage
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SmartContractUsageDto' }
+
+  /api/stats/active-addresses:
+    get:
+      tags: [Stats]
+      summary: Active address trends
+      parameters:
+        - name: period
+          in: query
+          schema: { type: string, enum: [epoch, day], default: epoch }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Active address trends
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ActiveAddressTrendDto' }
+
+  /api/stats/new-vs-returning:
+    get:
+      tags: [Stats]
+      summary: New vs returning addresses per epoch
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: New vs returning
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/NewVsReturningDto' }
+
+  /api/stats/exchange-flows:
+    get:
+      tags: [Stats]
+      summary: Exchange inflow/outflow data
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Exchange flows
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExchangeFlowDto' }
+
+  /api/stats/exchange-senders:
+    get:
+      tags: [Stats]
+      summary: Addresses sending to exchanges
+      parameters:
+        - name: epochs
+          in: query
+          schema: { type: integer, default: 5 }
+        - name: minAmount
+          in: query
+          schema: { type: integer, format: uint64, default: 1000000000 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+        - name: depth
+          in: query
+          schema: { type: integer, default: 1 }
+      responses:
+        '200':
+          description: Exchange senders
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExchangeSendersDto' }
+
+  /api/stats/holder-distribution:
+    get:
+      tags: [Stats]
+      summary: Wealth distribution analysis
+      responses:
+        '200':
+          description: Holder distribution
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HolderDistributionDto' }
+
+  /api/stats/holder-distribution/extended:
+    get:
+      tags: [Stats]
+      summary: Holder distribution with history
+      parameters:
+        - name: historyLimit
+          in: query
+          schema: { type: integer, default: 30 }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Extended holder distribution
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HolderDistributionExtendedDto' }
+
+  /api/stats/holder-distribution/history:
+    get:
+      tags: [Stats]
+      summary: Historical holder distribution snapshots
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 30 }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: History snapshots
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/HolderDistributionHistoryDto' }
+
+  /api/stats/avg-tx-size:
+    get:
+      tags: [Stats]
+      summary: Average transaction size trends
+      parameters:
+        - name: period
+          in: query
+          schema: { type: string, enum: [epoch, day], default: epoch }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Avg TX size trends
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AvgTxSizeTrendDto' }
+
+  /api/stats/network-stats/history:
+    get:
+      tags: [Stats]
+      summary: Network stats history
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 30 }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: History
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/NetworkStatsHistoryDto' }
+
+  /api/stats/network-stats/extended:
+    get:
+      tags: [Stats]
+      summary: Network stats with history
+      parameters:
+        - name: historyLimit
+          in: query
+          schema: { type: integer, default: 30 }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Extended network stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NetworkStatsExtendedDto' }
+
+  /api/stats/qearn:
+    get:
+      tags: [Stats]
+      summary: Qearn statistics
+      responses:
+        '200':
+          description: Qearn stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QearnStatsDto' }
+
+  /api/stats/ccf:
+    get:
+      tags: [Stats]
+      summary: Computor Controlled Fund statistics
+      responses:
+        '200':
+          description: CCF stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CcfStatsDto' }
+
+  /api/stats/burn-stats/history:
+    get:
+      tags: [Stats]
+      summary: Burn stats history
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 30 }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Burn stats history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BurnStatsHistoryDto' }
+
+  /api/stats/burn-stats/extended:
+    get:
+      tags: [Stats]
+      summary: Burn stats with history
+      parameters:
+        - name: historyLimit
+          in: query
+          schema: { type: integer, default: 30 }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Extended burn stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BurnStatsExtendedDto' }
+
+  /api/stats/computor-revenue:
+    get:
+      tags: [Stats]
+      summary: Computor revenue for current epoch
+      responses:
+        '200':
+          description: Computor revenue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ComputorRevenueDto' }
+
+  /api/stats/computor-revenue/{epoch}:
+    get:
+      tags: [Stats]
+      summary: Computor revenue for specific epoch
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Computor revenue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ComputorRevenueDto' }
+
+  /api/stats/qearn/backfill:
+    post:
+      tags: [Stats, Admin]
+      summary: Backfill qearn stats (requires admin API key)
+      responses:
+        '200':
+          description: Success
+      security:
+        - AdminApiKey: []
+
+  /api/stats/emission/backfill:
+    post:
+      tags: [Stats, Admin]
+      summary: Backfill emission stats (requires admin API key)
+      responses:
+        '200':
+          description: Success
+      security:
+        - AdminApiKey: []
+
+  # ── Miner Flow ──────────────────────────────────────────────────────────
+  /api/miner-flow/computors/{epoch}:
+    get:
+      tags: [Miner Flow]
+      summary: Get computors for an epoch
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Computor list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ComputorListDto' }
+
+  /api/miner-flow/stats:
+    get:
+      tags: [Miner Flow]
+      summary: Miner flow statistics summary with history
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 30 }
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Miner flow summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MinerFlowSummaryDto' }
+
+  /api/miner-flow/visualization/{emissionEpoch}:
+    get:
+      tags: [Miner Flow]
+      summary: Flow visualization data for Sankey diagram
+      parameters:
+        - name: emissionEpoch
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: maxDepth
+          in: query
+          schema: { type: integer, default: 10 }
+      responses:
+        '200':
+          description: Visualization data
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FlowVisualizationDto' }
+
+  /api/miner-flow/hops/{epoch}:
+    get:
+      tags: [Miner Flow]
+      summary: Raw flow hops for analysis
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: tickStart
+          in: query
+          schema: { type: integer, format: uint64 }
+        - name: tickEnd
+          in: query
+          schema: { type: integer, format: uint64 }
+        - name: maxDepth
+          in: query
+          schema: { type: integer, default: 5 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 1000 }
+      responses:
+        '200':
+          description: Flow hops
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/FlowHopDto' }
+
+  /api/miner-flow/emissions/{epoch}:
+    get:
+      tags: [Miner Flow]
+      summary: Emission summary for an epoch
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Emission summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmissionSummaryDto' }
+
+  /api/miner-flow/emissions/{epoch}/details:
+    get:
+      tags: [Miner Flow]
+      summary: Detailed emissions for all computors in epoch
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Epoch emissions
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EpochEmissionDto' }
+
+  /api/miner-flow/emissions/{epoch}/address/{address}:
+    get:
+      tags: [Miner Flow]
+      summary: Emission for specific computor in epoch
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Computor emission
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ComputorEmissionDto' }
+
+  # ── Custom Flow ─────────────────────────────────────────────────────────
+  /api/custom-flow:
+    post:
+      tags: [Custom Flow]
+      summary: Create new custom flow tracking job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCustomFlowRequest' }
+      responses:
+        '200':
+          description: Created job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomFlowJobDto' }
+
+  /api/custom-flow/{jobId}:
+    get:
+      tags: [Custom Flow]
+      summary: Get job metadata
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Job metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomFlowJobDto' }
+
+  /api/custom-flow/{jobId}/visualization:
+    get:
+      tags: [Custom Flow]
+      summary: Sankey visualization data for job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Visualization result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CustomFlowResultDto' }
+
+  /api/custom-flow/{jobId}/hops:
+    get:
+      tags: [Custom Flow]
+      summary: Raw hop data for job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: maxDepth
+          in: query
+          schema: { type: integer, default: 10 }
+      responses:
+        '200':
+          description: Hop data
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CustomFlowHopDto' }
+
+  /api/custom-flow/{jobId}/state:
+    get:
+      tags: [Custom Flow]
+      summary: Tracking state for all addresses in job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Tracking states
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CustomFlowTrackingStateDto' }
+
+  # ── Spectrum ────────────────────────────────────────────────────────────
+  /api/spectrum/status:
+    get:
+      tags: [Spectrum]
+      summary: Get status of spectrum imports
+      responses:
+        '200':
+          description: Import status
+
+  /api/spectrum/{epoch}/status:
+    get:
+      tags: [Spectrum]
+      summary: Check if epoch spectrum is imported
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Import status
+
+  /api/spectrum/{epoch}/import:
+    post:
+      tags: [Spectrum, Admin]
+      summary: Import spectrum for epoch (requires admin API key)
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Import result
+      security:
+        - AdminApiKey: []
+
+  /api/spectrum/import-latest:
+    post:
+      tags: [Spectrum, Admin]
+      summary: Import latest spectrum (requires admin API key)
+      responses:
+        '200':
+          description: Import result
+      security:
+        - AdminApiKey: []
+
+  /api/spectrum/{epoch}/import-universe:
+    post:
+      tags: [Spectrum, Admin]
+      summary: Import universe for epoch (requires admin API key)
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Import result
+      security:
+        - AdminApiKey: []
+
+  /api/spectrum/universe/status:
+    get:
+      tags: [Spectrum]
+      summary: Get status of universe imports
+      responses:
+        '200':
+          description: Universe import status
+
+  # ── Notifications ───────────────────────────────────────────────────────
+  /api/notifications/vapid-key:
+    get:
+      tags: [Notifications]
+      summary: Get VAPID public key for push subscription
+      responses:
+        '200':
+          description: VAPID key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  publicKey: { type: string }
+
+  /api/notifications/subscribe:
+    post:
+      tags: [Notifications]
+      summary: Subscribe to push notifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushSubscribeRequest' }
+      responses:
+        '200':
+          description: Subscription created
+
+  /api/notifications/unsubscribe:
+    post:
+      tags: [Notifications]
+      summary: Unsubscribe from push notifications
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushUnsubscribeRequest' }
+      responses:
+        '200':
+          description: Unsubscribed
+
+  # ── Health ──────────────────────────────────────────────────────────────
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      responses:
+        '200':
+          description: Healthy
+
+# ════════════════════════════════════════════════════════════════════════════
+components:
+  securitySchemes:
+    AdminApiKey:
+      type: apiKey
+      in: header
+      name: X-Admin-Api-Key
+
+  schemas:
+    # ── Pagination ──────────────────────────────────────────────────────────
+    PaginatedTransactionResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TransactionDto' }
+        page: { type: integer }
+        limit: { type: integer }
+        totalCount: { type: integer, format: int64 }
+        totalPages: { type: integer }
+        hasNextPage: { type: boolean }
+        hasPreviousPage: { type: boolean }
+
+    PaginatedTransferResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TransferDto' }
+        page: { type: integer }
+        limit: { type: integer }
+        totalCount: { type: integer, format: int64 }
+        totalPages: { type: integer }
+        hasNextPage: { type: boolean }
+        hasPreviousPage: { type: boolean }
+
+    PaginatedTickResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TickDto' }
+        page: { type: integer }
+        limit: { type: integer }
+        totalCount: { type: integer, format: int64 }
+        totalPages: { type: integer }
+        hasNextPage: { type: boolean }
+        hasPreviousPage: { type: boolean }
+
+    PaginatedRewardDistributionResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RewardDistributionDto' }
+        page: { type: integer }
+        limit: { type: integer }
+        totalCount: { type: integer, format: int64 }
+        totalPages: { type: integer }
+        hasNextPage: { type: boolean }
+        hasPreviousPage: { type: boolean }
+
+    # ── Search ──────────────────────────────────────────────────────────────
+    SearchResponse:
+      type: object
+      properties:
+        query: { type: string }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/SearchResultDto' }
+
+    SearchResultDto:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [Tick, Transaction, Address, Asset]
+        value: { type: string }
+        displayName: { type: string, nullable: true }
+
+    # ── Transaction ─────────────────────────────────────────────────────────
+    TransactionDto:
+      type: object
+      properties:
+        hash: { type: string }
+        tickNumber: { type: integer, format: uint64 }
+        epoch: { type: integer }
+        fromAddress: { type: string }
+        toAddress: { type: string }
+        amount: { type: integer, format: uint64 }
+        inputType: { type: integer }
+        inputTypeName: { type: string, nullable: true }
+        executed: { type: boolean }
+        timestamp: { type: string, format: date-time }
+
+    TransactionDetailDto:
+      type: object
+      properties:
+        hash: { type: string }
+        tickNumber: { type: integer, format: uint64 }
+        epoch: { type: integer }
+        fromAddress: { type: string }
+        toAddress: { type: string }
+        amount: { type: integer, format: uint64 }
+        inputType: { type: integer }
+        inputTypeName: { type: string, nullable: true }
+        inputData: { type: string, nullable: true }
+        parsedInput:
+          nullable: true
+          type: object
+          description: Parsed input data (polymorphic, depends on inputType)
+        executed: { type: boolean }
+        timestamp: { type: string, format: date-time }
+        logs:
+          type: array
+          items: { $ref: '#/components/schemas/LogDto' }
+
+    SpecialTransactionDto:
+      type: object
+      properties:
+        txHash: { type: string }
+        specialType: { type: string }
+        specialTypeName: { type: string }
+        tickNumber: { type: integer, format: uint64 }
+        timestamp: { type: string, format: date-time }
+        logs:
+          type: array
+          items: { $ref: '#/components/schemas/LogDto' }
+
+    # ── Transfer / Log ──────────────────────────────────────────────────────
+    LogDto:
+      type: object
+      properties:
+        tickNumber: { type: integer, format: uint64 }
+        logId: { type: integer }
+        logType: { type: integer }
+        logTypeName: { type: string }
+        txHash: { type: string, nullable: true }
+        sourceAddress: { type: string, nullable: true }
+        destAddress: { type: string, nullable: true }
+        amount: { type: integer, format: uint64 }
+        assetName: { type: string, nullable: true }
+        timestamp: { type: string, format: date-time }
+
+    TransferDto:
+      type: object
+      properties:
+        tickNumber: { type: integer, format: uint64 }
+        epoch: { type: integer }
+        logId: { type: integer }
+        logType: { type: integer }
+        logTypeName: { type: string }
+        txHash: { type: string, nullable: true }
+        sourceAddress: { type: string }
+        destAddress: { type: string }
+        amount: { type: integer, format: uint64 }
+        assetName: { type: string, nullable: true }
+        timestamp: { type: string, format: date-time }
+
+    # ── Tick ────────────────────────────────────────────────────────────────
+    TickDto:
+      type: object
+      properties:
+        tickNumber: { type: integer, format: uint64 }
+        epoch: { type: integer }
+        timestamp: { type: string, format: date-time }
+        txCount: { type: integer }
+        logCount: { type: integer }
+        isEmpty: { type: boolean }
+
+    TickDetailDto:
+      type: object
+      properties:
+        tickNumber: { type: integer, format: uint64 }
+        epoch: { type: integer }
+        timestamp: { type: string, format: date-time }
+        txCount: { type: integer }
+        logCount: { type: integer }
+        isEmpty: { type: boolean }
+        transactions:
+          type: array
+          items: { $ref: '#/components/schemas/TransactionDto' }
+
+    # ── Address ─────────────────────────────────────────────────────────────
+    AddressDto:
+      type: object
+      properties:
+        address: { type: string }
+        balance: { type: integer, format: uint64 }
+        incomingAmount: { type: integer, format: uint64 }
+        outgoingAmount: { type: integer, format: uint64 }
+        txCount: { type: integer }
+        transferCount: { type: integer }
+
+    AddressActivityRangeDto:
+      type: object
+      properties:
+        firstTick: { type: integer, format: uint64, nullable: true }
+        firstTimestamp: { type: string, format: date-time, nullable: true }
+        firstEpoch: { type: integer, nullable: true }
+        lastTick: { type: integer, format: uint64, nullable: true }
+        lastTimestamp: { type: string, format: date-time, nullable: true }
+        lastEpoch: { type: integer, nullable: true }
+
+    AddressFlowDto:
+      type: object
+      properties:
+        address: { type: string }
+        label: { type: string, nullable: true }
+        type: { type: string, nullable: true }
+        inbound:
+          type: array
+          items: { $ref: '#/components/schemas/FlowNodeDto' }
+        outbound:
+          type: array
+          items: { $ref: '#/components/schemas/FlowNodeDto' }
+
+    FlowNodeDto:
+      type: object
+      properties:
+        address: { type: string }
+        label: { type: string, nullable: true }
+        type: { type: string, nullable: true }
+        totalAmount: { type: integer, format: uint64 }
+        transactionCount: { type: integer }
+
+    TransactionGraphDto:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/GraphNodeDto' }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/GraphLinkDto' }
+
+    GraphNodeDto:
+      type: object
+      properties:
+        address: { type: string }
+        label: { type: string, nullable: true }
+        type: { type: string, nullable: true }
+        totalVolume: { type: number }
+        depth: { type: integer }
+
+    GraphLinkDto:
+      type: object
+      properties:
+        source: { type: string }
+        target: { type: string }
+        amount: { type: number }
+        txCount: { type: integer }
+
+    BatchAddressRequest:
+      type: object
+      properties:
+        addresses:
+          type: array
+          items: { type: string }
+          maxItems: 20
+
+    # ── Labels ──────────────────────────────────────────────────────────────
+    KnownAddressDto:
+      type: object
+      properties:
+        address: { type: string }
+        label: { type: string, nullable: true }
+        type: { type: string, nullable: true }
+        contractIndex: { type: integer, nullable: true }
+
+    # ── Epoch ───────────────────────────────────────────────────────────────
+    EpochStatsDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        tickCount: { type: integer, format: uint64 }
+        emptyTickCount: { type: integer, format: uint64 }
+        firstTick: { type: integer, format: uint64 }
+        lastTick: { type: integer, format: uint64 }
+        startTime: { type: string, format: date-time }
+        endTime: { type: string, format: date-time }
+        txCount: { type: integer, format: uint64 }
+        totalVolume: { type: number }
+        uniqueSenders: { type: integer, format: uint64 }
+        uniqueReceivers: { type: integer, format: uint64 }
+        activeAddresses: { type: integer, format: uint64 }
+        transferCount: { type: integer, format: uint64 }
+        quTransferred: { type: number }
+        assetTransferCount: { type: integer, format: uint64 }
+
+    EpochSummaryDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        tickCount: { type: integer, format: uint64 }
+        emptyTickCount: { type: integer, format: uint64 }
+        txCount: { type: integer, format: uint64 }
+        totalVolume: { type: number }
+        activeAddresses: { type: integer, format: uint64 }
+        startTime: { type: string, format: date-time }
+        endTime: { type: string, format: date-time }
+        firstTick: { type: integer, format: uint64 }
+        lastTick: { type: integer, format: uint64 }
+
+    EpochTransferByTypeDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        logType: { type: integer }
+        logTypeName: { type: string }
+        count: { type: integer, format: uint64 }
+        totalAmount: { type: number }
+
+    EpochCountdownDto:
+      type: object
+      properties:
+        currentEpoch: { type: integer }
+        currentEpochStart: { type: string, format: date-time }
+        averageEpochDurationMs: { type: number }
+        estimatedEpochEnd: { type: string, format: date-time }
+        currentTick: { type: integer, format: uint64 }
+
+    EpochMetaDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        initialTick: { type: integer, format: uint64 }
+        endTick: { type: integer, format: uint64 }
+        endTickStartLogId: { type: integer, format: uint64 }
+        endTickEndLogId: { type: integer, format: uint64 }
+        isComplete: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+        tickCount: { type: integer, format: uint64 }
+        emptyTickCount: { type: integer, format: uint64 }
+        txCount: { type: integer, format: uint64 }
+        totalVolume: { type: number }
+        activeAddresses: { type: integer, format: uint64 }
+        transferCount: { type: integer, format: uint64 }
+        quTransferred: { type: number }
+
+    EpochMetaRequest:
+      type: object
+      required: [initialTick]
+      properties:
+        initialTick: { type: integer, format: uint64 }
+        endTick: { type: integer, format: uint64, default: 0 }
+        endTickStartLogId: { type: integer, format: uint64, default: 0 }
+        endTickEndLogId: { type: integer, format: uint64, default: 0 }
+
+    EpochEmptyTickStatsDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        totalEmptyTicks: { type: integer }
+        totalTicks: { type: integer }
+        computors:
+          type: array
+          items: { $ref: '#/components/schemas/ComputorEmptyTickDto' }
+
+    ComputorEmptyTickDto:
+      type: object
+      properties:
+        computorIndex: { type: integer }
+        address: { type: string }
+        label: { type: string, nullable: true }
+        emptyTickCount: { type: integer }
+        totalTickCount: { type: integer }
+
+    # ── Rewards ─────────────────────────────────────────────────────────────
+    RewardDistributionDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        contractAddress: { type: string }
+        contractName: { type: string, nullable: true }
+        tickNumber: { type: integer, format: uint64 }
+        totalAmount: { type: integer, format: uint64 }
+        amountPerShare: { type: number }
+        transferCount: { type: integer }
+        timestamp: { type: string, format: date-time }
+
+    EpochRewardSummaryDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        distributions:
+          type: array
+          items: { $ref: '#/components/schemas/RewardDistributionDto' }
+        totalRewardsDistributed: { type: integer, format: uint64 }
+
+    # ── Assets ──────────────────────────────────────────────────────────────
+    AssetSummaryDto:
+      type: object
+      properties:
+        assetName: { type: string }
+        issuerAddress: { type: string }
+        issuerLabel: { type: string, nullable: true }
+        numberOfDecimalPlaces: { type: integer }
+        totalSupply: { type: integer, format: int64 }
+        holderCount: { type: integer }
+
+    AssetDetailDto:
+      type: object
+      properties:
+        assetName: { type: string }
+        issuerAddress: { type: string }
+        issuerLabel: { type: string, nullable: true }
+        numberOfDecimalPlaces: { type: integer }
+        totalSupply: { type: integer, format: int64 }
+        holderCount: { type: integer }
+        snapshotEpoch: { type: integer }
+        topHolders:
+          type: array
+          items: { $ref: '#/components/schemas/AssetHolderDetailDto' }
+
+    AssetHolderDetailDto:
+      type: object
+      properties:
+        address: { type: string }
+        label: { type: string, nullable: true }
+        type: { type: string, nullable: true }
+        ownedShares: { type: integer, format: int64 }
+        possessedShares: { type: integer, format: int64 }
+
+    AssetHoldersPageDto:
+      type: object
+      properties:
+        holders:
+          type: array
+          items: { $ref: '#/components/schemas/AssetHolderDetailDto' }
+        page: { type: integer }
+        limit: { type: integer }
+        totalCount: { type: integer }
+        totalPages: { type: integer }
+
+    # ── Stats ───────────────────────────────────────────────────────────────
+    NetworkStatsDto:
+      type: object
+      properties:
+        latestTick: { type: integer, format: uint64 }
+        currentEpoch: { type: integer }
+        totalTransactions: { type: integer, format: uint64 }
+        totalTransfers: { type: integer, format: uint64 }
+        totalVolume: { type: integer, format: uint64 }
+        lastUpdated: { type: string, format: date-time }
+
+    ChartDataPointDto:
+      type: object
+      properties:
+        date: { type: string, format: date-time }
+        txCount: { type: integer, format: uint64 }
+        volume: { type: integer, format: uint64 }
+
+    TopAddressDto:
+      type: object
+      properties:
+        address: { type: string }
+        label: { type: string, nullable: true }
+        type: { type: string, nullable: true }
+        sentVolume: { type: integer, format: uint64 }
+        receivedVolume: { type: integer, format: uint64 }
+        totalVolume: { type: integer, format: uint64 }
+        sentCount: { type: integer }
+        receivedCount: { type: integer }
+        totalCount: { type: integer }
+
+    SmartContractUsageDto:
+      type: object
+      properties:
+        address: { type: string }
+        name: { type: string }
+        contractIndex: { type: integer, nullable: true }
+        callCount: { type: integer, format: uint64 }
+        totalAmount: { type: integer, format: uint64 }
+        uniqueCallers: { type: integer }
+
+    RichListDto:
+      type: object
+      properties:
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/RichListEntryDto' }
+        page: { type: integer }
+        limit: { type: integer }
+        totalCount: { type: integer, format: uint64 }
+        totalPages: { type: integer }
+        totalBalance: { type: number }
+        snapshotEpoch: { type: integer }
+
+    RichListEntryDto:
+      type: object
+      properties:
+        rank: { type: integer }
+        address: { type: string }
+        label: { type: string, nullable: true }
+        type: { type: string, nullable: true }
+        balance: { type: number }
+        balanceFormatted: { type: string }
+        percentageOfSupply: { type: number }
+
+    SupplyDashboardDto:
+      type: object
+      properties:
+        circulatingSupply: { type: number }
+        totalEmitted: { type: number }
+        totalBurned: { type: number }
+        latestEpochEmission: { type: number }
+        epochCount: { type: integer }
+        snapshotEpoch: { type: integer }
+        supplyCap: { type: number }
+        supplyCapProgress: { type: number }
+        emissionHistory:
+          type: array
+          items: { $ref: '#/components/schemas/EmissionDataPointDto' }
+        burnHistory:
+          type: array
+          items: { $ref: '#/components/schemas/BurnDataPointDto' }
+
+    EmissionDataPointDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        computorEmission: { type: number }
+        arbRevenue: { type: number }
+        donations:
+          type: array
+          items: { $ref: '#/components/schemas/EmissionDonationDto' }
+        donationTotal: { type: number }
+        computorCount: { type: integer }
+
+    EmissionDonationDto:
+      type: object
+      properties:
+        address: { type: string }
+        label: { type: string, nullable: true }
+        amount: { type: number }
+
+    BurnDataPointDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        snapshotAt: { type: string, format: date-time }
+        burnAmount: { type: integer, format: uint64 }
+        burnCount: { type: integer, format: uint64 }
+
+    WhaleAlertDto:
+      type: object
+      properties:
+        tickNumber: { type: integer, format: uint64 }
+        epoch: { type: integer }
+        txHash: { type: string }
+        sourceAddress: { type: string }
+        sourceLabel: { type: string, nullable: true }
+        sourceType: { type: string, nullable: true }
+        destAddress: { type: string }
+        destLabel: { type: string, nullable: true }
+        destType: { type: string, nullable: true }
+        amount: { type: number }
+        amountFormatted: { type: string }
+        timestamp: { type: string, format: date-time }
+
+    ActiveAddressTrendDto:
+      type: object
+      properties:
+        epoch: { type: integer, nullable: true }
+        date: { type: string, format: date-time, nullable: true }
+        uniqueSenders: { type: integer, format: uint64 }
+        uniqueReceivers: { type: integer, format: uint64 }
+        totalActive: { type: integer, format: uint64 }
+
+    NewVsReturningDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        newAddresses: { type: integer, format: uint64 }
+        returningAddresses: { type: integer, format: uint64 }
+        totalAddresses: { type: integer, format: uint64 }
+
+    ExchangeFlowDto:
+      type: object
+      properties:
+        dataPoints:
+          type: array
+          items: { $ref: '#/components/schemas/ExchangeFlowDataPointDto' }
+        totalInflow: { type: integer, format: uint64 }
+        totalOutflow: { type: integer, format: uint64 }
+
+    ExchangeFlowDataPointDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        inflowVolume: { type: integer, format: uint64 }
+        inflowCount: { type: integer }
+        outflowVolume: { type: integer, format: uint64 }
+        outflowCount: { type: integer }
+        netFlow: { type: integer, format: int64 }
+
+    ExchangeSendersDto:
+      type: object
+      properties:
+        clusters:
+          type: array
+          items: { $ref: '#/components/schemas/AddressClusterDto' }
+        senders:
+          type: array
+          items: { $ref: '#/components/schemas/ExchangeSenderDto' }
+        epochsQueried: { type: integer }
+        minAmount: { type: number }
+
+    ExchangeSenderDto:
+      type: object
+      properties:
+        address: { type: string }
+        label: { type: string, nullable: true }
+        type: { type: string, nullable: true }
+        totalVolume: { type: number }
+        totalVolumeFormatted: { type: string }
+        transactionCount: { type: integer }
+        epochCount: { type: integer }
+        viaDepositAddresses:
+          type: array
+          nullable: true
+          items: { type: string }
+        clusterId: { type: integer, nullable: true }
+
+    AddressClusterDto:
+      type: object
+      properties:
+        clusterId: { type: integer }
+        addresses:
+          type: array
+          items: { type: string }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/ClusterLinkDto' }
+        totalVolume: { type: number }
+        totalVolumeFormatted: { type: string }
+
+    ClusterLinkDto:
+      type: object
+      properties:
+        address1: { type: string }
+        address2: { type: string }
+        reason: { type: string }
+        volume: { type: number }
+
+    HolderDistributionDto:
+      type: object
+      properties:
+        brackets:
+          type: array
+          items: { $ref: '#/components/schemas/HolderBracketDto' }
+        totalHolders: { type: integer, format: uint64 }
+        totalBalance: { type: number }
+        concentration:
+          nullable: true
+          $ref: '#/components/schemas/ConcentrationMetricsDto'
+
+    HolderBracketDto:
+      type: object
+      properties:
+        name: { type: string }
+        count: { type: integer, format: uint64 }
+        balance: { type: number }
+        percentageOfSupply: { type: number }
+
+    ConcentrationMetricsDto:
+      type: object
+      properties:
+        top10Balance: { type: number }
+        top10Percent: { type: number }
+        top50Balance: { type: number }
+        top50Percent: { type: number }
+        top100Balance: { type: number }
+        top100Percent: { type: number }
+
+    HolderDistributionHistoryDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        snapshotAt: { type: string, format: date-time }
+        tickStart: { type: integer, format: uint64 }
+        tickEnd: { type: integer, format: uint64 }
+        brackets:
+          type: array
+          items: { $ref: '#/components/schemas/HolderBracketDto' }
+        totalHolders: { type: integer, format: uint64 }
+        totalBalance: { type: number }
+        concentration: { $ref: '#/components/schemas/ConcentrationMetricsDto' }
+        dataSource: { type: string }
+
+    HolderDistributionExtendedDto:
+      type: object
+      properties:
+        current: { $ref: '#/components/schemas/HolderDistributionDto' }
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/HolderDistributionHistoryDto' }
+
+    AvgTxSizeTrendDto:
+      type: object
+      properties:
+        epoch: { type: integer, nullable: true }
+        date: { type: string, format: date-time, nullable: true }
+        txCount: { type: integer, format: uint64 }
+        totalVolume: { type: number }
+        avgTxSize: { type: number }
+        medianTxSize: { type: number }
+
+    NetworkStatsHistoryDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        snapshotAt: { type: string, format: date-time }
+        tickStart: { type: integer, format: uint64 }
+        tickEnd: { type: integer, format: uint64 }
+        totalTransactions: { type: integer, format: uint64 }
+        totalTransfers: { type: integer, format: uint64 }
+        totalVolume: { type: number }
+        uniqueSenders: { type: integer, format: uint64 }
+        uniqueReceivers: { type: integer, format: uint64 }
+        totalActiveAddresses: { type: integer, format: uint64 }
+        newAddresses: { type: integer, format: uint64 }
+        returningAddresses: { type: integer, format: uint64 }
+        exchangeInflowVolume: { type: number }
+        exchangeInflowCount: { type: integer, format: uint64 }
+        exchangeOutflowVolume: { type: number }
+        exchangeOutflowCount: { type: integer, format: uint64 }
+        exchangeNetFlow: { type: number }
+        scCallCount: { type: integer, format: uint64 }
+        scUniqueCallers: { type: integer, format: uint64 }
+        avgTxSize: { type: number }
+        medianTxSize: { type: number }
+        newUsers100MPlus: { type: integer, format: uint64 }
+        newUsers1BPlus: { type: integer, format: uint64 }
+        newUsers10BPlus: { type: integer, format: uint64 }
+
+    NetworkStatsExtendedDto:
+      type: object
+      properties:
+        current:
+          nullable: true
+          $ref: '#/components/schemas/NetworkStatsHistoryDto'
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/NetworkStatsHistoryDto' }
+
+    BurnStatsHistoryDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        snapshotAt: { type: string, format: date-time }
+        tickStart: { type: integer, format: uint64 }
+        tickEnd: { type: integer, format: uint64 }
+        totalBurned: { type: integer, format: uint64 }
+        burnCount: { type: integer, format: uint64 }
+        burnAmount: { type: integer, format: uint64 }
+        dustBurnCount: { type: integer, format: uint64 }
+        dustBurned: { type: integer, format: uint64 }
+        transferBurnCount: { type: integer, format: uint64 }
+        transferBurned: { type: integer, format: uint64 }
+        uniqueBurners: { type: integer, format: uint64 }
+        largestBurn: { type: integer, format: uint64 }
+        cumulativeBurned: { type: integer, format: uint64 }
+
+    BurnStatsExtendedDto:
+      type: object
+      properties:
+        current:
+          nullable: true
+          $ref: '#/components/schemas/BurnStatsHistoryDto'
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/BurnStatsHistoryDto' }
+        allTimeTotalBurned: { type: integer, format: uint64 }
+
+    QearnStatsDto:
+      type: object
+      properties:
+        epochs:
+          type: array
+          items: { $ref: '#/components/schemas/QearnEpochStatsDto' }
+        allTimeTotalBurned: { type: integer, format: uint64 }
+        allTimeTotalInput: { type: integer, format: uint64 }
+        allTimeTotalOutput: { type: integer, format: uint64 }
+
+    QearnEpochStatsDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        totalBurned: { type: integer, format: uint64 }
+        burnCount: { type: integer, format: uint64 }
+        totalInput: { type: integer, format: uint64 }
+        inputCount: { type: integer, format: uint64 }
+        totalOutput: { type: integer, format: uint64 }
+        outputCount: { type: integer, format: uint64 }
+        uniqueLockers: { type: integer, format: uint64 }
+        uniqueUnlockers: { type: integer, format: uint64 }
+
+    CcfStatsDto:
+      type: object
+      properties:
+        activeProposals:
+          type: array
+          items: { $ref: '#/components/schemas/CcfProposalDto' }
+        pastProposals:
+          type: array
+          items: { $ref: '#/components/schemas/CcfProposalDto' }
+        transfers:
+          type: array
+          items: { $ref: '#/components/schemas/CcfTransferDto' }
+        regularPayments:
+          type: array
+          items: { $ref: '#/components/schemas/CcfRegularPaymentDto' }
+        activeSubscriptions:
+          type: array
+          items: { $ref: '#/components/schemas/CcfSubscriptionDto' }
+        totalSpent: { type: integer, format: int64 }
+        totalTransferCount: { type: integer }
+        proposalFee: { type: integer }
+        spendingByEpoch:
+          type: array
+          items: { $ref: '#/components/schemas/CcfEpochSpendingDto' }
+
+    CcfProposalDto:
+      type: object
+      properties:
+        proposalIndex: { type: integer }
+        proposerAddress: { type: string }
+        url: { type: string }
+        proposalType: { type: integer }
+        proposalTick: { type: integer }
+        epoch: { type: integer }
+        transferDestination: { type: string, nullable: true }
+        transferAmount: { type: integer, format: int64, nullable: true }
+        totalVotesAuthorized: { type: integer }
+        totalVotesCast: { type: integer }
+        noVotes: { type: integer }
+        yesVotes: { type: integer }
+        passed: { type: boolean }
+        isActive: { type: boolean }
+
+    CcfTransferDto:
+      type: object
+      properties:
+        destination: { type: string }
+        url: { type: string }
+        amount: { type: integer, format: int64 }
+        tick: { type: integer }
+        epoch: { type: integer }
+        success: { type: boolean }
+
+    CcfRegularPaymentDto:
+      type: object
+      properties:
+        destination: { type: string }
+        url: { type: string }
+        amount: { type: integer, format: int64 }
+        tick: { type: integer }
+        epoch: { type: integer }
+        periodIndex: { type: integer }
+        success: { type: boolean }
+
+    CcfSubscriptionDto:
+      type: object
+      properties:
+        destination: { type: string }
+        url: { type: string }
+        amountPerPeriod: { type: integer, format: int64 }
+        numberOfPeriods: { type: integer }
+        currentPeriod: { type: integer }
+        weeksPerPeriod: { type: integer }
+        startEpoch: { type: integer }
+
+    CcfEpochSpendingDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        totalSpent: { type: integer, format: int64 }
+        transferCount: { type: integer }
+
+    ComputorRevenueDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        computorCount: { type: integer }
+        issuanceRate: { type: integer, format: int64 }
+        txQuorumScore: { type: integer, format: uint64 }
+        voteQuorumScore: { type: integer, format: uint64 }
+        miningQuorumScore: { type: integer, format: uint64 }
+        totalComputorRevenue: { type: integer, format: int64 }
+        arbRevenue: { type: integer, format: int64 }
+        computors:
+          type: array
+          items: { $ref: '#/components/schemas/ComputorRevenueEntryDto' }
+
+    ComputorRevenueEntryDto:
+      type: object
+      properties:
+        computorIndex: { type: integer }
+        address: { type: string }
+        label: { type: string, nullable: true }
+        txScore: { type: integer, format: uint64 }
+        voteScore: { type: integer, format: uint64 }
+        miningScore: { type: integer, format: uint64 }
+        txFactor: { type: integer, format: uint64 }
+        voteFactor: { type: integer, format: uint64 }
+        miningFactor: { type: integer, format: uint64 }
+        revenue: { type: integer, format: int64 }
+
+    # ── Miner Flow ──────────────────────────────────────────────────────────
+    ComputorListDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        computors:
+          type: array
+          items: { $ref: '#/components/schemas/ComputorDto' }
+        count: { type: integer }
+        importedAt: { type: string, format: date-time, nullable: true }
+
+    ComputorDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        address: { type: string }
+        index: { type: integer }
+        label: { type: string, nullable: true }
+
+    MinerFlowSummaryDto:
+      type: object
+      properties:
+        latest:
+          nullable: true
+          $ref: '#/components/schemas/MinerFlowStatsDto'
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/MinerFlowStatsDto' }
+        totalEmissionTracked: { type: number }
+        totalFlowToExchange: { type: number }
+        averageExchangeFlowPercent: { type: number }
+
+    MinerFlowStatsDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        snapshotAt: { type: string, format: date-time }
+        tickStart: { type: integer, format: uint64 }
+        tickEnd: { type: integer, format: uint64 }
+        emissionEpoch: { type: integer }
+        totalEmission: { type: number }
+        computorCount: { type: integer }
+        totalOutflow: { type: number }
+        outflowTxCount: { type: integer, format: uint64 }
+        flowToExchangeDirect: { type: number }
+        flowToExchange1Hop: { type: number }
+        flowToExchange2Hop: { type: number }
+        flowToExchange3Plus: { type: number }
+        flowToExchangeTotal: { type: number }
+        flowToExchangeCount: { type: integer, format: uint64 }
+        flowToOther: { type: number }
+        minerNetPosition: { type: number }
+        hop1Volume: { type: number }
+        hop2Volume: { type: number }
+        hop3Volume: { type: number }
+        hop4PlusVolume: { type: number }
+
+    FlowVisualizationDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        tickStart: { type: integer, format: uint64 }
+        tickEnd: { type: integer, format: uint64 }
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/FlowVisualizationNodeDto' }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/FlowVisualizationLinkDto' }
+        maxDepth: { type: integer }
+        totalTrackedVolume: { type: number }
+
+    FlowVisualizationNodeDto:
+      type: object
+      properties:
+        id: { type: string }
+        address: { type: string }
+        label: { type: string, nullable: true }
+        type: { type: string }
+        totalInflow: { type: number }
+        totalOutflow: { type: number }
+        depth: { type: integer }
+
+    FlowVisualizationLinkDto:
+      type: object
+      properties:
+        sourceId: { type: string }
+        targetId: { type: string }
+        amount: { type: number }
+        transactionCount: { type: integer }
+
+    FlowHopDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        tickNumber: { type: integer, format: uint64 }
+        timestamp: { type: string, format: date-time }
+        txHash: { type: string }
+        sourceAddress: { type: string }
+        sourceLabel: { type: string, nullable: true }
+        sourceType: { type: string, nullable: true }
+        destAddress: { type: string }
+        destLabel: { type: string, nullable: true }
+        destType: { type: string, nullable: true }
+        amount: { type: number }
+        originAddress: { type: string }
+        originType: { type: string }
+        hopLevel: { type: integer }
+
+    EmissionSummaryDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        computorCount: { type: integer }
+        totalEmission: { type: number }
+        emissionTick: { type: integer, format: uint64 }
+        importedAt: { type: string, format: date-time }
+
+    EpochEmissionDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        computorCount: { type: integer }
+        totalEmission: { type: number }
+        emissionTick: { type: integer, format: uint64 }
+        importedAt: { type: string, format: date-time, nullable: true }
+        emissions:
+          type: array
+          items: { $ref: '#/components/schemas/ComputorEmissionDto' }
+
+    ComputorEmissionDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        computorIndex: { type: integer }
+        address: { type: string }
+        label: { type: string, nullable: true }
+        emissionAmount: { type: number }
+        emissionTick: { type: integer, format: uint64 }
+        emissionTimestamp: { type: string, format: date-time }
+
+    # ── Custom Flow ─────────────────────────────────────────────────────────
+    CreateCustomFlowRequest:
+      type: object
+      required: [addresses, startTick]
+      properties:
+        addresses:
+          type: array
+          items: { type: string }
+        startTick: { type: integer, format: uint64 }
+        balances:
+          type: array
+          nullable: true
+          items: { type: integer, format: uint64 }
+        alias: { type: string, nullable: true }
+        maxHops: { type: integer, default: 10 }
+
+    CustomFlowJobDto:
+      type: object
+      properties:
+        jobId: { type: string }
+        alias: { type: string }
+        startTick: { type: integer, format: uint64 }
+        addresses:
+          type: array
+          items: { type: string }
+        balances:
+          type: array
+          items: { type: integer, format: uint64 }
+        maxHops: { type: integer }
+        status: { type: string }
+        lastProcessedTick: { type: integer, format: uint64 }
+        totalHopsRecorded: { type: integer, format: uint64 }
+        totalTerminalAmount: { type: number }
+        totalPendingAmount: { type: number }
+        errorMessage: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CustomFlowHopDto:
+      type: object
+      properties:
+        jobId: { type: string }
+        tickNumber: { type: integer, format: uint64 }
+        timestamp: { type: string, format: date-time }
+        txHash: { type: string }
+        sourceAddress: { type: string }
+        sourceLabel: { type: string, nullable: true }
+        destAddress: { type: string }
+        destLabel: { type: string, nullable: true }
+        destType: { type: string, nullable: true }
+        amount: { type: number }
+        originAddress: { type: string }
+        hopLevel: { type: integer }
+
+    CustomFlowResultDto:
+      type: object
+      properties:
+        job: { $ref: '#/components/schemas/CustomFlowJobDto' }
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/FlowVisualizationNodeDto' }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/FlowVisualizationLinkDto' }
+        maxDepth: { type: integer }
+        totalTrackedVolume: { type: number }
+
+    CustomFlowTrackingStateDto:
+      type: object
+      properties:
+        jobId: { type: string }
+        address: { type: string }
+        addressType: { type: string }
+        originAddress: { type: string }
+        receivedAmount: { type: number }
+        sentAmount: { type: number }
+        pendingAmount: { type: number }
+        hopLevel: { type: integer }
+        lastTick: { type: integer, format: uint64 }
+        isTerminal: { type: boolean }
+        isComplete: { type: boolean }
+
+    # ── Notifications ───────────────────────────────────────────────────────
+    PushSubscribeRequest:
+      type: object
+      required: [subscription, addresses]
+      properties:
+        subscription: { $ref: '#/components/schemas/PushSubscriptionData' }
+        addresses:
+          type: array
+          items: { type: string }
+        events:
+          type: array
+          nullable: true
+          items: { type: string }
+        largeTransferThreshold: { type: integer, format: uint64, default: 1000000000 }
+        balanceMinThreshold: { type: integer, format: uint64, default: 0 }
+        balanceMaxThreshold: { type: integer, format: uint64, default: 0 }
+
+    PushSubscriptionData:
+      type: object
+      properties:
+        endpoint: { type: string }
+        keys: { $ref: '#/components/schemas/PushSubscriptionKeys' }
+
+    PushSubscriptionKeys:
+      type: object
+      properties:
+        p256dh: { type: string }
+        auth: { type: string }
+
+    PushUnsubscribeRequest:
+      type: object
+      required: [endpoint]
+      properties:
+        endpoint: { type: string }
