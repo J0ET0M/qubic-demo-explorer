@@ -287,7 +287,7 @@ const toggleExecutedFilter = (value: boolean | undefined) => {
           <div>
             <label class="block text-sm font-medium mb-1">Smart Contract</label>
             <select v-model="contractFilter" class="input w-full" @change="onContractChange">
-              <option value="">All (Core + Contracts)</option>
+              <option value="">All Core</option>
               <option v-for="c in contracts" :key="c.address" :value="c.address">
                 {{ c.name }}
               </option>

@@ -183,7 +183,8 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<PaginatedResponse<TransactionDto>> GetTransactionsByTickPagedAsync(
         ulong tickNumber, int page, int limit, string? address = null, string? direction = null,
-        ulong? minAmount = null, bool? executed = null, CancellationToken ct = default)
+        ulong? minAmount = null, bool? executed = null, int? inputType = null,
+        string? toAddress = null, bool coreOnly = false, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
         var conditions = new List<string> { $"tick_number = {{tick:UInt64}}" };
@@ -202,6 +203,12 @@ public class ClickHouseQueryService : IDisposable
             conditions.Add($"amount >= {{minAmt:UInt64}}");
         if (executed.HasValue)
             conditions.Add($"executed = {{exec:UInt8}}");
+        if (inputType.HasValue)
+            conditions.Add($"input_type = {{inputType:UInt16}}");
+        if (!string.IsNullOrEmpty(toAddress))
+            conditions.Add($"to_address = {{toAddr:String}}");
+        if (coreOnly)
+            conditions.Add($"to_address = {{burnAddr:String}}");
 
         var whereClause = string.Join(" AND ", conditions);
 
@@ -215,6 +222,12 @@ public class ClickHouseQueryService : IDisposable
             AddParam(countCmd, "minAmt", minAmount.Value);
         if (executed.HasValue)
             AddParam(countCmd, "exec", (byte)(executed.Value ? 1 : 0));
+        if (inputType.HasValue)
+            AddParam(countCmd, "inputType", (ushort)inputType.Value);
+        if (!string.IsNullOrEmpty(toAddress))
+            AddParam(countCmd, "toAddr", toAddress);
+        if (coreOnly)
+            AddParam(countCmd, "burnAddr", AddressLabelService.BurnAddress);
         var totalCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct));
 
         // Get paginated items
@@ -232,6 +245,12 @@ public class ClickHouseQueryService : IDisposable
             AddParam(cmd, "minAmt", minAmount.Value);
         if (executed.HasValue)
             AddParam(cmd, "exec", (byte)(executed.Value ? 1 : 0));
+        if (inputType.HasValue)
+            AddParam(cmd, "inputType", (ushort)inputType.Value);
+        if (!string.IsNullOrEmpty(toAddress))
+            AddParam(cmd, "toAddr", toAddress);
+        if (coreOnly)
+            AddParam(cmd, "burnAddr", AddressLabelService.BurnAddress);
         AddParam(cmd, "lim", (uint)limit);
         AddParam(cmd, "off", (uint)offset);
 

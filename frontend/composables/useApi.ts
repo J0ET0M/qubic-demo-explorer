@@ -43,12 +43,18 @@ export const useApi = () => {
     direction?: 'from' | 'to'
     minAmount?: number
     executed?: boolean
+    inputType?: number
+    toAddress?: string
+    coreOnly?: boolean
   }) => {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) })
     if (options?.address) params.set('address', options.address)
     if (options?.direction) params.set('direction', options.direction)
     if (options?.minAmount !== undefined) params.set('minAmount', String(options.minAmount))
     if (options?.executed !== undefined) params.set('executed', String(options.executed))
+    if (options?.inputType !== undefined) params.set('inputType', String(options.inputType))
+    if (options?.toAddress) params.set('toAddress', options.toAddress)
+    if (options?.coreOnly) params.set('coreOnly', 'true')
     return fetchApi<PaginatedResponse<TransactionDto>>(`/api/ticks/${tickNumber}/transactions?${params}`)
   }
 

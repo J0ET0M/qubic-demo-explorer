@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Blocks, ArrowLeftRight, FileText, Filter, X } from 'lucide-vue-next'
+import { getSupportedContracts, getContractSchema } from '~/utils/contractInputDecoder'
 
 const api = useApi()
 const route = useRoute()
@@ -17,8 +18,72 @@ const txAddress = ref('')
 const txDirection = ref<'from' | 'to' | ''>('')
 const txMinAmount = ref<number | undefined>(undefined)
 const txExecuted = ref<boolean | undefined>(undefined)
+const txInputType = ref<number | undefined>(undefined)
+const txContractFilter = ref('')
 const showTxFilters = ref(false)
 const txMinAmountInput = ref('')
+
+// Contract list with addresses (fetched from labels API)
+const contracts = ref<Array<{ index: number; name: string; address: string }>>([])
+
+// Fetch contract addresses on mount
+const supportedContracts = getSupportedContracts()
+const { data: knownAddresses } = await useAsyncData(
+  'contract-addresses',
+  () => api.getAllKnownAddresses('smartcontract')
+)
+
+watchEffect(() => {
+  if (knownAddresses.value) {
+    contracts.value = supportedContracts
+      .map(sc => {
+        const found = knownAddresses.value!.find(ka => ka.contractIndex === sc.index)
+        return found ? { index: sc.index, name: sc.name, address: found.address } : null
+      })
+      .filter((c): c is { index: number; name: string; address: string } => c !== null)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+})
+
+// Core input type options (for burn address transactions)
+const coreInputTypeOptions = [
+  { value: undefined as number | undefined, label: 'All' },
+  { value: 0, label: 'Transfer' },
+  { value: 1, label: 'Vote Counter' },
+  { value: 2, label: 'Mining Solution' },
+  { value: 3, label: 'File Header' },
+  { value: 4, label: 'File Fragment' },
+  { value: 5, label: 'File Trailer' },
+  { value: 6, label: 'Oracle Reply Commit' },
+  { value: 7, label: 'Oracle Reply Reveal' },
+  { value: 8, label: 'Mining Share Counter' },
+  { value: 9, label: 'Execution Fee Report' },
+  { value: 10, label: 'Oracle User Query' },
+]
+
+// Dynamic input type options: show contract procedures when a contract is selected
+const txInputTypeOptions = computed(() => {
+  if (!txContractFilter.value) return coreInputTypeOptions
+  const contract = contracts.value.find(c => c.address === txContractFilter.value)
+  if (!contract) return [{ value: undefined as number | undefined, label: 'All' }]
+  const schema = getContractSchema(contract.index)
+  if (!schema) return [{ value: undefined as number | undefined, label: 'All' }]
+  const procedures = Object.entries(schema.procedures).map(([id, proc]) => ({
+    value: parseInt(id) as number | undefined,
+    label: proc.name,
+  }))
+  return [{ value: undefined as number | undefined, label: 'All' }, ...procedures]
+})
+
+// Get the selected contract's address for the API
+const selectedContractAddress = computed(() => txContractFilter.value || undefined)
+
+// Get label for input type pill
+const txInputTypeLabel = computed(() => {
+  if (txInputType.value === undefined) return ''
+  const opt = txInputTypeOptions.value.find(o => o.value === txInputType.value)
+  return opt?.label || `Type ${txInputType.value}`
+})
 
 // Logs filter state
 const logsFromAddress = ref('')
@@ -29,6 +94,7 @@ const logsMinAmount = ref<number | undefined>(undefined)
 // Check if filters are active
 const hasTxFilters = computed(() =>
   txAddress.value !== '' || txMinAmount.value !== undefined || txExecuted.value !== undefined
+  || txInputType.value !== undefined || txContractFilter.value !== ''
 )
 
 const { data: tick, pending, error } = await useAsyncData(
@@ -38,20 +104,23 @@ const { data: tick, pending, error } = await useAsyncData(
 
 // Build transaction filter options
 const txFilterOptions = computed(() => {
-  const opts: { address?: string; direction?: 'from' | 'to'; minAmount?: number; executed?: boolean } = {}
+  const opts: { address?: string; direction?: 'from' | 'to'; minAmount?: number; executed?: boolean; inputType?: number; toAddress?: string; coreOnly?: boolean } = {}
   if (txAddress.value) opts.address = txAddress.value
   if (txDirection.value === 'from' || txDirection.value === 'to') opts.direction = txDirection.value
   if (txMinAmount.value !== undefined) opts.minAmount = txMinAmount.value
   if (txExecuted.value !== undefined) opts.executed = txExecuted.value
+  if (txInputType.value !== undefined) opts.inputType = txInputType.value
+  if (selectedContractAddress.value) opts.toAddress = selectedContractAddress.value
+  else opts.coreOnly = true
   return opts
 })
 
 // Fetch transactions with pagination and filters
 const { data: transactions, pending: txPending } = await useAsyncData(
-  () => `tick-${tickNumber}-transactions-${txPage.value}-${txAddress.value}-${txDirection.value}-${txMinAmount.value}-${txExecuted.value}`,
+  () => `tick-${tickNumber}-transactions-${txPage.value}-${txAddress.value}-${txDirection.value}-${txMinAmount.value}-${txExecuted.value}-${txInputType.value}-${txContractFilter.value}`,
   () => api.getTickTransactions(tickNumber, txPage.value, pageLimit,
     Object.keys(txFilterOptions.value).length > 0 ? txFilterOptions.value : undefined),
-  { watch: [txPage, txAddress, txDirection, txMinAmount, txExecuted] }
+  { watch: [txPage, txAddress, txDirection, txMinAmount, txExecuted, txInputType, txContractFilter] }
 )
 
 // Build logs filter options
@@ -85,6 +154,13 @@ const clearTxFilters = () => {
   txMinAmountInput.value = ''
   txMinAmount.value = undefined
   txExecuted.value = undefined
+  txInputType.value = undefined
+  txContractFilter.value = ''
+  txPage.value = 1
+}
+
+const onContractChange = () => {
+  txInputType.value = undefined
   txPage.value = 1
 }
 
@@ -207,6 +283,24 @@ const toggleTxExecutedFilter = (value: boolean | undefined) => {
                   <X class="h-3 w-3" />
                 </button>
               </span>
+              <span
+                v-if="txContractFilter"
+                class="badge badge-accent flex items-center gap-1"
+              >
+                {{ contracts.find(c => c.address === txContractFilter)?.name || 'Contract' }}
+                <button @click="txContractFilter = ''; txInputType = undefined; txPage = 1" class="hover:text-white">
+                  <X class="h-3 w-3" />
+                </button>
+              </span>
+              <span
+                v-if="txInputType !== undefined"
+                class="badge badge-warning flex items-center gap-1"
+              >
+                {{ txInputTypeLabel }}
+                <button @click="txInputType = undefined; txPage = 1" class="hover:text-white">
+                  <X class="h-3 w-3" />
+                </button>
+              </span>
             </div>
 
             <button
@@ -220,7 +314,7 @@ const toggleTxExecutedFilter = (value: boolean | undefined) => {
 
           <!-- Expanded filter panel -->
           <div v-if="showTxFilters" class="mt-3 p-3 bg-background-elevated rounded-lg">
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
                 <label class="block text-xs font-medium mb-1">Address</label>
                 <input
@@ -254,6 +348,23 @@ const toggleTxExecutedFilter = (value: boolean | undefined) => {
                   <option :value="undefined">All</option>
                   <option :value="true">Executed only</option>
                   <option :value="false">Failed only</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium mb-1">Smart Contract</label>
+                <select v-model="txContractFilter" class="input input-sm w-full" @change="onContractChange">
+                  <option value="">All Core</option>
+                  <option v-for="c in contracts" :key="c.address" :value="c.address">
+                    {{ c.name }}
+                  </option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium mb-1">{{ txContractFilter ? 'Procedure' : 'Input Type' }}</label>
+                <select v-model="txInputType" class="input input-sm w-full" @change="txPage = 1">
+                  <option v-for="opt in txInputTypeOptions" :key="String(opt.value)" :value="opt.value">
+                    {{ opt.label }}{{ opt.value !== undefined ? ` (${opt.value})` : '' }}
+                  </option>
                 </select>
               </div>
               <div class="flex items-end">
