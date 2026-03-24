@@ -174,7 +174,7 @@ public class ClickHouseQueryService : IDisposable
 
         var tick = ReadTickDto(reader);
 
-        var transactions = await GetTransactionsByTickPagedAsync(tickNumber, 1, 1000, null, null, null, null, ct);
+        var transactions = await GetTransactionsByTickPagedAsync(tickNumber, 1, 1000, ct: ct);
 
         return new TickDetailDto(
             tick.TickNumber, tick.Epoch, tick.Timestamp,
