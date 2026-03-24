@@ -333,7 +333,7 @@ public class ClickHouseQueryService : IDisposable
     public async Task<PaginatedResponse<TransactionDto>> GetTransactionsAsync(
         int page, int limit, string? address = null, string? direction = null,
         ulong? minAmount = null, bool? executed = null, int? inputType = null,
-        string? toAddress = null, CancellationToken ct = default)
+        string? toAddress = null, bool coreOnly = false, CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
 
@@ -364,6 +364,8 @@ public class ClickHouseQueryService : IDisposable
 
         if (!string.IsNullOrEmpty(toAddress))
             conditions.Add($"to_address = {{toAddr:String}}");
+        if (coreOnly)
+            conditions.Add($"to_address = {{burnAddr:String}}");
 
         var whereClause = conditions.Count > 0
             ? "WHERE " + string.Join(" AND ", conditions)
@@ -387,6 +389,8 @@ public class ClickHouseQueryService : IDisposable
                 AddParam(countCmd, "inputType", (ushort)inputType.Value);
             if (!string.IsNullOrEmpty(toAddress))
                 AddParam(countCmd, "toAddr", toAddress);
+            if (coreOnly)
+                AddParam(countCmd, "burnAddr", AddressLabelService.BurnAddress);
 
             countTask = Task.Run(async () =>
                 Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct)), ct);
@@ -429,6 +433,8 @@ public class ClickHouseQueryService : IDisposable
             AddParam(cmd, "inputType", (ushort)inputType.Value);
         if (!string.IsNullOrEmpty(toAddress))
             AddParam(cmd, "toAddr", toAddress);
+        if (coreOnly)
+            AddParam(cmd, "burnAddr", AddressLabelService.BurnAddress);
         AddParam(cmd, "lim", (uint)fetchLimit);
         AddParam(cmd, "off", (uint)offset);
 

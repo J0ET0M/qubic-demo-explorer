@@ -36,12 +36,13 @@ public class TransactionsController : ControllerBase
         [FromQuery] bool? executed = null,
         [FromQuery] int? inputType = null,
         [FromQuery] string? toAddress = null,
+        [FromQuery] bool coreOnly = false,
         CancellationToken ct = default)
     {
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
-        var result = await _queryService.GetTransactionsAsync(page, limit, address, direction, minAmount, executed, inputType, toAddress, ct);
+        var result = await _queryService.GetTransactionsAsync(page, limit, address, direction, minAmount, executed, inputType, toAddress, coreOnly, ct);
         return Ok(result);
     }
 

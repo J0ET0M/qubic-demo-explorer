@@ -80,6 +80,7 @@ export const useApi = () => {
     executed?: boolean
     inputType?: number
     toAddress?: string
+    coreOnly?: boolean
   }) => {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) })
     if (options?.address) params.set('address', options.address)
@@ -88,6 +89,7 @@ export const useApi = () => {
     if (options?.executed !== undefined) params.set('executed', String(options.executed))
     if (options?.inputType !== undefined) params.set('inputType', String(options.inputType))
     if (options?.toAddress) params.set('toAddress', options.toAddress)
+    if (options?.coreOnly) params.set('coreOnly', 'true')
     return fetchApi<PaginatedResponse<TransactionDto>>(`/api/transactions?${params}`)
   }
 

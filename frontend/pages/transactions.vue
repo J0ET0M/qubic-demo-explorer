@@ -102,6 +102,7 @@ const filterOptions = computed(() => {
     executed?: boolean
     inputType?: number
     toAddress?: string
+    coreOnly?: boolean
   } = {}
   if (address.value) opts.address = address.value
   if (direction.value === 'from' || direction.value === 'to') opts.direction = direction.value
@@ -109,6 +110,7 @@ const filterOptions = computed(() => {
   if (executed.value !== undefined) opts.executed = executed.value
   if (inputType.value !== undefined) opts.inputType = inputType.value
   if (selectedContractAddress.value) opts.toAddress = selectedContractAddress.value
+  else opts.coreOnly = true
   return opts
 })
 
