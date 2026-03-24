@@ -514,4 +514,21 @@ public class StatsController : ControllerBase
         if (result == null) return NotFound("No computor revenue data available for this epoch");
         return Ok(result);
     }
+
+    /// <summary>
+    /// Simulate computor revenue with custom tick cutoffs per score category.
+    /// Recalculates revenue on-the-fly using data up to the specified tick for each category.
+    /// </summary>
+    [HttpGet("computor-revenue/{epoch:int}/simulate")]
+    public async Task<IActionResult> SimulateComputorRevenue(
+        uint epoch,
+        [FromQuery] ulong? txTick = null,
+        [FromQuery] ulong? voteTick = null,
+        [FromQuery] ulong? miningTick = null,
+        CancellationToken ct = default)
+    {
+        var result = await _queryService.SimulateComputorRevenueAsync(epoch, txTick, voteTick, miningTick, ct);
+        if (result == null) return NotFound("Could not calculate revenue — computor list unavailable for this epoch");
+        return Ok(result);
+    }
 }

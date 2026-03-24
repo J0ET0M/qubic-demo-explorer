@@ -1213,6 +1213,39 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ComputorRevenueDto' }
 
+  /api/stats/computor-revenue/{epoch}/simulate:
+    get:
+      tags: [Stats]
+      summary: Simulate computor revenue with custom tick cutoffs
+      description: >
+        Recalculates revenue on-the-fly using data up to the specified tick for each score category.
+        Omitted tick parameters default to the latest network tick.
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: txTick
+          in: query
+          schema: { type: integer, format: uint64 }
+          description: Calculate TX scores using ticks up to this tick number
+        - name: voteTick
+          in: query
+          schema: { type: integer, format: uint64 }
+          description: Calculate vote scores using transactions up to this tick number
+        - name: miningTick
+          in: query
+          schema: { type: integer, format: uint64 }
+          description: Calculate mining scores using transactions up to this tick number
+      responses:
+        '200':
+          description: Simulated revenue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ComputorRevenueSimulationDto' }
+        '404':
+          description: Computor list unavailable for this epoch
+
   /api/stats/qearn/backfill:
     post:
       tags: [Stats, Admin]
@@ -2489,6 +2522,39 @@ components:
         voteFactor: { type: integer, format: uint64 }
         miningFactor: { type: integer, format: uint64 }
         revenue: { type: integer, format: int64 }
+
+    ComputorRevenueSimulationDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        computorCount: { type: integer }
+        issuanceRate: { type: integer, format: int64 }
+        tickHeights: { $ref: '#/components/schemas/RevenueTickHeightsDto' }
+        txQuorumScore: { type: integer, format: uint64 }
+        voteQuorumScore: { type: integer, format: uint64 }
+        miningQuorumScore: { type: integer, format: uint64 }
+        overview: { $ref: '#/components/schemas/RevenueOverviewDto' }
+        totalComputorRevenue: { type: integer, format: int64 }
+        arbRevenue: { type: integer, format: int64 }
+        computors:
+          type: array
+          items: { $ref: '#/components/schemas/ComputorRevenueEntryDto' }
+
+    RevenueTickHeightsDto:
+      type: object
+      properties:
+        networkTick: { type: integer, format: uint64 }
+        txTick: { type: integer, format: uint64 }
+        voteTick: { type: integer, format: uint64 }
+        miningTick: { type: integer, format: uint64 }
+
+    RevenueOverviewDto:
+      type: object
+      properties:
+        minimum: { type: integer, format: int64 }
+        maximum: { type: integer, format: int64 }
+        average: { type: integer, format: int64 }
+        averagePercent: { type: number }
 
     # ── Miner Flow ──────────────────────────────────────────────────────────
     ComputorListDto:

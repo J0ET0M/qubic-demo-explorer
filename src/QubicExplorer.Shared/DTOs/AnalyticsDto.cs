@@ -851,3 +851,38 @@ public record ComputorRevenueDto(
     long ArbRevenue,
     ComputorRevenueEntryDto[] Computors
 );
+
+public record ComputorRevenueSimulationRequest(
+    uint Epoch,
+    ulong? TxTick = null,
+    ulong? VoteTick = null,
+    ulong? MiningTick = null
+);
+
+public record RevenueTickHeightsDto(
+    ulong NetworkTick,
+    ulong TxTick,
+    ulong VoteTick,
+    ulong MiningTick
+);
+
+public record RevenueOverviewDto(
+    long Minimum,
+    long Maximum,
+    long Average,
+    double AveragePercent
+);
+
+public record ComputorRevenueSimulationDto(
+    uint Epoch,
+    int ComputorCount,
+    long IssuanceRate,
+    RevenueTickHeightsDto TickHeights,
+    ulong TxQuorumScore,
+    ulong VoteQuorumScore,
+    ulong MiningQuorumScore,
+    RevenueOverviewDto Overview,
+    long TotalComputorRevenue,
+    long ArbRevenue,
+    ComputorRevenueEntryDto[] Computors
+);

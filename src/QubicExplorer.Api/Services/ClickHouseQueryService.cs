@@ -5396,6 +5396,222 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
+    /// Calculate computor revenue on-the-fly with custom tick cutoffs per score category.
+    /// Replicates the C++ revenue.h algorithm but allows specifying different tick heights
+    /// for TX, vote, and mining score calculations.
+    /// </summary>
+    public async Task<ComputorRevenueSimulationDto?> SimulateComputorRevenueAsync(
+        uint epoch, ulong? txTick, ulong? voteTick, ulong? miningTick, CancellationToken ct = default)
+    {
+        // Get computor addresses
+        var computorList = await GetComputorsAsync(epoch, ct);
+        if (computorList == null || computorList.Count != QubicConstants.NumberOfComputors)
+            return null;
+
+        var addresses = computorList.Computors.Select(c => c.Address).ToList();
+
+        // Get latest tick for epoch as the "network" tick
+        await using var latestCmd = _connection.CreateCommand();
+        latestCmd.CommandText = "SELECT max(tick_number) FROM ticks WHERE epoch = {epoch:UInt32}";
+        AddParam(latestCmd, "epoch", epoch);
+        var latestTickObj = await latestCmd.ExecuteScalarAsync(ct);
+        var networkTick = latestTickObj != null && latestTickObj != DBNull.Value
+            ? Convert.ToUInt64(latestTickObj) : 0UL;
+
+        // Use provided ticks or fall back to network tick
+        var effectiveTxTick = txTick ?? networkTick;
+        var effectiveVoteTick = voteTick ?? networkTick;
+        var effectiveMiningTick = miningTick ?? networkTick;
+
+        // Calculate scores with tick cutoffs
+        var txScores = await CalculateTxScoresUpToTickAsync(epoch, effectiveTxTick, ct);
+        var voteScores = await CalculatePackedScoresUpToTickAsync(epoch, CoreTransactionInputTypes.VoteCounter, effectiveVoteTick, ct);
+        var miningScores = await CalculatePackedScoresUpToTickAsync(epoch, CoreTransactionInputTypes.CustomMiningShareCounter, effectiveMiningTick, ct);
+
+        // Compute quorum scores (450th highest)
+        var txQuorum = RevenueGetQuorumScore(txScores);
+        var voteQuorum = RevenueGetQuorumScore(voteScores);
+        var miningQuorum = RevenueGetQuorumScore(miningScores);
+
+        // Compute factors
+        var txFactors = RevenueComputeFactors(txScores, txQuorum);
+        var voteFactors = RevenueComputeFactors(voteScores, voteQuorum);
+        var miningFactors = RevenueComputeFactors(miningScores, miningQuorum);
+
+        // Compute per-computor revenue
+        const ulong scalingThreshold = (ulong)QubicConstants.RevenueScalingThreshold;
+        var revenues = new long[QubicConstants.NumberOfComputors];
+        long totalRevenue = 0;
+        for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
+        {
+            ulong combined = txFactors[i] * voteFactors[i] * miningFactors[i];
+            revenues[i] = (long)(combined * (ulong)QubicConstants.IssuancePerComputor
+                / scalingThreshold / scalingThreshold / scalingThreshold);
+            totalRevenue += revenues[i];
+        }
+
+        // Build entries
+        var entries = new ComputorRevenueEntryDto[QubicConstants.NumberOfComputors];
+        long minRevenue = long.MaxValue, maxRevenue = long.MinValue;
+        int activeCount = 0;
+        for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
+        {
+            var address = addresses[i];
+            entries[i] = new ComputorRevenueEntryDto(
+                ComputorIndex: (ushort)i,
+                Address: address,
+                Label: _labelService.GetLabel(address),
+                TxScore: txScores[i],
+                VoteScore: voteScores[i],
+                MiningScore: miningScores[i],
+                TxFactor: txFactors[i],
+                VoteFactor: voteFactors[i],
+                MiningFactor: miningFactors[i],
+                Revenue: revenues[i]
+            );
+            if (revenues[i] > 0)
+            {
+                activeCount++;
+                if (revenues[i] < minRevenue) minRevenue = revenues[i];
+                if (revenues[i] > maxRevenue) maxRevenue = revenues[i];
+            }
+        }
+
+        if (activeCount == 0)
+        {
+            minRevenue = 0;
+            maxRevenue = 0;
+        }
+
+        var avgRevenue = activeCount > 0 ? totalRevenue / activeCount : 0L;
+        var avgPercent = QubicConstants.IssuancePerComputor > 0
+            ? (double)avgRevenue / QubicConstants.IssuancePerComputor * 100.0 : 0.0;
+
+        return new ComputorRevenueSimulationDto(
+            Epoch: epoch,
+            ComputorCount: QubicConstants.NumberOfComputors,
+            IssuanceRate: QubicConstants.IssuanceRate,
+            TickHeights: new RevenueTickHeightsDto(networkTick, effectiveTxTick, effectiveVoteTick, effectiveMiningTick),
+            TxQuorumScore: txQuorum,
+            VoteQuorumScore: voteQuorum,
+            MiningQuorumScore: miningQuorum,
+            Overview: new RevenueOverviewDto(minRevenue, maxRevenue, avgRevenue, Math.Round(avgPercent, 2)),
+            TotalComputorRevenue: totalRevenue,
+            ArbRevenue: QubicConstants.IssuanceRate - totalRevenue,
+            Computors: entries
+        );
+    }
+
+    private async Task<ulong[]> CalculateTxScoresUpToTickAsync(uint epoch, ulong maxTick, CancellationToken ct)
+    {
+        var scores = new ulong[QubicConstants.NumberOfComputors];
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT tick_number, tx_count FROM ticks
+            WHERE epoch = {epoch:UInt32} AND is_empty = 0 AND tx_count > 0
+              AND tick_number <= {maxTick:UInt64}";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "maxTick", maxTick);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var tickNumber = reader.GetFieldValue<ulong>(0);
+            var txCount = reader.GetFieldValue<uint>(1);
+            var computorIdx = (int)(tickNumber % QubicConstants.NumberOfComputors);
+            var pointIdx = Math.Min(txCount, 1024);
+            scores[computorIdx] += QubicConstants.TxRevenuePoints[(int)pointIdx];
+        }
+        return scores;
+    }
+
+    private async Task<ulong[]> CalculatePackedScoresUpToTickAsync(
+        uint epoch, ushort inputType, ulong maxTick, CancellationToken ct)
+    {
+        var scores = new ulong[QubicConstants.NumberOfComputors];
+        var burnAddress = AddressLabelService.BurnAddress;
+        var minHexLen = CoreTransactionInputTypes.PackedComputorDataSize * 2;
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT input_data FROM transactions
+            WHERE epoch = {{epoch:UInt32}}
+              AND input_type = {{inputType:UInt16}}
+              AND amount = 0
+              AND to_address = {{burnAddr:String}}
+              AND length(input_data) >= {minHexLen}
+              AND tick_number <= {{maxTick:UInt64}}";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "inputType", inputType);
+        AddParam(cmd, "burnAddr", burnAddress);
+        AddParam(cmd, "maxTick", maxTick);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var inputDataHex = reader.GetString(0);
+            if (string.IsNullOrEmpty(inputDataHex)) continue;
+
+            var hex = inputDataHex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                ? inputDataHex[2..] : inputDataHex;
+            if (hex.Length < minHexLen) continue;
+
+            byte[] data;
+            try { data = Convert.FromHexString(hex[..minHexLen]); }
+            catch (FormatException) { continue; }
+
+            for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
+                scores[i] += RevenueExtract10Bit(data, i);
+        }
+        return scores;
+    }
+
+    private static uint RevenueExtract10Bit(byte[] data, int idx)
+    {
+        int byteOffset = idx + (idx >> 2);
+        if (byteOffset + 1 >= data.Length) return 0;
+        uint byte0 = data[byteOffset];
+        uint byte1 = data[byteOffset + 1];
+        int lastBit0 = 8 - (idx & 3) * 2;
+        int firstBit1 = 10 - lastBit0;
+        uint res = (byte0 & (uint)((1 << lastBit0) - 1)) << firstBit1;
+        res |= byte1 >> (8 - firstBit1);
+        return res;
+    }
+
+    private static ulong RevenueGetQuorumScore(ulong[] scores)
+    {
+        var sorted = new ulong[QubicConstants.Quorum + 1];
+        for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
+        {
+            sorted[QubicConstants.Quorum] = scores[i];
+            int j = QubicConstants.Quorum;
+            while (j > 0 && sorted[j - 1] < sorted[j])
+            {
+                (sorted[j - 1], sorted[j]) = (sorted[j], sorted[j - 1]);
+                j--;
+            }
+        }
+        return sorted[QubicConstants.Quorum - 1] == 0 ? 1 : sorted[QubicConstants.Quorum - 1];
+    }
+
+    private static ulong[] RevenueComputeFactors(ulong[] scores, ulong quorumScore)
+    {
+        const ulong threshold = (ulong)QubicConstants.RevenueScalingThreshold;
+        var factors = new ulong[QubicConstants.NumberOfComputors];
+        for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
+        {
+            if (scores[i] == 0)
+                factors[i] = 0;
+            else if (scores[i] >= quorumScore)
+                factors[i] = threshold;
+            else
+                factors[i] = threshold * scores[i] / quorumScore;
+        }
+        return factors;
+    }
+
+    /// <summary>
     /// Helper to safely convert to double, handling NaN/Infinity from empty aggregates
     /// </summary>
     private static double ToSafeDouble(object value)
