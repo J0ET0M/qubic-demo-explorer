@@ -5395,6 +5395,22 @@ public class ClickHouseQueryService : IDisposable
         );
     }
 
+    public async Task<List<ulong>> GetEmptyTickListAsync(uint epoch, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT tick_number FROM ticks
+            WHERE epoch = {epoch:UInt32} AND is_empty = 1
+            ORDER BY tick_number";
+        AddParam(cmd, "epoch", epoch);
+
+        var ticks = new List<ulong>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            ticks.Add(reader.GetFieldValue<ulong>(0));
+        return ticks;
+    }
+
     /// <summary>
     /// Calculate computor revenue on-the-fly with custom tick cutoffs per score category.
     /// Replicates the C++ revenue.h algorithm but allows specifying different tick heights

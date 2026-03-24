@@ -128,6 +128,15 @@ public class EpochController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("{epoch}/empty-tick-list")]
+    public async Task<IActionResult> GetEmptyTickList(
+        uint epoch,
+        CancellationToken ct = default)
+    {
+        var result = await _queryService.GetEmptyTickListAsync(epoch, ct);
+        return Ok(result);
+    }
+
     [HttpGet("meta/current")]
     public async Task<IActionResult> GetCurrentEpochMeta(CancellationToken ct = default)
     {
