@@ -59,9 +59,12 @@ const coreInputTypeOptions = [
   { value: 10, label: 'Oracle User Query' },
 ]
 
+// Whether "Core" is selected in the contract dropdown
+const isCoreFilter = computed(() => contractFilter.value === 'core')
+
 // Dynamic input type options: show contract procedures when a contract is selected
 const inputTypeOptions = computed(() => {
-  if (!contractFilter.value) return coreInputTypeOptions
+  if (!contractFilter.value || isCoreFilter.value) return coreInputTypeOptions
   const contract = contracts.value.find(c => c.address === contractFilter.value)
   if (!contract) return [{ value: undefined as number | undefined, label: 'All' }]
   const schema = getContractSchema(contract.index)
@@ -74,7 +77,9 @@ const inputTypeOptions = computed(() => {
 })
 
 // Get the selected contract's address for the API
-const selectedContractAddress = computed(() => contractFilter.value || undefined)
+const selectedContractAddress = computed(() =>
+  contractFilter.value && !isCoreFilter.value ? contractFilter.value : undefined
+)
 
 // Get label for input type pill
 const inputTypeLabel = computed(() => {
@@ -110,7 +115,7 @@ const filterOptions = computed(() => {
   if (executed.value !== undefined) opts.executed = executed.value
   if (inputType.value !== undefined) opts.inputType = inputType.value
   if (selectedContractAddress.value) opts.toAddress = selectedContractAddress.value
-  else opts.coreOnly = true
+  if (isCoreFilter.value) opts.coreOnly = true
   return opts
 })
 
@@ -289,7 +294,8 @@ const toggleExecutedFilter = (value: boolean | undefined) => {
           <div>
             <label class="block text-sm font-medium mb-1">Smart Contract</label>
             <select v-model="contractFilter" class="input w-full" @change="onContractChange">
-              <option value="">All Core</option>
+              <option value="">All</option>
+              <option value="core">Core</option>
               <option v-for="c in contracts" :key="c.address" :value="c.address">
                 {{ c.name }}
               </option>

@@ -61,9 +61,12 @@ const coreInputTypeOptions = [
   { value: 10, label: 'Oracle User Query' },
 ]
 
+// Whether "Core" is selected in the contract dropdown
+const isCoreFilter = computed(() => txContractFilter.value === 'core')
+
 // Dynamic input type options: show contract procedures when a contract is selected
 const txInputTypeOptions = computed(() => {
-  if (!txContractFilter.value) return coreInputTypeOptions
+  if (!txContractFilter.value || isCoreFilter.value) return coreInputTypeOptions
   const contract = contracts.value.find(c => c.address === txContractFilter.value)
   if (!contract) return [{ value: undefined as number | undefined, label: 'All' }]
   const schema = getContractSchema(contract.index)
@@ -76,7 +79,9 @@ const txInputTypeOptions = computed(() => {
 })
 
 // Get the selected contract's address for the API
-const selectedContractAddress = computed(() => txContractFilter.value || undefined)
+const selectedContractAddress = computed(() =>
+  txContractFilter.value && !isCoreFilter.value ? txContractFilter.value : undefined
+)
 
 // Get label for input type pill
 const txInputTypeLabel = computed(() => {
@@ -111,7 +116,7 @@ const txFilterOptions = computed(() => {
   if (txExecuted.value !== undefined) opts.executed = txExecuted.value
   if (txInputType.value !== undefined) opts.inputType = txInputType.value
   if (selectedContractAddress.value) opts.toAddress = selectedContractAddress.value
-  else opts.coreOnly = true
+  if (isCoreFilter.value) opts.coreOnly = true
   return opts
 })
 
@@ -353,7 +358,8 @@ const toggleTxExecutedFilter = (value: boolean | undefined) => {
               <div>
                 <label class="block text-xs font-medium mb-1">Smart Contract</label>
                 <select v-model="txContractFilter" class="input input-sm w-full" @change="onContractChange">
-                  <option value="">All Core</option>
+                  <option value="">All</option>
+                  <option value="core">Core</option>
                   <option v-for="c in contracts" :key="c.address" :value="c.address">
                     {{ c.name }}
                   </option>
