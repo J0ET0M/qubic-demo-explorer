@@ -878,9 +878,11 @@ public record RevenueCalculationStatsDto(
     int VotePacketsProcessed,
     int VotePacketsSkippedSize,
     int VotePacketsSkippedDuplicate,
+    int VotePacketsSkippedValidation,
     int MiningPacketsProcessed,
     int MiningPacketsSkippedSize,
-    int MiningPacketsSkippedDuplicate
+    int MiningPacketsSkippedDuplicate,
+    int MiningPacketsSkippedValidation
 );
 
 public record ComputorRevenueSimulationDto(

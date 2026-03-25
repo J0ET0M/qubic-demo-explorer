@@ -180,14 +180,24 @@ public class ComputorRevenueService : IDisposable
     /// </summary>
     private async Task<ulong[]> CalculatePackedScoresAsync(uint epoch, ushort inputType, CancellationToken ct)
     {
+        // Build computor address → index lookup for validation
+        var computorsResult = await _bobProxy.GetComputorsAsync(epoch, ct);
+        var computorIndexByAddress = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (computorsResult?.Computors != null)
+        {
+            for (int i = 0; i < computorsResult.Computors.Count; i++)
+                computorIndexByAddress[computorsResult.Computors[i]] = i;
+        }
+
+        var isVoteCounter = inputType == CoreTransactionInputTypes.VoteCounter;
         var scores = new ulong[QubicConstants.NumberOfComputors];
         var burnAddress = AddressLabelService.BurnAddress;
-        var exactHexLen = CoreTransactionInputTypes.PackedComputorInputSize * 2; // 880 * 2 = 1760
-        var dataHexLen = CoreTransactionInputTypes.PackedComputorDataSize * 2;   // 848 * 2 = 1696
+        var exactHexLen = CoreTransactionInputTypes.PackedComputorInputSize * 2;
+        var dataHexLen = CoreTransactionInputTypes.PackedComputorDataSize * 2;
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            SELECT tick_number, input_data FROM transactions
+            SELECT tick_number, from_address, input_data FROM transactions
             WHERE epoch = {epoch}
               AND input_type = {inputType}
               AND amount = 0
@@ -195,32 +205,39 @@ public class ComputorRevenueService : IDisposable
             ORDER BY tick_number, hash";
 
         var seenTicks = new HashSet<ulong>();
-        int processed = 0, skippedSize = 0, skippedDuplicate = 0;
+        int processed = 0, skippedSize = 0, skippedDuplicate = 0, skippedValidation = 0;
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
             var tickNumber = reader.GetFieldValue<ulong>(0);
 
-            // Only one packet per tick
             if (!seenTicks.Add(tickNumber))
             {
                 skippedDuplicate++;
                 continue;
             }
 
-            var inputDataHex = reader.GetString(1);
+            var fromAddress = reader.GetString(1);
+            var inputDataHex = reader.GetString(2);
             if (string.IsNullOrEmpty(inputDataHex)) { skippedSize++; continue; }
 
             var hex = inputDataHex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
                 ? inputDataHex[2..] : inputDataHex;
 
-            // Require exact size
             if (hex.Length != exactHexLen) { skippedSize++; continue; }
 
             byte[] data;
             try { data = Convert.FromHexString(hex[..dataHexLen]); }
             catch (FormatException) { skippedSize++; continue; }
+
+            // Validate packet
+            var computorIdx = computorIndexByAddress.GetValueOrDefault(fromAddress, -1);
+            if (!ValidatePackedPacket(data, computorIdx, isVoteCounter))
+            {
+                skippedValidation++;
+                continue;
+            }
 
             for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
                 scores[i] += Extract10Bit(data, i);
@@ -229,9 +246,43 @@ public class ComputorRevenueService : IDisposable
         }
 
         _logger.LogDebug(
-            "Parsed input_type={Type} for epoch {Epoch}: {Processed} processed, {SkippedSize} skipped (size), {SkippedDup} skipped (duplicate)",
-            inputType, epoch, processed, skippedSize, skippedDuplicate);
+            "Parsed input_type={Type} for epoch {Epoch}: {Processed} processed, {SkippedSize} skipped (size), {SkippedDup} skipped (dup), {SkippedVal} skipped (validation)",
+            inputType, epoch, processed, skippedSize, skippedDuplicate, skippedValidation);
         return scores;
+    }
+
+    private static bool ValidatePackedPacket(byte[] data, int computorIdx, bool isVoteCounter)
+    {
+        if (isVoteCounter)
+        {
+            ulong sum = 0;
+            var values = new uint[QubicConstants.NumberOfComputors];
+            for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
+            {
+                values[i] = Extract10Bit(data, i);
+                sum += values[i];
+            }
+
+            // Sum of all votes must be >= (676 - 1) * 451 = 304,425
+            if (sum < (ulong)(QubicConstants.NumberOfComputors - 1) * (ulong)QubicConstants.Quorum)
+                return false;
+
+            // Own vote count must be zero
+            if (computorIdx >= 0 && computorIdx < QubicConstants.NumberOfComputors && values[computorIdx] != 0)
+                return false;
+        }
+        else
+        {
+            // Mining packets: own count must be zero
+            if (computorIdx >= 0 && computorIdx < QubicConstants.NumberOfComputors)
+            {
+                var ownValue = Extract10Bit(data, computorIdx);
+                if (ownValue != 0)
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
