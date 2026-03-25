@@ -5440,9 +5440,13 @@ public class ClickHouseQueryService : IDisposable
         var effectiveMiningTick = miningTick ?? networkTick;
 
         // Calculate scores with tick cutoffs
-        var txScores = await CalculateTxScoresUpToTickAsync(epoch, effectiveTxTick, ct);
-        var voteScores = await CalculatePackedScoresUpToTickAsync(epoch, CoreTransactionInputTypes.VoteCounter, effectiveVoteTick, ct);
-        var miningScores = await CalculatePackedScoresUpToTickAsync(epoch, CoreTransactionInputTypes.CustomMiningShareCounter, effectiveMiningTick, ct);
+        var txResult = await CalculateTxScoresUpToTickAsync(epoch, effectiveTxTick, ct);
+        var voteResult = await CalculatePackedScoresUpToTickAsync(epoch, CoreTransactionInputTypes.VoteCounter, effectiveVoteTick, ct);
+        var miningResult = await CalculatePackedScoresUpToTickAsync(epoch, CoreTransactionInputTypes.CustomMiningShareCounter, effectiveMiningTick, ct);
+
+        var txScores = txResult.Scores;
+        var voteScores = voteResult.Scores;
+        var miningScores = miningResult.Scores;
 
         // Compute quorum scores (450th highest)
         var txQuorum = RevenueGetQuorumScore(txScores);
@@ -5503,6 +5507,16 @@ public class ClickHouseQueryService : IDisposable
         var avgPercent = QubicConstants.IssuancePerComputor > 0
             ? (double)avgRevenue / QubicConstants.IssuancePerComputor * 100.0 : 0.0;
 
+        var calcStats = new RevenueCalculationStatsDto(
+            TxTicksProcessed: txResult.TicksProcessed,
+            VotePacketsProcessed: voteResult.Processed,
+            VotePacketsSkippedSize: voteResult.SkippedSize,
+            VotePacketsSkippedDuplicate: voteResult.SkippedDuplicate,
+            MiningPacketsProcessed: miningResult.Processed,
+            MiningPacketsSkippedSize: miningResult.SkippedSize,
+            MiningPacketsSkippedDuplicate: miningResult.SkippedDuplicate
+        );
+
         return new ComputorRevenueSimulationDto(
             Epoch: epoch,
             ComputorCount: QubicConstants.NumberOfComputors,
@@ -5512,15 +5526,19 @@ public class ClickHouseQueryService : IDisposable
             VoteQuorumScore: voteQuorum,
             MiningQuorumScore: miningQuorum,
             Overview: new RevenueOverviewDto(minRevenue, maxRevenue, avgRevenue, Math.Round(avgPercent, 2)),
+            CalculationStats: calcStats,
             TotalComputorRevenue: totalRevenue,
             ArbRevenue: QubicConstants.IssuanceRate - totalRevenue,
             Computors: entries
         );
     }
 
-    private async Task<ulong[]> CalculateTxScoresUpToTickAsync(uint epoch, ulong maxTick, CancellationToken ct)
+    private record TxScoreResult(ulong[] Scores, int TicksProcessed);
+
+    private async Task<TxScoreResult> CalculateTxScoresUpToTickAsync(uint epoch, ulong maxTick, CancellationToken ct)
     {
         var scores = new ulong[QubicConstants.NumberOfComputors];
+        int ticksProcessed = 0;
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
             SELECT tick_number, tx_count FROM ticks
@@ -5537,49 +5555,74 @@ public class ClickHouseQueryService : IDisposable
             var computorIdx = (int)(tickNumber % QubicConstants.NumberOfComputors);
             var pointIdx = Math.Min(txCount, 1024);
             scores[computorIdx] += QubicConstants.TxRevenuePoints[(int)pointIdx];
+            ticksProcessed++;
         }
-        return scores;
+        return new TxScoreResult(scores, ticksProcessed);
     }
 
-    private async Task<ulong[]> CalculatePackedScoresUpToTickAsync(
+    private record PackedScoreResult(ulong[] Scores, int Processed, int SkippedSize, int SkippedDuplicate);
+
+    private async Task<PackedScoreResult> CalculatePackedScoresUpToTickAsync(
         uint epoch, ushort inputType, ulong maxTick, CancellationToken ct)
     {
         var scores = new ulong[QubicConstants.NumberOfComputors];
         var burnAddress = AddressLabelService.BurnAddress;
-        var minHexLen = CoreTransactionInputTypes.PackedComputorDataSize * 2;
+        // Exact hex length: 880 bytes × 2 = 1760 (with 0x prefix: 1762)
+        var exactInputSize = CoreTransactionInputTypes.PackedComputorInputSize;
+        var exactHexLen = exactInputSize * 2;
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            SELECT input_data FROM transactions
+            SELECT tick_number, input_data FROM transactions
             WHERE epoch = {{epoch:UInt32}}
               AND input_type = {{inputType:UInt16}}
               AND amount = 0
               AND to_address = {{burnAddr:String}}
-              AND length(input_data) >= {minHexLen}
-              AND tick_number <= {{maxTick:UInt64}}";
+              AND tick_number <= {{maxTick:UInt64}}
+            ORDER BY tick_number, hash";
         AddParam(cmd, "epoch", epoch);
         AddParam(cmd, "inputType", inputType);
         AddParam(cmd, "burnAddr", burnAddress);
         AddParam(cmd, "maxTick", maxTick);
 
+        var seenTicks = new HashSet<ulong>();
+        int processed = 0, skippedSize = 0, skippedDuplicate = 0;
+
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            var inputDataHex = reader.GetString(0);
-            if (string.IsNullOrEmpty(inputDataHex)) continue;
+            var tickNumber = reader.GetFieldValue<ulong>(0);
+
+            // Only one packet per tick
+            if (!seenTicks.Add(tickNumber))
+            {
+                skippedDuplicate++;
+                continue;
+            }
+
+            var inputDataHex = reader.GetString(1);
+            if (string.IsNullOrEmpty(inputDataHex)) { skippedSize++; continue; }
 
             var hex = inputDataHex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
                 ? inputDataHex[2..] : inputDataHex;
-            if (hex.Length < minHexLen) continue;
+
+            // Require exact size
+            if (hex.Length != exactHexLen)
+            {
+                skippedSize++;
+                continue;
+            }
 
             byte[] data;
-            try { data = Convert.FromHexString(hex[..minHexLen]); }
-            catch (FormatException) { continue; }
+            try { data = Convert.FromHexString(hex[..(CoreTransactionInputTypes.PackedComputorDataSize * 2)]); }
+            catch (FormatException) { skippedSize++; continue; }
 
             for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
                 scores[i] += RevenueExtract10Bit(data, i);
+
+            processed++;
         }
-        return scores;
+        return new PackedScoreResult(scores, processed, skippedSize, skippedDuplicate);
     }
 
     private static uint RevenueExtract10Bit(byte[] data, int idx)

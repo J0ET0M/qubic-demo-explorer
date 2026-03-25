@@ -182,50 +182,55 @@ public class ComputorRevenueService : IDisposable
     {
         var scores = new ulong[QubicConstants.NumberOfComputors];
         var burnAddress = AddressLabelService.BurnAddress;
-
-        // 848 bytes packed data × 2 for hex encoding
-        var minHexLen = CoreTransactionInputTypes.PackedComputorDataSize * 2;
+        var exactHexLen = CoreTransactionInputTypes.PackedComputorInputSize * 2; // 880 * 2 = 1760
+        var dataHexLen = CoreTransactionInputTypes.PackedComputorDataSize * 2;   // 848 * 2 = 1696
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            SELECT input_data FROM transactions
+            SELECT tick_number, input_data FROM transactions
             WHERE epoch = {epoch}
               AND input_type = {inputType}
               AND amount = 0
               AND to_address = '{burnAddress}'
-              AND length(input_data) >= {minHexLen}";
+            ORDER BY tick_number, hash";
+
+        var seenTicks = new HashSet<ulong>();
+        int processed = 0, skippedSize = 0, skippedDuplicate = 0;
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
-        int txCount = 0;
         while (await reader.ReadAsync(ct))
         {
-            var inputDataHex = reader.GetString(0);
-            if (string.IsNullOrEmpty(inputDataHex)) continue;
+            var tickNumber = reader.GetFieldValue<ulong>(0);
 
-            // Strip 0x prefix if present
-            var hex = inputDataHex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-                ? inputDataHex[2..] : inputDataHex;
-            if (hex.Length < minHexLen) continue;
-
-            byte[] data;
-            try
+            // Only one packet per tick
+            if (!seenTicks.Add(tickNumber))
             {
-                data = Convert.FromHexString(hex[..minHexLen]);
-            }
-            catch (FormatException)
-            {
+                skippedDuplicate++;
                 continue;
             }
 
+            var inputDataHex = reader.GetString(1);
+            if (string.IsNullOrEmpty(inputDataHex)) { skippedSize++; continue; }
+
+            var hex = inputDataHex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                ? inputDataHex[2..] : inputDataHex;
+
+            // Require exact size
+            if (hex.Length != exactHexLen) { skippedSize++; continue; }
+
+            byte[] data;
+            try { data = Convert.FromHexString(hex[..dataHexLen]); }
+            catch (FormatException) { skippedSize++; continue; }
+
             for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
-            {
-                var value = Extract10Bit(data, i);
-                scores[i] += value;
-            }
-            txCount++;
+                scores[i] += Extract10Bit(data, i);
+
+            processed++;
         }
 
-        _logger.LogDebug("Parsed {Count} input_type={Type} transactions for epoch {Epoch}", txCount, inputType, epoch);
+        _logger.LogDebug(
+            "Parsed input_type={Type} for epoch {Epoch}: {Processed} processed, {SkippedSize} skipped (size), {SkippedDup} skipped (duplicate)",
+            inputType, epoch, processed, skippedSize, skippedDuplicate);
         return scores;
     }
 

@@ -873,6 +873,16 @@ public record RevenueOverviewDto(
     double AveragePercent
 );
 
+public record RevenueCalculationStatsDto(
+    int TxTicksProcessed,
+    int VotePacketsProcessed,
+    int VotePacketsSkippedSize,
+    int VotePacketsSkippedDuplicate,
+    int MiningPacketsProcessed,
+    int MiningPacketsSkippedSize,
+    int MiningPacketsSkippedDuplicate
+);
+
 public record ComputorRevenueSimulationDto(
     uint Epoch,
     int ComputorCount,
@@ -882,6 +892,7 @@ public record ComputorRevenueSimulationDto(
     ulong VoteQuorumScore,
     ulong MiningQuorumScore,
     RevenueOverviewDto Overview,
+    RevenueCalculationStatsDto CalculationStats,
     long TotalComputorRevenue,
     long ArbRevenue,
     ComputorRevenueEntryDto[] Computors
