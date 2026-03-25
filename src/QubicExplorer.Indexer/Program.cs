@@ -27,6 +27,7 @@ builder.Services.Configure<IndexerOptions>(builder.Configuration.GetSection(Inde
 builder.Services.AddSingleton<BobConnectionService>();
 builder.Services.AddSingleton<ClickHouseWriterService>();
 builder.Services.AddHostedService<IndexerWorker>();
+builder.Services.AddHostedService<TickCrossCheckService>();
 
 var host = builder.Build();
 host.Run();
