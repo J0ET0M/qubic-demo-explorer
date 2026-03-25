@@ -5599,8 +5599,7 @@ public class ClickHouseQueryService : IDisposable
 
         var seenTicks = new HashSet<ulong>();
         int processed = 0, skippedSize = 0, skippedDuplicate = 0, skippedValidation = 0;
-        var failedExamples = new List<FailedPacketDto>();
-        const int maxFailedExamples = 20;
+        var allFailed = new List<FailedPacketDto>();
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -5641,8 +5640,7 @@ public class ClickHouseQueryService : IDisposable
             if (failReason != null)
             {
                 skippedValidation++;
-                if (failedExamples.Count < maxFailedExamples)
-                    failedExamples.Add(new FailedPacketDto(tickNumber, txHash, fromAddress, computorIdx, failReason));
+                allFailed.Add(new FailedPacketDto(tickNumber, txHash, fromAddress, computorIdx, failReason));
                 continue;
             }
 
@@ -5651,7 +5649,21 @@ public class ClickHouseQueryService : IDisposable
 
             processed++;
         }
+        // Pick up to 20 evenly spaced examples across the failed list
+        var failedExamples = EvenlySpacedSample(allFailed, 20);
         return new PackedScoreResult(scores, processed, skippedSize, skippedDuplicate, skippedValidation, failedExamples);
+    }
+
+    private static List<T> EvenlySpacedSample<T>(List<T> source, int maxCount)
+    {
+        if (source.Count <= maxCount) return source;
+        var result = new List<T>(maxCount);
+        for (int i = 0; i < maxCount; i++)
+        {
+            var idx = (int)((long)i * (source.Count - 1) / (maxCount - 1));
+            result.Add(source[idx]);
+        }
+        return result;
     }
 
     /// <summary>
