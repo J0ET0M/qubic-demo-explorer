@@ -873,16 +873,26 @@ public record RevenueOverviewDto(
     double AveragePercent
 );
 
+public record FailedPacketDto(
+    ulong TickNumber,
+    string TxHash,
+    string FromAddress,
+    int ComputorIndex,
+    string Reason
+);
+
 public record RevenueCalculationStatsDto(
     int TxTicksProcessed,
     int VotePacketsProcessed,
     int VotePacketsSkippedSize,
     int VotePacketsSkippedDuplicate,
     int VotePacketsSkippedValidation,
+    List<FailedPacketDto> VoteFailedExamples,
     int MiningPacketsProcessed,
     int MiningPacketsSkippedSize,
     int MiningPacketsSkippedDuplicate,
-    int MiningPacketsSkippedValidation
+    int MiningPacketsSkippedValidation,
+    List<FailedPacketDto> MiningFailedExamples
 );
 
 public record ComputorRevenueSimulationDto(

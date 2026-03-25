@@ -200,8 +200,8 @@ public class ComputorRevenueService : IDisposable
             SELECT tick_number, from_address, input_data FROM transactions
             WHERE epoch = {epoch}
               AND input_type = {inputType}
-              AND amount = 0
               AND to_address = '{burnAddress}'
+              AND executed = 1
             ORDER BY tick_number, hash";
 
         var seenTicks = new HashSet<ulong>();

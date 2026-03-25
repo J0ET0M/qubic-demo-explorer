@@ -5513,10 +5513,12 @@ public class ClickHouseQueryService : IDisposable
             VotePacketsSkippedSize: voteResult.SkippedSize,
             VotePacketsSkippedDuplicate: voteResult.SkippedDuplicate,
             VotePacketsSkippedValidation: voteResult.SkippedValidation,
+            VoteFailedExamples: voteResult.FailedExamples,
             MiningPacketsProcessed: miningResult.Processed,
             MiningPacketsSkippedSize: miningResult.SkippedSize,
             MiningPacketsSkippedDuplicate: miningResult.SkippedDuplicate,
-            MiningPacketsSkippedValidation: miningResult.SkippedValidation
+            MiningPacketsSkippedValidation: miningResult.SkippedValidation,
+            MiningFailedExamples: miningResult.FailedExamples
         );
 
         return new ComputorRevenueSimulationDto(
@@ -5562,7 +5564,7 @@ public class ClickHouseQueryService : IDisposable
         return new TxScoreResult(scores, ticksProcessed);
     }
 
-    private record PackedScoreResult(ulong[] Scores, int Processed, int SkippedSize, int SkippedDuplicate, int SkippedValidation);
+    private record PackedScoreResult(ulong[] Scores, int Processed, int SkippedSize, int SkippedDuplicate, int SkippedValidation, List<FailedPacketDto> FailedExamples);
 
     private async Task<PackedScoreResult> CalculatePackedScoresUpToTickAsync(
         uint epoch, ushort inputType, ulong maxTick, CancellationToken ct)
@@ -5583,11 +5585,11 @@ public class ClickHouseQueryService : IDisposable
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            SELECT tick_number, from_address, input_data FROM transactions
+            SELECT tick_number, from_address, input_data, hash FROM transactions
             WHERE epoch = {{epoch:UInt32}}
               AND input_type = {{inputType:UInt16}}
-              AND amount = 0
               AND to_address = {{burnAddr:String}}
+              AND executed = 1
               AND tick_number <= {{maxTick:UInt64}}
             ORDER BY tick_number, hash";
         AddParam(cmd, "epoch", epoch);
@@ -5597,6 +5599,8 @@ public class ClickHouseQueryService : IDisposable
 
         var seenTicks = new HashSet<ulong>();
         int processed = 0, skippedSize = 0, skippedDuplicate = 0, skippedValidation = 0;
+        var failedExamples = new List<FailedPacketDto>();
+        const int maxFailedExamples = 20;
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -5612,6 +5616,7 @@ public class ClickHouseQueryService : IDisposable
 
             var fromAddress = reader.GetString(1);
             var inputDataHex = reader.GetString(2);
+            var txHash = reader.GetString(3);
             if (string.IsNullOrEmpty(inputDataHex)) { skippedSize++; continue; }
 
             var hex = inputDataHex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
@@ -5632,9 +5637,12 @@ public class ClickHouseQueryService : IDisposable
             var computorIdx = computorIndexByAddress.GetValueOrDefault(fromAddress, -1);
 
             // Validate packet
-            if (!ValidatePackedPacket(data, computorIdx, isVoteCounter))
+            var failReason = GetPacketValidationFailure(data, computorIdx, isVoteCounter);
+            if (failReason != null)
             {
                 skippedValidation++;
+                if (failedExamples.Count < maxFailedExamples)
+                    failedExamples.Add(new FailedPacketDto(tickNumber, txHash, fromAddress, computorIdx, failReason));
                 continue;
             }
 
@@ -5643,16 +5651,13 @@ public class ClickHouseQueryService : IDisposable
 
             processed++;
         }
-        return new PackedScoreResult(scores, processed, skippedSize, skippedDuplicate, skippedValidation);
+        return new PackedScoreResult(scores, processed, skippedSize, skippedDuplicate, skippedValidation, failedExamples);
     }
 
     /// <summary>
-    /// Validate a vote/mining packet.
-    /// Vote packets: sum of all values must be >= (NUMBER_OF_COMPUTORS - 1) * QUORUM,
-    /// and the submitting computor's own value must be zero.
-    /// Mining packets: the submitting computor's own value must be zero.
+    /// Validate a vote/mining packet. Returns null if valid, or a reason string if invalid.
     /// </summary>
-    private static bool ValidatePackedPacket(byte[] data, int computorIdx, bool isVoteCounter)
+    private static string? GetPacketValidationFailure(byte[] data, int computorIdx, bool isVoteCounter)
     {
         if (isVoteCounter)
         {
@@ -5664,26 +5669,24 @@ public class ClickHouseQueryService : IDisposable
                 sum += values[i];
             }
 
-            // Check: sum of all votes must be >= (676 - 1) * 451 = 304,425
-            if (sum < (ulong)(QubicConstants.NumberOfComputors - 1) * (ulong)QubicConstants.Quorum)
-                return false;
+            var minSum = (ulong)(QubicConstants.NumberOfComputors - 1) * (ulong)QubicConstants.Quorum;
+            if (sum < minSum)
+                return $"sum={sum} < required={minSum}";
 
-            // Check: own vote count must be zero
             if (computorIdx >= 0 && computorIdx < QubicConstants.NumberOfComputors && values[computorIdx] != 0)
-                return false;
+                return $"self-vote={values[computorIdx]} (computor {computorIdx})";
         }
         else
         {
-            // Mining packets: own count must be zero
             if (computorIdx >= 0 && computorIdx < QubicConstants.NumberOfComputors)
             {
                 var ownValue = RevenueExtract10Bit(data, computorIdx);
                 if (ownValue != 0)
-                    return false;
+                    return $"self-score={ownValue} (computor {computorIdx})";
             }
         }
 
-        return true;
+        return null;
     }
 
     private static uint RevenueExtract10Bit(byte[] data, int idx)
