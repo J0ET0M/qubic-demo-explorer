@@ -273,8 +273,15 @@ public class TickCrossCheckService : BackgroundService
         {
             // 1. Get tick metadata
             var tickResp = await bob.GetTickByNumberAsync((uint)tickNumber, ct);
+            if (tickResp == null)
+            {
+                _logger.LogWarning("Tick {Tick}: Bob returned no data for GetTickByNumber", tickNumber);
+                return false;
+            }
             var epoch = (uint)tickResp.Epoch;
-            var timestamp = DateTimeOffset.FromUnixTimeSeconds(tickResp.Timestamp).UtcDateTime;
+            var timestamp = tickResp.Timestamp > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(tickResp.Timestamp).UtcDateTime
+                : DateTime.UtcNow;
 
             // 2. Get log ranges for this tick
             var logRanges = await bob.GetTickLogRangesAsync(new[] { (uint)tickNumber }, ct);
