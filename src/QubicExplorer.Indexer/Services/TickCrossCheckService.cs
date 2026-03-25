@@ -203,7 +203,7 @@ public class TickCrossCheckService : BackgroundService
 
     // ── Rules ────────────────────────────────────────────────────────────
 
-    private bool EvaluateRules(ulong tick, TickState state)
+    internal bool EvaluateRules(ulong tick, TickState state)
     {
         if (!state.Exists)
         {
@@ -339,8 +339,8 @@ public class TickCrossCheckService : BackgroundService
                 bobTransactions.Add(new BobTransaction
                 {
                     Hash = txResp.TransactionHash,
-                    From = txResp.SourceId,
-                    To = txResp.DestId,
+                    From = txResp.SourceAddress,
+                    To = txResp.DestAddress,
                     Amount = (ulong)txResp.AmountValue,
                     InputType = (ushort)txResp.InputType,
                     InputData = txResp.InputData,
@@ -443,5 +443,5 @@ public class TickCrossCheckService : BackgroundService
         return null;
     }
 
-    private record TickState(bool Exists, bool IsEmpty, long TxCount, long LogCount, long ExecutedTxCount);
+    internal record TickState(bool Exists, bool IsEmpty, long TxCount, long LogCount, long ExecutedTxCount);
 }
