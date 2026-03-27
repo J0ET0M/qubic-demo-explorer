@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Flame, History } from 'lucide-vue-next'
+import { Flame, History, TrendingDown } from 'lucide-vue-next'
 
 const api = useApi()
 
@@ -22,6 +22,36 @@ const fetchBurnStats = async () => {
 
 watch(() => timeRange.value, fetchBurnStats, { deep: true })
 await fetchBurnStats()
+
+// Per-epoch burn stats from supply delta
+const { data: epochBurnStats } = await useAsyncData(
+  'burn-by-epoch',
+  () => api.getBurnStatsByEpoch(100)
+)
+
+// Compute per-epoch burn (delta between consecutive epochs)
+const epochBurnDeltas = computed(() => {
+  if (!epochBurnStats.value?.length) return []
+  const sorted = [...epochBurnStats.value].sort((a, b) => a.epoch - b.epoch)
+  return sorted.map((curr, i) => ({
+    epoch: curr.epoch,
+    circulatingSupply: curr.circulatingSupply,
+    totalBurned: curr.totalBurned,
+    epochBurned: i > 0 ? curr.totalBurned - sorted[i - 1].totalBurned : 0
+  }))
+})
+
+const epochBurnChartLabels = computed(() =>
+  epochBurnDeltas.value.map(e => `E${e.epoch}`)
+)
+
+const epochBurnChartData = computed(() =>
+  epochBurnDeltas.value.map(e => e.epochBurned)
+)
+
+const totalBurnChartData = computed(() =>
+  epochBurnDeltas.value.map(e => e.totalBurned)
+)
 
 // Summary stats
 const allTimeBurned = computed(() => {
@@ -187,5 +217,100 @@ const formatVolume = (volume: number) => {
         No cumulative burn data available yet.
       </div>
     </div>
+
+    <!-- Per-Epoch Burn (from supply delta) -->
+    <template v-if="epochBurnDeltas.length > 0">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Burn per Epoch Chart -->
+        <div class="card">
+          <h2 class="section-title mb-4">
+            <Flame class="h-5 w-5 text-destructive" />
+            Burned per Epoch
+          </h2>
+          <ClientOnly>
+            <ChartsEpochBarChart
+              :labels="epochBurnChartLabels"
+              :datasets="[{
+                label: 'Burned (QU)',
+                data: epochBurnChartData,
+                backgroundColor: 'rgba(239, 68, 68, 0.8)'
+              }]"
+              :height="300"
+            />
+            <template #fallback>
+              <div class="h-[300px] flex items-center justify-center text-foreground-muted">
+                Loading chart...
+              </div>
+            </template>
+          </ClientOnly>
+          <p class="text-xs text-foreground-muted mt-2">
+            Per-epoch burn derived from circulating supply changes. Burned = (Epoch x 1T) - Circulating Supply.
+          </p>
+        </div>
+
+        <!-- Total Burned Over Time Chart -->
+        <div class="card">
+          <h2 class="section-title mb-4">
+            <TrendingDown class="h-5 w-5 text-destructive" />
+            Total Burned (All-Time)
+          </h2>
+          <ClientOnly>
+            <ChartsEpochLineChart
+              :labels="epochBurnChartLabels"
+              :datasets="[{
+                label: 'Total Burned',
+                data: totalBurnChartData,
+                borderColor: 'rgb(239, 68, 68)',
+                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                fill: true
+              }]"
+              :height="300"
+            />
+            <template #fallback>
+              <div class="h-[300px] flex items-center justify-center text-foreground-muted">
+                Loading chart...
+              </div>
+            </template>
+          </ClientOnly>
+          <p class="text-xs text-foreground-muted mt-2">
+            Cumulative total burned derived from spectrum supply snapshots.
+          </p>
+        </div>
+      </div>
+
+      <!-- Per-Epoch Burn Table -->
+      <div class="card">
+        <h2 class="section-title mb-4">
+          <Flame class="h-5 w-5 text-destructive" />
+          Burn by Epoch
+        </h2>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Epoch</th>
+                <th>Circulating Supply</th>
+                <th>Total Emitted</th>
+                <th>Total Burned</th>
+                <th>Epoch Burned</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in [...epochBurnDeltas].reverse()" :key="row.epoch">
+                <td>
+                  <NuxtLink :to="`/epochs/${row.epoch}`" class="text-accent font-semibold">
+                    {{ row.epoch }}
+                  </NuxtLink>
+                </td>
+                <td>{{ formatVolume(row.circulatingSupply) }}</td>
+                <td>{{ formatVolume(row.epoch * 1_000_000_000_000) }}</td>
+                <td class="text-destructive">{{ formatVolume(row.totalBurned) }}</td>
+                <td class="text-destructive font-semibold">{{ formatVolume(row.epochBurned) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
   </div>
 </template>

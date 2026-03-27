@@ -3207,6 +3207,35 @@ public class ClickHouseQueryService : IDisposable
     /// <summary>
     /// Get extended burn stats with current and historical data
     /// </summary>
+    public async Task<List<EpochBurnStatsDto>> GetBurnStatsByEpochAsync(
+        int limit = 50, CancellationToken ct = default)
+    {
+        // Get circulating supply per epoch from spectrum snapshots
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT epoch, total_balance
+            FROM spectrum_imports FINAL
+            ORDER BY epoch DESC
+            LIMIT {lim:UInt32}";
+        AddParam(cmd, "lim", (uint)limit);
+
+        const decimal issuancePerEpoch = QubicConstants.IssuanceRate; // 1 trillion
+
+        var items = new List<EpochBurnStatsDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var epoch = Convert.ToUInt32(reader.GetValue(0));
+            var circulatingSupply = ToDecimal(reader.GetValue(1));
+            var totalEmitted = epoch * issuancePerEpoch;
+            var totalBurned = totalEmitted - circulatingSupply;
+
+            items.Add(new EpochBurnStatsDto(epoch, circulatingSupply, totalEmitted, totalBurned));
+        }
+
+        return items;
+    }
+
     public async Task<BurnStatsExtendedDto> GetBurnStatsExtendedAsync(
         int historyLimit = 30, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {

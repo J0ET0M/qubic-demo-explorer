@@ -365,6 +365,18 @@ public record BurnStatsExtendedDto(
     ulong AllTimeTotalBurned
 );
 
+/// <summary>
+/// Per-epoch burn statistics derived from spectrum supply snapshots.
+/// TotalBurned = (Epoch × 1 trillion) - CirculatingSupply
+/// EpochBurned = TotalBurned[N] - TotalBurned[N-1]
+/// </summary>
+public record EpochBurnStatsDto(
+    uint Epoch,
+    decimal CirculatingSupply,
+    decimal TotalEmitted,
+    decimal TotalBurned
+);
+
 // =====================================================
 // EPOCH COUNTDOWN DTOs
 // =====================================================

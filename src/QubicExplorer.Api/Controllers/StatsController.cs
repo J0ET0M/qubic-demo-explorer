@@ -486,6 +486,21 @@ public class StatsController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("burn-stats/by-epoch")]
+    public async Task<IActionResult> GetBurnStatsByEpoch(
+        [FromQuery] int limit = 50,
+        CancellationToken ct = default)
+    {
+        if (limit < 1) limit = 1;
+        if (limit > 200) limit = 200;
+
+        var result = await _cache.GetOrSetAsync(
+            $"stats:burn-epoch:{limit}",
+            AnalyticsCacheService.SnapshotHistoryTtl,
+            () => _queryService.GetBurnStatsByEpochAsync(limit, ct));
+        return Ok(result);
+    }
+
     // =====================================================
     // COMPUTOR REVENUE
     // =====================================================

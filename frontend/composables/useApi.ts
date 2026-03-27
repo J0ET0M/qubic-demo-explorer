@@ -343,6 +343,9 @@ export const useApi = () => {
     return fetchApi<BurnStatsExtendedDto>(`/api/stats/burn-stats/extended?${params}`)
   }
 
+  const getBurnStatsByEpoch = (limit = 50) =>
+    fetchApi<EpochBurnStatsDto[]>(`/api/stats/burn-stats/by-epoch?limit=${limit}`)
+
   // Qearn stats
   const getQearnStats = () =>
     fetchApi<QearnStatsDto>('/api/stats/qearn')
@@ -458,6 +461,7 @@ export const useApi = () => {
     getNetworkStatsExtended,
     getBurnStatsHistory,
     getBurnStatsExtended,
+    getBurnStatsByEpoch,
     getQearnStats,
     getCcfStats,
     getComputorRevenue,
@@ -920,6 +924,13 @@ interface BurnStatsExtendedDto {
   current: BurnStatsHistoryDto | null
   history: BurnStatsHistoryDto[]
   allTimeTotalBurned: number
+}
+
+interface EpochBurnStatsDto {
+  epoch: number
+  circulatingSupply: number
+  totalEmitted: number
+  totalBurned: number
 }
 
 // Qearn stats

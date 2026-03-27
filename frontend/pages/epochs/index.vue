@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Calendar, BarChart3, TrendingUp, Users } from 'lucide-vue-next'
+import { Calendar, BarChart3, TrendingUp, Users, Flame } from 'lucide-vue-next'
 
 const api = useApi()
 
@@ -7,6 +7,26 @@ const { data: epochs, pending } = await useAsyncData(
   'epochs',
   () => api.getEpochs(100)
 )
+
+const { data: burnByEpoch } = await useAsyncData(
+  'burn-by-epoch',
+  () => api.getBurnStatsByEpoch(100)
+)
+
+// Build burn lookup by epoch and compute per-epoch burn (delta)
+const burnByEpochMap = computed(() => {
+  if (!burnByEpoch.value?.length) return new Map<number, { totalBurned: number; epochBurned: number }>()
+  const map = new Map<number, { totalBurned: number; epochBurned: number }>()
+  // Data comes newest-first, process in chronological order
+  const sorted = [...burnByEpoch.value].sort((a, b) => a.epoch - b.epoch)
+  for (let i = 0; i < sorted.length; i++) {
+    const curr = sorted[i]
+    const prev = i > 0 ? sorted[i - 1] : null
+    const epochBurned = prev ? curr.totalBurned - prev.totalBurned : 0
+    map.set(curr.epoch, { totalBurned: curr.totalBurned, epochBurned })
+  }
+  return map
+})
 
 // Prepare chart data from epochs (reversed to show oldest first)
 const chartLabels = computed(() => {
@@ -32,6 +52,11 @@ const activeAddressesData = computed(() => {
 const tickCountData = computed(() => {
   if (!epochs.value) return []
   return [...epochs.value].reverse().map(e => e.tickCount)
+})
+
+const epochBurnData = computed(() => {
+  if (!epochs.value) return []
+  return [...epochs.value].reverse().map(e => burnByEpochMap.value.get(e.epoch)?.epochBurned ?? 0)
 })
 
 const { formatVolume, formatDateShort: formatDate, formatEpochDuration } = useFormatting()
@@ -182,6 +207,30 @@ const avgActiveAddresses = computed(() => {
           </template>
         </ClientOnly>
       </div>
+
+      <!-- Burn per Epoch Chart -->
+      <div class="card" v-if="epochBurnData.some(v => v > 0)">
+        <h3 class="section-title mb-4">
+          <Flame class="h-5 w-5 text-destructive" />
+          Burned per Epoch (QU)
+        </h3>
+        <ClientOnly>
+          <ChartsEpochBarChart
+            :labels="chartLabels"
+            :datasets="[{
+              label: 'Burned',
+              data: epochBurnData,
+              backgroundColor: 'rgba(239, 68, 68, 0.8)'
+            }]"
+            :height="250"
+          />
+          <template #fallback>
+            <div class="h-[250px] flex items-center justify-center text-foreground-muted">
+              Loading chart...
+            </div>
+          </template>
+        </ClientOnly>
+      </div>
     </div>
 
     <!-- Epochs Table -->
@@ -202,6 +251,7 @@ const avgActiveAddresses = computed(() => {
                 <th>Ticks</th>
                 <th>Transactions</th>
                 <th>Volume (QU)</th>
+                <th>Burned (QU)</th>
                 <th class="hide-mobile">Active Addresses</th>
                 <th class="hide-mobile">Duration</th>
                 <th class="hide-mobile">Start</th>
@@ -217,6 +267,7 @@ const avgActiveAddresses = computed(() => {
                 <td>{{ epoch.tickCount.toLocaleString() }}</td>
                 <td>{{ epoch.txCount.toLocaleString() }}</td>
                 <td>{{ formatVolume(epoch.totalVolume) }}</td>
+                <td class="text-destructive">{{ formatVolume(burnByEpochMap.get(epoch.epoch)?.epochBurned ?? 0) }}</td>
                 <td class="hide-mobile">{{ epoch.activeAddresses.toLocaleString() }}</td>
                 <td class="hide-mobile">{{ formatEpochDuration(epoch.startTime, epoch.endTime) }}</td>
                 <td class="hide-mobile">{{ formatDate(epoch.startTime) }}</td>
