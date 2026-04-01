@@ -28,3 +28,23 @@ public record AddressActivityRangeDto(
     DateTime? LastTimestamp,
     uint? LastEpoch
 );
+
+public record AddressLedgerDto(
+    string Address,
+    uint Epoch,
+    long OpeningBalance,
+    long ClosingBalance,
+    List<LedgerEntryDto> Entries
+);
+
+public record LedgerEntryDto(
+    ulong TickNumber,
+    DateTime Timestamp,
+    string? TxHash,
+    byte LogType,
+    string LogTypeName,
+    string? CounterpartyAddress,
+    string Direction, // "in" or "out"
+    long Amount,
+    long RunningBalance
+);

@@ -166,6 +166,23 @@ public class AddressController : ControllerBase
         return new EmptyResult();
     }
 
+    [HttpGet("{address}/ledger")]
+    public async Task<IActionResult> GetAddressLedger(
+        string address,
+        [FromQuery] uint? epoch = null,
+        CancellationToken ct = default)
+    {
+        var targetEpoch = epoch ?? await _queryService.GetCurrentEpochAsync(ct) ?? 0;
+        if (targetEpoch == 0)
+            return NotFound("No epoch data available");
+
+        var result = await _cache.GetOrSetAsync(
+            $"address:ledger:{address}:{targetEpoch}",
+            AnalyticsCacheService.AddressSummaryTtl,
+            () => _queryService.GetAddressLedgerAsync(address, targetEpoch, ct));
+        return Ok(result);
+    }
+
     [HttpGet("{address}/flow")]
     public async Task<IActionResult> GetAddressFlow(
         string address,

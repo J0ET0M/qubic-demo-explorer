@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Wallet, Copy, Check, ArrowDownLeft, ArrowUpRight, Gift, GitBranch, Filter, X, QrCode, Clock, Download, Star, Network } from 'lucide-vue-next'
+import { Wallet, Copy, Check, ArrowDownLeft, ArrowUpRight, Gift, GitBranch, Filter, X, QrCode, Clock, Download, Star, Network, BookOpen } from 'lucide-vue-next'
 
 const api = useApi()
 const route = useRoute()
@@ -25,8 +25,8 @@ const togglePortfolio = () => {
 }
 
 // Initialize state from URL query params
-const activeTab = ref<'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph'>(
-  (route.query.tab as 'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph') || 'transactions'
+const activeTab = ref<'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph' | 'ledger'>(
+  (route.query.tab as 'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph' | 'ledger') || 'transactions'
 )
 const page = ref(Number(route.query.page) || 1)
 const minAmount = ref(route.query.minAmount ? Number(route.query.minAmount) : undefined)
@@ -159,6 +159,15 @@ const { data: graphData, pending: graphLoading, execute: fetchGraph } = await us
   { immediate: activeTab.value === 'graph' }
 )
 
+// Ledger data
+const ledgerEpoch = ref<number | undefined>(undefined)
+
+const { data: ledgerData, pending: ledgerLoading, execute: fetchLedger } = await useAsyncData(
+  () => `address-ledger-${address}-${ledgerEpoch.value}`,
+  () => api.getAddressLedger(address, ledgerEpoch.value),
+  { immediate: activeTab.value === 'ledger' }
+)
+
 // Lazy-load tab data on first visit
 watch(activeTab, (tab) => {
   if (loadedTabs.value.has(tab)) return
@@ -168,6 +177,7 @@ watch(activeTab, (tab) => {
   else if (tab === 'rewards') fetchRewards()
   else if (tab === 'flow') fetchFlow()
   else if (tab === 'graph') fetchGraph()
+  else if (tab === 'ledger') fetchLedger()
 })
 
 // Watch filter/pagination changes — only refetch the currently active tab
@@ -183,6 +193,9 @@ watch(rewardsPage, () => {
 watch(graphHops, () => {
   if (activeTab.value === 'graph' && loadedTabs.value.has('graph')) fetchGraph()
 })
+watch(ledgerEpoch, () => {
+  if (activeTab.value === 'ledger') fetchLedger()
+})
 
 const copyToClipboard = async (text: string) => {
   if (await doCopy(text)) {
@@ -191,7 +204,7 @@ const copyToClipboard = async (text: string) => {
   }
 }
 
-const switchTab = (tab: 'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph') => {
+const switchTab = (tab: 'transactions' | 'transfers' | 'rewards' | 'flow' | 'graph' | 'ledger') => {
   activeTab.value = tab
   page.value = 1
   rewardsPage.value = 1
@@ -377,6 +390,13 @@ const clearTxFilters = () => {
           >
             <Network class="h-4 w-4 inline mr-1" />
             Graph
+          </button>
+          <button
+            :class="{ active: activeTab === 'ledger' }"
+            @click="switchTab('ledger')"
+          >
+            <BookOpen class="h-4 w-4 inline mr-1" />
+            Ledger
           </button>
         </div>
         <button
@@ -630,6 +650,113 @@ const clearTxFilters = () => {
         </template>
         <div v-else class="text-center py-8 text-foreground-muted">
           No graph data available for this address.
+        </div>
+      </template>
+
+      <!-- Ledger tab -->
+      <template v-if="activeTab === 'ledger'">
+        <div class="flex items-center gap-3 mb-4">
+          <span class="text-xs text-foreground-muted">Epoch:</span>
+          <template v-if="ledgerData">
+            <button
+              v-if="ledgerData.epoch > 1"
+              class="px-2.5 py-1 text-xs rounded-md font-medium bg-surface-elevated text-foreground-muted hover:text-foreground"
+              @click="ledgerEpoch = ledgerData.epoch - 1"
+            >
+              &larr; {{ ledgerData.epoch - 1 }}
+            </button>
+            <span class="px-2.5 py-1 text-xs rounded-md font-semibold bg-accent text-white">
+              {{ ledgerData.epoch }}
+            </span>
+            <button
+              class="px-2.5 py-1 text-xs rounded-md font-medium bg-surface-elevated text-foreground-muted hover:text-foreground"
+              @click="ledgerEpoch = ledgerData.epoch + 1"
+            >
+              {{ ledgerData.epoch + 1 }} &rarr;
+            </button>
+          </template>
+        </div>
+
+        <div v-if="ledgerLoading" class="loading">Loading ledger...</div>
+        <template v-else-if="ledgerData">
+          <!-- Balance summary -->
+          <div class="grid grid-cols-3 gap-4 mb-4">
+            <div class="card-elevated text-center">
+              <div class="text-lg font-semibold">{{ formatAmount(ledgerData.openingBalance) }}</div>
+              <div class="text-xs text-foreground-muted uppercase mt-1">Opening Balance</div>
+            </div>
+            <div class="card-elevated text-center">
+              <div class="text-lg font-semibold" :class="ledgerData.closingBalance >= ledgerData.openingBalance ? 'text-success' : 'text-destructive'">
+                {{ formatAmount(ledgerData.closingBalance) }}
+              </div>
+              <div class="text-xs text-foreground-muted uppercase mt-1">Closing Balance</div>
+            </div>
+            <div class="card-elevated text-center">
+              <div class="text-lg font-semibold" :class="ledgerData.closingBalance - ledgerData.openingBalance >= 0 ? 'text-success' : 'text-destructive'">
+                {{ (ledgerData.closingBalance - ledgerData.openingBalance) >= 0 ? '+' : '' }}{{ formatAmount(ledgerData.closingBalance - ledgerData.openingBalance) }}
+              </div>
+              <div class="text-xs text-foreground-muted uppercase mt-1">Net Change</div>
+            </div>
+          </div>
+
+          <div v-if="ledgerData.entries.length === 0" class="text-center py-8 text-foreground-muted">
+            No transfers found for this address in epoch {{ ledgerData.epoch }}.
+          </div>
+          <template v-else>
+            <div class="text-xs text-foreground-muted mb-2">{{ ledgerData.entries.length.toLocaleString() }} entries</div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Tick</th>
+                    <th>Direction</th>
+                    <th>Counterparty</th>
+                    <th class="text-right">Amount (QU)</th>
+                    <th class="text-right">Balance (QU)</th>
+                    <th class="hide-mobile">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="bg-surface-elevated/50">
+                    <td colspan="4" class="text-foreground-muted text-sm">Opening Balance</td>
+                    <td class="text-right font-semibold">{{ formatAmount(ledgerData.openingBalance) }}</td>
+                    <td class="hide-mobile"></td>
+                  </tr>
+                  <tr v-for="(entry, idx) in ledgerData.entries" :key="idx">
+                    <td>
+                      <NuxtLink :to="`/ticks/${entry.tickNumber}`" class="text-accent">
+                        {{ entry.tickNumber.toLocaleString() }}
+                      </NuxtLink>
+                    </td>
+                    <td>
+                      <span :class="entry.direction === 'in' ? 'text-success' : 'text-destructive'" class="font-medium text-sm">
+                        <ArrowDownLeft v-if="entry.direction === 'in'" class="h-3.5 w-3.5 inline" />
+                        <ArrowUpRight v-else class="h-3.5 w-3.5 inline" />
+                        {{ entry.direction === 'in' ? 'IN' : 'OUT' }}
+                      </span>
+                    </td>
+                    <td>
+                      <NuxtLink
+                        v-if="entry.counterpartyAddress"
+                        :to="`/address/${entry.counterpartyAddress}`"
+                        class="address text-accent text-xs"
+                      >
+                        {{ entry.counterpartyAddress.slice(0, 10) }}...{{ entry.counterpartyAddress.slice(-6) }}
+                      </NuxtLink>
+                    </td>
+                    <td class="text-right" :class="entry.direction === 'in' ? 'text-success' : 'text-destructive'">
+                      {{ entry.direction === 'in' ? '+' : '-' }}{{ formatAmount(entry.amount) }}
+                    </td>
+                    <td class="text-right font-medium">{{ formatAmount(entry.runningBalance) }}</td>
+                    <td class="hide-mobile text-foreground-muted text-xs">{{ formatDate(entry.timestamp) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </template>
+        <div v-else class="text-center py-8 text-foreground-muted">
+          No ledger data available.
         </div>
       </template>
     </div>

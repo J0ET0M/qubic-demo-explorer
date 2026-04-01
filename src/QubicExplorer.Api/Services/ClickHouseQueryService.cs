@@ -5786,4 +5786,97 @@ public class ClickHouseQueryService : IDisposable
         var d = Convert.ToDouble(value);
         return double.IsNaN(d) || double.IsInfinity(d) ? 0 : d;
     }
+
+    /// <summary>
+    /// Get address ledger: opening balance from spectrum snapshot + all QU transfers in the epoch,
+    /// building a running balance like an accounting ledger.
+    /// </summary>
+    public async Task<AddressLedgerDto> GetAddressLedgerAsync(
+        string address, uint epoch, CancellationToken ct = default)
+    {
+        // 1. Get opening balance from balance_snapshots for the PREVIOUS epoch
+        //    (the snapshot at end of epoch N-1 is the opening balance for epoch N)
+        long openingBalance = 0;
+        if (epoch > 1)
+        {
+            await using var balCmd = _connection.CreateCommand();
+            balCmd.CommandText = @"
+                SELECT balance
+                FROM balance_snapshots
+                WHERE address = {address:String}
+                  AND epoch = {prevEpoch:UInt32}
+                LIMIT 1";
+            AddParam(balCmd, "address", address);
+            AddParam(balCmd, "prevEpoch", epoch - 1);
+
+            var balResult = await balCmd.ExecuteScalarAsync(ct);
+            if (balResult != null && balResult != DBNull.Value)
+                openingBalance = Convert.ToInt64(balResult);
+        }
+
+        // 2. Get all QU transfers (log_type = 0) involving this address in this epoch,
+        //    ordered by tick and log_id
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT tick_number, timestamp, tx_hash, log_type, source_address, dest_address, amount
+            FROM logs
+            WHERE epoch = {epoch:UInt32}
+              AND log_type = 0
+              AND (source_address = {address:String} OR dest_address = {address:String})
+            ORDER BY tick_number ASC, log_id ASC
+            LIMIT 10000";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "address", address);
+
+        var entries = new List<LedgerEntryDto>();
+        long runningBalance = openingBalance;
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var tickNumber = Convert.ToUInt64(reader["tick_number"]);
+            var timestamp = Convert.ToDateTime(reader["timestamp"]);
+            var txHash = reader["tx_hash"]?.ToString();
+            var logType = Convert.ToByte(reader["log_type"]);
+            var sourceAddress = reader["source_address"]?.ToString() ?? "";
+            var destAddress = reader["dest_address"]?.ToString() ?? "";
+            var amount = Convert.ToInt64(reader["amount"]);
+
+            string direction;
+            string? counterparty;
+
+            if (destAddress == address)
+            {
+                direction = "in";
+                counterparty = sourceAddress;
+                runningBalance += amount;
+            }
+            else
+            {
+                direction = "out";
+                counterparty = destAddress;
+                runningBalance -= amount;
+            }
+
+            entries.Add(new LedgerEntryDto(
+                tickNumber,
+                timestamp,
+                txHash,
+                logType,
+                LogTypes.GetName(logType),
+                counterparty,
+                direction,
+                amount,
+                runningBalance
+            ));
+        }
+
+        return new AddressLedgerDto(
+            address,
+            epoch,
+            openingBalance,
+            runningBalance,
+            entries
+        );
+    }
 }

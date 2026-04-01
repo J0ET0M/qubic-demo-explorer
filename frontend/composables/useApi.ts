@@ -231,6 +231,11 @@ export const useApi = () => {
   const getAddressActivityRange = (address: string) =>
     fetchApi<AddressActivityRangeDto>(`/api/address/${address}/activity-range`)
 
+  const getAddressLedger = (address: string, epoch?: number) => {
+    const params = epoch ? `?epoch=${epoch}` : ''
+    return fetchApi<AddressLedgerDto>(`/api/address/${address}/ledger${params}`)
+  }
+
   const getAddressFlow = (address: string, limit = 10) =>
     fetchApi<AddressFlowDto>(`/api/address/${address}/flow?limit=${limit}`)
 
@@ -419,6 +424,7 @@ export const useApi = () => {
     getAddressTransactions,
     getAddressTransfers,
     getAddressActivityRange,
+    getAddressLedger,
     search,
     getStats,
     getTxVolumeChart,
@@ -1183,6 +1189,26 @@ interface AddressActivityRangeDto {
   lastTick: number | null
   lastTimestamp: string | null
   lastEpoch: number | null
+}
+
+interface AddressLedgerDto {
+  address: string
+  epoch: number
+  openingBalance: number
+  closingBalance: number
+  entries: LedgerEntryDto[]
+}
+
+interface LedgerEntryDto {
+  tickNumber: number
+  timestamp: string
+  txHash: string | null
+  logType: number
+  logTypeName: string
+  counterpartyAddress: string | null
+  direction: 'in' | 'out'
+  amount: number
+  runningBalance: number
 }
 
 // Epoch countdown
