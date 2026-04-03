@@ -4,24 +4,6 @@ import { Users, Activity, History, ArrowLeftRight, Building2, Cpu, UserPlus } fr
 const api = useApi()
 const { formatVolume } = useFormatting()
 
-// Active addresses trend
-const { data: activeAddresses, pending: activeAddressesLoading } = await useAsyncData(
-  'network-active-addresses',
-  () => api.getActiveAddressTrends('epoch', 30)
-)
-
-// New vs Returning
-const { data: newVsReturning, pending: newVsReturningLoading } = await useAsyncData(
-  'network-new-vs-returning',
-  () => api.getNewVsReturningAddresses(30)
-)
-
-// Avg Tx Size
-const { data: avgTxSize, pending: avgTxSizeLoading } = await useAsyncData(
-  'network-avg-tx-size',
-  () => api.getAvgTxSizeTrends('epoch', 30)
-)
-
 // Network stats history (periodic snapshots) - reactive to time range
 const { timeRange } = useTimeRange()
 const networkStatsHistory = ref<Awaited<ReturnType<typeof api.getNetworkStatsHistory>>>([])
@@ -42,45 +24,26 @@ const fetchNetworkStatsHistory = async () => {
 watch(() => timeRange.value, fetchNetworkStatsHistory, { deep: true })
 await fetchNetworkStatsHistory()
 
-// Active addresses chart data
-const activeAddressChartLabels = computed(() => {
-  if (!activeAddresses.value) return []
-  return activeAddresses.value.map(d => d.epoch?.toString() || '')
+// Daily Active Users (DAU) - independent from snapshots, queries logs directly
+const { data: dauData, pending: dauLoading } = await useAsyncData(
+  'network-dau',
+  () => api.getActiveAddressTrends('daily', 90)
+)
+
+const dauChartLabels = computed(() => {
+  if (!dauData.value) return []
+  return dauData.value.map(d => {
+    if (d.date) return new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    return ''
+  })
 })
 
-const activeAddressChartData = computed(() => {
-  if (!activeAddresses.value) return { senders: [], receivers: [] }
+const dauChartData = computed(() => {
+  if (!dauData.value) return { total: [], senders: [], receivers: [] }
   return {
-    senders: activeAddresses.value.map(d => d.uniqueSenders),
-    receivers: activeAddresses.value.map(d => d.uniqueReceivers)
-  }
-})
-
-// New vs Returning chart data
-const newVsReturningChartLabels = computed(() => {
-  if (!newVsReturning.value) return []
-  return newVsReturning.value.map(d => d.epoch.toString())
-})
-
-const newVsReturningChartData = computed(() => {
-  if (!newVsReturning.value) return { new: [], returning: [] }
-  return {
-    new: newVsReturning.value.map(d => d.newAddresses),
-    returning: newVsReturning.value.map(d => d.returningAddresses)
-  }
-})
-
-// Avg tx size chart data
-const avgTxSizeChartLabels = computed(() => {
-  if (!avgTxSize.value) return []
-  return avgTxSize.value.map(d => d.epoch?.toString() || '')
-})
-
-const avgTxSizeChartData = computed(() => {
-  if (!avgTxSize.value) return { avg: [], median: [] }
-  return {
-    avg: avgTxSize.value.map(d => d.avgTxSize),
-    median: avgTxSize.value.map(d => d.medianTxSize)
+    total: dauData.value.map(d => d.totalActive),
+    senders: dauData.value.map(d => d.uniqueSenders),
+    receivers: dauData.value.map(d => d.uniqueReceivers)
   }
 })
 
@@ -157,125 +120,75 @@ const newUsersHighBalanceChartData = computed(() => {
 
 <template>
   <div class="space-y-6">
-    <!-- Active Addresses & New vs Returning Row -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Active Addresses Trend -->
-      <div class="card">
-        <h2 class="section-title mb-4">
-          <Users class="h-5 w-5 text-accent" />
-          Active Addresses per Epoch
-        </h2>
-
-        <div v-if="activeAddressesLoading" class="loading">Loading...</div>
-        <template v-else-if="activeAddresses?.length">
-          <ClientOnly>
-            <ChartsEpochLineChart
-              :labels="activeAddressChartLabels"
-              :datasets="[
-                {
-                  label: 'Senders',
-                  data: activeAddressChartData.senders,
-                  borderColor: 'rgb(16, 185, 129)',
-                  backgroundColor: 'rgba(16, 185, 129, 0.1)'
-                },
-                {
-                  label: 'Receivers',
-                  data: activeAddressChartData.receivers,
-                  borderColor: 'rgb(59, 130, 246)',
-                  backgroundColor: 'rgba(59, 130, 246, 0.1)'
-                }
-              ]"
-              :height="250"
-            />
-            <template #fallback>
-              <div class="h-[250px] flex items-center justify-center text-foreground-muted">
-                Loading chart...
-              </div>
-            </template>
-          </ClientOnly>
-        </template>
-        <div v-else class="text-center py-8 text-foreground-muted">
-          No active address data available
-        </div>
-      </div>
-
-      <!-- New vs Returning Addresses -->
-      <div class="card">
-        <h2 class="section-title mb-4">
-          <Users class="h-5 w-5 text-accent" />
-          New vs Returning Addresses
-        </h2>
-
-        <div v-if="newVsReturningLoading" class="loading">Loading...</div>
-        <template v-else-if="newVsReturning?.length">
-          <ClientOnly>
-            <ChartsEpochBarChart
-              :labels="newVsReturningChartLabels"
-              :datasets="[
-                {
-                  label: 'New Addresses',
-                  data: newVsReturningChartData.new,
-                  backgroundColor: 'rgba(16, 185, 129, 0.8)'
-                },
-                {
-                  label: 'Returning Addresses',
-                  data: newVsReturningChartData.returning,
-                  backgroundColor: 'rgba(59, 130, 246, 0.8)'
-                }
-              ]"
-              :height="250"
-              :stacked="true"
-            />
-            <template #fallback>
-              <div class="h-[250px] flex items-center justify-center text-foreground-muted">
-                Loading chart...
-              </div>
-            </template>
-          </ClientOnly>
-        </template>
-        <div v-else class="text-center py-8 text-foreground-muted">
-          No new/returning address data available
-        </div>
-      </div>
-    </div>
-
-    <!-- Average Tx Size Trend -->
+    <!-- Daily Active Users -->
     <div class="card">
       <h2 class="section-title mb-4">
-        <Activity class="h-5 w-5 text-accent" />
-        Average Transaction Size Trend
+        <Users class="h-5 w-5 text-accent" />
+        Daily Active Users (DAU)
       </h2>
 
-      <div v-if="avgTxSizeLoading" class="loading">Loading...</div>
-      <template v-else-if="avgTxSize?.length">
+      <div v-if="dauLoading" class="loading">Loading...</div>
+      <template v-else-if="dauData?.length">
+        <!-- Latest DAU summary -->
+        <div class="grid grid-cols-3 gap-4 mb-4">
+          <div class="card-elevated text-center">
+            <div class="text-2xl font-bold text-accent">
+              {{ dauData[dauData.length - 1]?.totalActive?.toLocaleString() || 0 }}
+            </div>
+            <div class="text-xs text-foreground-muted">Active Addresses (Latest)</div>
+          </div>
+          <div class="card-elevated text-center">
+            <div class="text-lg font-bold text-success">
+              {{ dauData[dauData.length - 1]?.uniqueSenders?.toLocaleString() || 0 }}
+            </div>
+            <div class="text-xs text-foreground-muted">Unique Senders</div>
+          </div>
+          <div class="card-elevated text-center">
+            <div class="text-lg font-bold text-info">
+              {{ dauData[dauData.length - 1]?.uniqueReceivers?.toLocaleString() || 0 }}
+            </div>
+            <div class="text-xs text-foreground-muted">Unique Receivers</div>
+          </div>
+        </div>
+
         <ClientOnly>
           <ChartsEpochLineChart
-            :labels="avgTxSizeChartLabels"
+            :labels="dauChartLabels"
             :datasets="[
               {
-                label: 'Average',
-                data: avgTxSizeChartData.avg,
-                borderColor: 'rgb(139, 92, 246)',
-                backgroundColor: 'rgba(139, 92, 246, 0.1)'
+                label: 'Active Addresses',
+                data: dauChartData.total,
+                borderColor: 'rgb(99, 102, 241)',
+                backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                fill: true
               },
               {
-                label: 'Median',
-                data: avgTxSizeChartData.median,
-                borderColor: 'rgb(245, 158, 11)',
-                backgroundColor: 'rgba(245, 158, 11, 0.1)'
+                label: 'Senders',
+                data: dauChartData.senders,
+                borderColor: 'rgb(16, 185, 129)',
+                backgroundColor: 'rgba(16, 185, 129, 0.05)'
+              },
+              {
+                label: 'Receivers',
+                data: dauChartData.receivers,
+                borderColor: 'rgb(59, 130, 246)',
+                backgroundColor: 'rgba(59, 130, 246, 0.05)'
               }
             ]"
-            :height="250"
+            :height="300"
           />
           <template #fallback>
-            <div class="h-[250px] flex items-center justify-center text-foreground-muted">
+            <div class="h-[300px] flex items-center justify-center text-foreground-muted">
               Loading chart...
             </div>
           </template>
         </ClientOnly>
+        <p class="text-xs text-foreground-muted mt-2">
+          Unique wallet addresses that performed at least one transaction within each 24-hour period. Active Addresses is the deduplicated count (an address that both sends and receives is counted once).
+        </p>
       </template>
       <div v-else class="text-center py-8 text-foreground-muted">
-        No average transaction size data available
+        No daily active user data available yet.
       </div>
     </div>
 
@@ -283,7 +196,7 @@ const newUsersHighBalanceChartData = computed(() => {
     <div class="card">
       <h2 class="section-title mb-4">
         <History class="h-5 w-5 text-accent" />
-        Network Activity History (4-Hour Snapshots)
+        Active Addresses & Transactions
       </h2>
 
       <div v-if="networkStatsHistoryLoading" class="loading">Loading...</div>
@@ -342,7 +255,7 @@ const newUsersHighBalanceChartData = computed(() => {
           </template>
         </ClientOnly>
         <p class="text-xs text-foreground-muted mt-2">
-          Historical snapshots taken every 4 hours showing network activity trends.
+          Snapshots taken every 4 hours. Use the time range selector above to adjust the window.
         </p>
       </template>
       <div v-else class="text-center py-8 text-foreground-muted">
@@ -354,7 +267,7 @@ const newUsersHighBalanceChartData = computed(() => {
     <div class="card">
       <h2 class="section-title mb-4">
         <ArrowLeftRight class="h-5 w-5 text-accent" />
-        Volume & Transfers History (4-Hour Snapshots)
+        Volume & Transfers
       </h2>
 
       <div v-if="networkStatsHistoryLoading" class="loading">Loading...</div>
@@ -394,7 +307,7 @@ const newUsersHighBalanceChartData = computed(() => {
     <div class="card">
       <h2 class="section-title mb-4">
         <Building2 class="h-5 w-5 text-accent" />
-        Exchange Flow History (4-Hour Snapshots)
+        Exchange Flows
       </h2>
 
       <div v-if="networkStatsHistoryLoading" class="loading">Loading...</div>
@@ -456,7 +369,7 @@ const newUsersHighBalanceChartData = computed(() => {
     <div class="card">
       <h2 class="section-title mb-4">
         <Users class="h-5 w-5 text-accent" />
-        New vs Returning History (4-Hour Snapshots)
+        New vs Returning Addresses
       </h2>
 
       <div v-if="networkStatsHistoryLoading" class="loading">Loading...</div>
@@ -495,7 +408,7 @@ const newUsersHighBalanceChartData = computed(() => {
     <div class="card">
       <h2 class="section-title mb-4">
         <Activity class="h-5 w-5 text-accent" />
-        Transaction Size History (4-Hour Snapshots)
+        Transaction Size
       </h2>
 
       <div v-if="networkStatsHistoryLoading" class="loading">Loading...</div>
@@ -551,7 +464,7 @@ const newUsersHighBalanceChartData = computed(() => {
     <div class="card">
       <h2 class="section-title mb-4">
         <Cpu class="h-5 w-5 text-accent" />
-        Smart Contract Activity History (4-Hour Snapshots)
+        Smart Contract Activity
       </h2>
 
       <div v-if="networkStatsHistoryLoading" class="loading">Loading...</div>
@@ -601,7 +514,7 @@ const newUsersHighBalanceChartData = computed(() => {
     <div class="card">
       <h2 class="section-title mb-4">
         <UserPlus class="h-5 w-5 text-accent" />
-        New Users with High Balance (4-Hour Snapshots)
+        New Users with High Balance
       </h2>
 
       <div v-if="networkStatsHistoryLoading" class="loading">Loading...</div>
