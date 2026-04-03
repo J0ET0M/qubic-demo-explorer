@@ -2443,41 +2443,16 @@ public class ClickHouseQueryService : IDisposable
     public async Task<List<NewVsReturningDto>> GetNewVsReturningAddressesAsync(
         int limit = 50, CancellationToken ct = default)
     {
-        // Use the pre-computed address_first_seen table + epoch_sender/receiver stats
-        // instead of scanning the entire transactions table 4x
+        // Use network_stats_history which has pre-computed new/returning counts
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            WITH
-            -- Count new addresses per epoch from the address_first_seen table
-            new_per_epoch AS (
-                SELECT
-                    first_epoch as epoch,
-                    count() as new_addresses
-                FROM address_first_seen FINAL
-                GROUP BY first_epoch
-            ),
-            -- Get total unique active addresses per epoch from materialized views
-            active_per_epoch AS (
-                SELECT
-                    epoch,
-                    uniqMerge(sender_addresses_state) + uniqMerge(receiver_addresses_state) as total_addresses
-                FROM (
-                    SELECT epoch, sender_addresses_state, null as receiver_addresses_state
-                    FROM epoch_sender_stats FINAL
-                    UNION ALL
-                    SELECT epoch, null as sender_addresses_state, receiver_addresses_state
-                    FROM epoch_receiver_stats FINAL
-                )
-                GROUP BY epoch
-            )
             SELECT
-                a.epoch,
-                coalesce(n.new_addresses, 0) as new_addresses,
-                greatest(a.total_addresses - coalesce(n.new_addresses, 0), 0) as returning_addresses,
-                a.total_addresses as total_addresses
-            FROM active_per_epoch a
-            LEFT JOIN new_per_epoch n ON a.epoch = n.epoch
-            ORDER BY a.epoch DESC
+                epoch,
+                new_addresses,
+                returning_addresses,
+                total_active_addresses as total_addresses
+            FROM network_stats_history FINAL
+            ORDER BY epoch DESC
             LIMIT {{lim:UInt32}}";
         AddParam(cmd, "lim", (uint)limit);
 
