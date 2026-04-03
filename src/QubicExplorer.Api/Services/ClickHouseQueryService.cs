@@ -2375,27 +2375,31 @@ public class ClickHouseQueryService : IDisposable
         {
             cmd.CommandText = $@"
                 SELECT
-                    toDate(timestamp) as date,
-                    uniq(from_address) as unique_senders,
-                    uniq(dest_address) as unique_receivers,
-                    uniq(from_address) + uniq(dest_address) as total_active
-                FROM logs
-                PREWHERE log_type = 0
+                    date,
+                    uniqIf(addr, is_sender = 1) as unique_senders,
+                    uniqIf(addr, is_sender = 0) as unique_receivers,
+                    uniq(addr) as total_active
+                FROM (
+                    SELECT toDate(timestamp) as date, source_address as addr, 1 as is_sender
+                    FROM logs WHERE log_type = 0
+                    UNION ALL
+                    SELECT toDate(timestamp) as date, dest_address as addr, 0 as is_sender
+                    FROM logs WHERE log_type = 0
+                )
                 GROUP BY date
                 ORDER BY date DESC
                 LIMIT {{lim:UInt32}}";
         }
         else
         {
-            // By epoch
+            // By epoch — use network_stats_history which has deduplicated total_active_addresses
             cmd.CommandText = $@"
                 SELECT
                     epoch,
-                    uniqMerge(unique_senders_state) as unique_senders,
-                    uniqMerge(unique_receivers_state) as unique_receivers,
-                    uniqMerge(unique_senders_state) + uniqMerge(unique_receivers_state) as total_active
-                FROM epoch_tx_stats FINAL
-                GROUP BY epoch
+                    unique_senders,
+                    unique_receivers,
+                    total_active_addresses as total_active
+                FROM network_stats_history FINAL
                 ORDER BY epoch DESC
                 LIMIT {{lim:UInt32}}";
         }

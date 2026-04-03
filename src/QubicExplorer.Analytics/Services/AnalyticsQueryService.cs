@@ -454,7 +454,7 @@ public class AnalyticsQueryService : IDisposable
             SELECT count() FROM logs FINAL WHERE {logFilter} AND log_type = 0";
         var totalTransfers = Convert.ToUInt64(await transferCmd.ExecuteScalarAsync(ct));
 
-        // Get active addresses
+        // Get active addresses (deduplicated total via UNION of sender + receiver)
         await using var activeCmd = _connection.CreateCommand();
         activeCmd.CommandText = $@"
             SELECT
@@ -473,6 +473,16 @@ public class AnalyticsQueryService : IDisposable
                 uniqueReceivers = Convert.ToUInt64(reader.GetValue(1));
             }
         }
+
+        // Deduplicated total: addresses that appear as sender OR receiver
+        await using var totalActiveCmd = _connection.CreateCommand();
+        totalActiveCmd.CommandText = $@"
+            SELECT uniq(addr) FROM (
+                SELECT from_address as addr FROM transactions WHERE {txFilter}
+                UNION ALL
+                SELECT to_address as addr FROM transactions WHERE {txFilter}
+            )";
+        var totalActive = Convert.ToUInt64(await totalActiveCmd.ExecuteScalarAsync(ct));
 
         // Get new vs returning addresses for the window
         var newVsReturning = isWindowSnapshot
@@ -545,7 +555,7 @@ public class AnalyticsQueryService : IDisposable
             VALUES
             ({epoch}, '{snapshotAt:yyyy-MM-dd HH:mm:ss.fff}', {tickStart}, {tickEnd},
              {totalTransactions}, {totalTransfers}, {(ulong)totalVolume},
-             {uniqueSenders}, {uniqueReceivers}, {uniqueSenders + uniqueReceivers},
+             {uniqueSenders}, {uniqueReceivers}, {totalActive},
              {newVsReturning.NewAddresses}, {newVsReturning.ReturningAddresses},
              {(ulong)exchangeFlows.InflowVolume}, {exchangeFlows.InflowCount},
              {(ulong)exchangeFlows.OutflowVolume}, {exchangeFlows.OutflowCount},
@@ -996,19 +1006,18 @@ public class AnalyticsQueryService : IDisposable
         // Use pre-computed address_first_seen table instead of scanning all transactions
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
-            WITH window_addresses AS (
+            SELECT
+                countIf(fa.first_tick >= {tickStart} AND fa.first_tick <= {tickEnd}) as new_addresses,
+                countIf(fa.first_tick < {tickStart}) as returning_addresses
+            FROM (
                 SELECT DISTINCT address
                 FROM (
                     SELECT from_address as address FROM transactions WHERE from_address != '' AND tick_number >= {tickStart} AND tick_number <= {tickEnd}
                     UNION ALL
                     SELECT to_address as address FROM transactions WHERE to_address != '' AND tick_number >= {tickStart} AND tick_number <= {tickEnd}
                 )
-            )
-            SELECT
-                countIf(fa.first_tick >= {tickStart} AND fa.first_tick <= {tickEnd}) as new_addresses,
-                countIf(fa.first_tick < {tickStart}) as returning_addresses
-            FROM window_addresses wa
-            JOIN address_first_seen FINAL fa ON wa.address = fa.address";
+            ) wa
+            JOIN address_first_seen FINAL AS fa ON wa.address = fa.address";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
