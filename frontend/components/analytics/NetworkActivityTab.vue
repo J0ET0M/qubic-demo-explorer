@@ -24,11 +24,36 @@ const fetchNetworkStatsHistory = async () => {
 watch(() => timeRange.value, fetchNetworkStatsHistory, { deep: true })
 await fetchNetworkStatsHistory()
 
-// Daily Active Users (DAU) - independent from snapshots, queries logs directly
-const { data: dauData, pending: dauLoading } = await useAsyncData(
-  'network-dau',
-  () => api.getActiveAddressTrends('daily', 90)
-)
+// Daily Active Users (DAU) - fetch all available, filter by time range
+const allDauData = ref<Awaited<ReturnType<typeof api.getActiveAddressTrends>>>([])
+const dauLoading = ref(true)
+
+const fetchDau = async () => {
+  dauLoading.value = true
+  try {
+    allDauData.value = await api.getActiveAddressTrends('daily', 365)
+  } catch (e) {
+    console.error('Failed to fetch DAU data', e)
+  } finally {
+    dauLoading.value = false
+  }
+}
+await fetchDau()
+
+const dauData = computed(() => {
+  if (!allDauData.value?.length) return []
+  const { from, to } = timeRange.value
+  if (!from && !to) return allDauData.value
+  const fromDate = from ? new Date(from) : null
+  const toDate = to ? new Date(to) : null
+  return allDauData.value.filter(d => {
+    if (!d.date) return false
+    const date = new Date(d.date)
+    if (fromDate && date < fromDate) return false
+    if (toDate && date > toDate) return false
+    return true
+  })
+})
 
 const dauChartLabels = computed(() => {
   if (!dauData.value) return []
