@@ -1017,7 +1017,7 @@ public class AnalyticsQueryService : IDisposable
                     SELECT to_address as address FROM transactions WHERE to_address != '' AND tick_number >= {tickStart} AND tick_number <= {tickEnd}
                 )
             ) wa
-            JOIN address_first_seen FINAL AS fa ON wa.address = fa.address";
+            JOIN address_first_seen AS fa FINAL ON wa.address = fa.address";
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (await reader.ReadAsync(ct))
