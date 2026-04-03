@@ -891,11 +891,19 @@ public class AnalyticsQueryService : IDisposable
     public async Task<DateTime?> GetTickTimestampAsync(ulong tickNumber, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $"SELECT timestamp FROM ticks WHERE tick_number = {tickNumber}";
+        // Find the timestamp for this tick, or the nearest tick after it with a valid timestamp
+        // (skip ticks with default/bad timestamps like 1999-11-30)
+        cmd.CommandText = $@"
+            SELECT timestamp FROM ticks
+            WHERE tick_number >= {tickNumber}
+              AND timestamp > '2020-01-01'
+            ORDER BY tick_number ASC
+            LIMIT 1";
         var result = await cmd.ExecuteScalarAsync(ct);
         if (result == null || result == DBNull.Value)
             return null;
-        return Convert.ToDateTime(result);
+        var ts = Convert.ToDateTime(result);
+        return ts.Year < 2020 ? null : ts;
     }
 
     /// <summary>
