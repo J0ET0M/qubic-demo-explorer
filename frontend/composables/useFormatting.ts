@@ -93,10 +93,23 @@ export const useFormatting = () => {
    */
   const getLogTypeBadgeClass = (logType: number): string => {
     switch (logType) {
-      case 0: return 'badge-success'   // QU_TRANSFER
-      case 1: return 'badge-info'      // ASSET_ISSUANCE
-      case 2:
-      case 3: return 'badge-info'      // ASSET_OWNERSHIP/POSSESSION
+      case 0: return 'badge-success'    // QU_TRANSFER
+      case 1: return 'badge-info'       // ASSET_ISSUANCE
+      case 2: return 'badge-warning'    // ASSET_OWNERSHIP_CHANGE
+      case 3: return 'badge-accent'     // ASSET_POSSESSION_CHANGE
+      case 4: return 'badge-error'      // CONTRACT_ERROR_MESSAGE
+      case 5: return 'badge-warning'    // CONTRACT_WARNING_MESSAGE
+      case 6: return 'badge-info'       // CONTRACT_INFORMATION_MESSAGE
+      case 7: return 'badge-ghost'      // CONTRACT_DEBUG_MESSAGE
+      case 8:
+      case 9: return 'badge-error'      // BURNING / DUST_BURNING
+      case 10: return 'badge-ghost'     // SPECTRUM_STATS
+      case 11: return 'badge-warning'   // ASSET_OWNERSHIP_MANAGING_CONTRACT_CHANGE
+      case 12: return 'badge-accent'    // ASSET_POSSESSION_MANAGING_CONTRACT_CHANGE
+      case 13: return 'badge-error'     // CONTRACT_RESERVE_DEDUCTION
+      case 14:
+      case 15: return 'badge-info'      // ORACLE_QUERY/SUBSCRIBER
+      case 255: return 'badge-ghost'    // CUSTOM_MESSAGE
       default: return 'badge-warning'
     }
   }

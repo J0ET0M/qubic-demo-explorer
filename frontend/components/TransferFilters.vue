@@ -21,14 +21,21 @@ const emit = defineEmits<{
 const logTypes = [
   { value: 0, name: 'QU Transfer', color: 'badge-success' },
   { value: 1, name: 'Asset Issuance', color: 'badge-info' },
-  { value: 2, name: 'Asset Ownership', color: 'badge-warning' },
-  { value: 3, name: 'Asset Possession', color: 'badge-accent' },
+  { value: 2, name: 'Asset Ownership Change', color: 'badge-warning' },
+  { value: 3, name: 'Asset Possession Change', color: 'badge-accent' },
   { value: 4, name: 'Contract Error', color: 'badge-error' },
   { value: 5, name: 'Contract Warning', color: 'badge-warning' },
   { value: 6, name: 'Contract Info', color: 'badge-info' },
   { value: 7, name: 'Contract Debug', color: 'badge-ghost' },
   { value: 8, name: 'Burning', color: 'badge-error' },
   { value: 9, name: 'Dust Burning', color: 'badge-error' },
+  { value: 10, name: 'Spectrum Stats', color: 'badge-ghost' },
+  { value: 11, name: 'Asset Ownership Managing Contract Change', color: 'badge-warning' },
+  { value: 12, name: 'Asset Possession Managing Contract Change', color: 'badge-accent' },
+  { value: 13, name: 'Contract Reserve Deduction', color: 'badge-error' },
+  { value: 14, name: 'Oracle Query Status Change', color: 'badge-info' },
+  { value: 15, name: 'Oracle Subscriber Message', color: 'badge-info' },
+  { value: 255, name: 'Custom Message', color: 'badge-ghost' },
 ]
 
 const showFilters = ref(false)

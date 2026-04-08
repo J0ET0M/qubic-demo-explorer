@@ -61,6 +61,8 @@ public static class BobLogTypes
     public const byte AssetOwnershipManagingContractChange = 11;
     public const byte AssetPossessionManagingContractChange = 12;
     public const byte ContractReserveDeduction = 13;
+    public const byte OracleQueryStatusChange = 14;
+    public const byte OracleSubscriberMessage = 15;
     public const byte CustomMessage = 255;
 }
 
@@ -145,6 +147,8 @@ public class BobLog
             BobLogTypes.AssetOwnershipManagingContractChange => "ASSET_OWNERSHIP_MANAGING_CONTRACT_CHANGE",
             BobLogTypes.AssetPossessionManagingContractChange => "ASSET_POSSESSION_MANAGING_CONTRACT_CHANGE",
             BobLogTypes.ContractReserveDeduction => "CONTRACT_RESERVE_DEDUCTION",
+            BobLogTypes.OracleQueryStatusChange => "ORACLE_QUERY_STATUS_CHANGE",
+            BobLogTypes.OracleSubscriberMessage => "ORACLE_SUBSCRIBER_MESSAGE",
             BobLogTypes.CustomMessage => "CUSTOM_MESSAGE",
             _ => $"UNKNOWN_{LogType}"
         };

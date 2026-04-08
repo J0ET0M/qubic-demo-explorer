@@ -81,6 +81,7 @@ public static class LogTypes
     public const byte AssetPossessionManagingContractChange = 12;
     public const byte ContractReserveDeduction = 13;
     public const byte OracleQueryStatusChange = 14;
+    public const byte OracleSubscriberMessage = 15;
     public const byte CustomMessage = 255;
 
     // CustomMessage operation codes
@@ -109,6 +110,7 @@ public static class LogTypes
         AssetPossessionManagingContractChange => "ASSET_POSSESSION_MANAGING_CONTRACT_CHANGE",
         ContractReserveDeduction => "CONTRACT_RESERVE_DEDUCTION",
         OracleQueryStatusChange => "ORACLE_QUERY_STATUS_CHANGE",
+        OracleSubscriberMessage => "ORACLE_SUBSCRIBER_MESSAGE",
         CustomMessage => "CUSTOM_MESSAGE",
         _ => $"UNKNOWN_{logType}"
     };
