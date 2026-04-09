@@ -5858,4 +5858,76 @@ public class ClickHouseQueryService : IDisposable
             entries
         );
     }
+
+    /// <summary>
+    /// Get tick vote snapshots for an epoch.
+    /// If computorIndex is null, returns aggregated summary (min/max/avg/median/quorum per window).
+    /// If computorIndex is set, returns that computor's vote progression.
+    /// </summary>
+    public async Task<TickVotesResponseDto> GetTickVotesAsync(
+        uint epoch, int? computorIndex = null, CancellationToken ct = default)
+    {
+        if (computorIndex.HasValue)
+        {
+            // Per-computor view
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $@"
+                SELECT tick, accumulated_votes
+                FROM tick_votes FINAL
+                WHERE epoch = {{epoch:UInt32}}
+                  AND computor_index = {{idx:UInt16}}
+                ORDER BY tick ASC";
+            AddParam(cmd, "epoch", epoch);
+            AddParam(cmd, "idx", (ushort)computorIndex.Value);
+
+            var items = new List<TickVoteComputorWindowDto>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                items.Add(new TickVoteComputorWindowDto(
+                    reader.GetFieldValue<ulong>(0),
+                    reader.GetFieldValue<ulong>(1)
+                ));
+            }
+
+            return new TickVotesResponseDto(epoch, computorIndex, null, items);
+        }
+        else
+        {
+            // Aggregated summary per window
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $@"
+                SELECT
+                    tick,
+                    min(accumulated_votes) as min_votes,
+                    max(accumulated_votes) as max_votes,
+                    avg(accumulated_votes) as avg_votes,
+                    median(accumulated_votes) as median_votes,
+                    arrayElement(
+                        arraySort(x -> -x, groupArray(accumulated_votes)),
+                        {QubicConstants.Quorum}
+                    ) as quorum_threshold
+                FROM tick_votes FINAL
+                WHERE epoch = {{epoch:UInt32}}
+                GROUP BY tick
+                ORDER BY tick ASC";
+            AddParam(cmd, "epoch", epoch);
+
+            var items = new List<TickVoteWindowDto>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                items.Add(new TickVoteWindowDto(
+                    reader.GetFieldValue<ulong>(0),
+                    ToUInt64(reader.GetValue(1)),
+                    ToUInt64(reader.GetValue(2)),
+                    ToUInt64(reader.GetValue(3)),
+                    ToUInt64(reader.GetValue(4)),
+                    ToUInt64(reader.GetValue(5))
+                ));
+            }
+
+            return new TickVotesResponseDto(epoch, null, items, null);
+        }
+    }
 }

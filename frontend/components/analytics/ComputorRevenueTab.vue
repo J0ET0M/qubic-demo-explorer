@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Monitor, Search, ArrowUpDown } from 'lucide-vue-next'
+import { Monitor, Search, ArrowUpDown, BarChart3 } from 'lucide-vue-next'
 
 const api = useApi()
 const { formatAmount, formatVolume, formatEpochDate } = useFormatting()
@@ -7,6 +7,30 @@ const { formatAmount, formatVolume, formatEpochDate } = useFormatting()
 const { data: revenueData, status } = await useAsyncData('computor-revenue', () => api.getComputorRevenue())
 
 const loading = computed(() => status.value === 'pending')
+
+// Tick vote progression chart
+const tickVoteEpoch = computed(() => revenueData.value?.epoch)
+
+const { data: tickVotes, pending: tickVotesLoading } = await useAsyncData(
+  () => `tick-votes-${tickVoteEpoch.value}`,
+  () => tickVoteEpoch.value ? api.getTickVotes(tickVoteEpoch.value) : Promise.resolve(null),
+  { watch: [tickVoteEpoch], immediate: !!tickVoteEpoch.value }
+)
+
+const tickVoteChartLabels = computed(() => {
+  if (!tickVotes.value?.summary) return []
+  return tickVotes.value.summary.map(w => w.tick.toLocaleString())
+})
+
+const tickVoteChartData = computed(() => {
+  if (!tickVotes.value?.summary) return { quorum: [], avg: [], min: [], max: [] }
+  return {
+    quorum: tickVotes.value.summary.map(w => w.quorumThreshold),
+    avg: tickVotes.value.summary.map(w => w.avgVotes),
+    min: tickVotes.value.summary.map(w => w.minVotes),
+    max: tickVotes.value.summary.map(w => w.maxVotes),
+  }
+})
 
 // Search / sort state
 const searchQuery = ref('')
@@ -171,6 +195,61 @@ const { truncateAddress } = useFormatting()
         </div>
       </template>
       <div v-else class="text-foreground-muted text-center py-8">No revenue data available</div>
+    </div>
+
+    <!-- Vote Progression Chart -->
+    <div v-if="revenueData" class="card">
+      <h2 class="section-title mb-4">
+        <BarChart3 class="h-5 w-5 text-accent" />
+        Vote Score Progression (Epoch {{ revenueData.epoch }})
+      </h2>
+
+      <div v-if="tickVotesLoading" class="loading">Loading vote progression...</div>
+      <template v-else-if="tickVotes?.summary?.length">
+        <ClientOnly>
+          <ChartsEpochLineChart
+            :labels="tickVoteChartLabels"
+            :datasets="[
+              {
+                label: 'Quorum Threshold (451st)',
+                data: tickVoteChartData.quorum,
+                borderColor: 'rgb(239, 68, 68)',
+                backgroundColor: 'rgba(239, 68, 68, 0.05)'
+              },
+              {
+                label: 'Average',
+                data: tickVoteChartData.avg,
+                borderColor: 'rgb(59, 130, 246)',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)'
+              },
+              {
+                label: 'Max',
+                data: tickVoteChartData.max,
+                borderColor: 'rgb(16, 185, 129)',
+                backgroundColor: 'rgba(16, 185, 129, 0.05)'
+              },
+              {
+                label: 'Min',
+                data: tickVoteChartData.min,
+                borderColor: 'rgb(245, 158, 11)',
+                backgroundColor: 'rgba(245, 158, 11, 0.05)'
+              }
+            ]"
+            :height="300"
+          />
+          <template #fallback>
+            <div class="h-[300px] flex items-center justify-center text-foreground-muted">
+              Loading chart...
+            </div>
+          </template>
+        </ClientOnly>
+        <p class="text-xs text-foreground-muted mt-2">
+          Accumulated vote scores per 676-tick window. The quorum threshold (red) is the 451st highest score — computors at or above this line receive 100% vote factor.
+        </p>
+      </template>
+      <div v-else class="text-center py-8 text-foreground-muted">
+        No vote progression data available yet. Data is collected every 676 ticks.
+      </div>
     </div>
 
     <!-- Computor Table -->

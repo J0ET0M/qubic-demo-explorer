@@ -921,3 +921,25 @@ public record ComputorRevenueSimulationDto(
     long ArbRevenue,
     ComputorRevenueEntryDto[] Computors
 );
+
+// Tick vote snapshots
+public record TickVoteWindowDto(
+    ulong Tick,
+    ulong MinVotes,
+    ulong MaxVotes,
+    ulong AvgVotes,
+    ulong MedianVotes,
+    ulong QuorumThreshold
+);
+
+public record TickVoteComputorWindowDto(
+    ulong Tick,
+    ulong AccumulatedVotes
+);
+
+public record TickVotesResponseDto(
+    uint Epoch,
+    int? ComputorIndex,
+    List<TickVoteWindowDto>? Summary,
+    List<TickVoteComputorWindowDto>? ComputorVotes
+);

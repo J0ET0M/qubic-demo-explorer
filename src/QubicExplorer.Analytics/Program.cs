@@ -69,6 +69,9 @@ builder.Services.AddSingleton<CustomFlowTrackingService>();
 // ComputorRevenueService - computes per-computor revenue from scores
 builder.Services.AddSingleton<ComputorRevenueService>();
 
+// TickVotePersistenceService - persists vote snapshots every 676 ticks
+builder.Services.AddSingleton<TickVotePersistenceService>();
+
 // Background services
 builder.Services.AddHostedService<AnalyticsSnapshotService>();
 

@@ -854,6 +854,19 @@ public static class ClickHouseSchema
         ) ENGINE = ReplacingMergeTree(created_at)
         ORDER BY epoch
         """,
+
+        // Tick vote snapshots (accumulated votes per 676-tick window)
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.tick_votes (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            tick UInt64 CODEC(DoubleDelta, LZ4),
+            computor_index UInt16 CODEC(LZ4),
+            accumulated_votes UInt64 CODEC(LZ4),
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, tick, computor_index)
+        """,
     ];
 
     /// <summary>

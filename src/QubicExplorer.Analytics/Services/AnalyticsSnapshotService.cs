@@ -88,6 +88,9 @@ public class AnalyticsSnapshotService : BackgroundService
                     // Compute computor revenue for current epoch
                     await ComputeComputorRevenueAsync(scope, currentEpoch.Value, stoppingToken);
 
+                    // Persist tick vote snapshots (676-tick windows)
+                    await PersistTickVotesAsync(scope, currentEpoch.Value, stoppingToken);
+
                     // Process custom flow tracking jobs
                     var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
                     await customFlowService.ProcessPendingJobsAsync(stoppingToken);
@@ -625,6 +628,27 @@ public class AnalyticsSnapshotService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error computing computor revenue for epoch {Epoch}", currentEpoch);
+        }
+    }
+
+    private async Task PersistTickVotesAsync(IServiceScope scope, uint currentEpoch, CancellationToken ct)
+    {
+        try
+        {
+            var voteService = scope.ServiceProvider.GetRequiredService<TickVotePersistenceService>();
+            var windowsProcessed = 0;
+            while (!ct.IsCancellationRequested && await voteService.ProcessNextWindowAsync(currentEpoch, ct))
+            {
+                windowsProcessed++;
+                await Task.Delay(50, ct);
+            }
+
+            if (windowsProcessed > 0)
+                _logger.LogInformation("Persisted {Count} tick vote windows for epoch {Epoch}", windowsProcessed, currentEpoch);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error persisting tick votes for epoch {Epoch}", currentEpoch);
         }
     }
 }

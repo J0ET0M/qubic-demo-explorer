@@ -363,6 +363,12 @@ export const useApi = () => {
   const getComputorRevenue = (epoch?: number) =>
     fetchApi<ComputorRevenueDto>(epoch ? `/api/stats/computor-revenue/${epoch}` : '/api/stats/computor-revenue')
 
+  // Tick votes
+  const getTickVotes = (epoch: number, computorIndex?: number) => {
+    const params = computorIndex !== undefined ? `?computorIndex=${computorIndex}` : ''
+    return fetchApi<TickVotesResponseDto>(`/api/stats/tick-votes/${epoch}${params}`)
+  }
+
   // Miner/Computor Flow
   const getMinerFlowStats = (limit = 500, from?: string, to?: string) => {
     const params = new URLSearchParams({ limit: String(limit) })
@@ -471,6 +477,7 @@ export const useApi = () => {
     getQearnStats,
     getCcfStats,
     getComputorRevenue,
+    getTickVotes,
     getMinerFlowStats,
     getComputors,
     getFlowVisualization,
@@ -1048,6 +1055,28 @@ interface ComputorRevenueDto {
   totalComputorRevenue: number
   arbRevenue: number
   computors: ComputorRevenueEntryDto[]
+}
+
+// Tick votes
+interface TickVoteWindowDto {
+  tick: number
+  minVotes: number
+  maxVotes: number
+  avgVotes: number
+  medianVotes: number
+  quorumThreshold: number
+}
+
+interface TickVoteComputorWindowDto {
+  tick: number
+  accumulatedVotes: number
+}
+
+interface TickVotesResponseDto {
+  epoch: number
+  computorIndex: number | null
+  summary: TickVoteWindowDto[] | null
+  computorVotes: TickVoteComputorWindowDto[] | null
 }
 
 // Rich list

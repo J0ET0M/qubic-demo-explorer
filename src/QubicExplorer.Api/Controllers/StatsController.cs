@@ -546,4 +546,21 @@ public class StatsController : ControllerBase
         if (result == null) return NotFound("Could not calculate revenue — computor list unavailable for this epoch");
         return Ok(result);
     }
+
+    // =====================================================
+    // TICK VOTES
+    // =====================================================
+
+    [HttpGet("tick-votes/{epoch:int}")]
+    public async Task<IActionResult> GetTickVotes(
+        uint epoch,
+        [FromQuery] int? computorIndex = null,
+        CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            $"stats:tick-votes:{epoch}:{computorIndex}",
+            AnalyticsCacheService.SnapshotHistoryTtl,
+            () => _queryService.GetTickVotesAsync(epoch, computorIndex, ct));
+        return Ok(result);
+    }
 }
