@@ -943,3 +943,16 @@ public record TickVotesResponseDto(
     List<TickVoteWindowDto>? Summary,
     List<TickVoteComputorWindowDto>? ComputorVotes
 );
+
+public record TickVoteCompareEntryDto(
+    int ComputorIndex,
+    List<TickVoteComputorWindowDto> Votes
+);
+
+public record TickVoteCompareResponseDto(
+    uint Epoch,
+    List<int> Indices,
+    List<ulong> Ticks,
+    List<TickVoteCompareEntryDto> Computors,
+    List<TickVoteComputorWindowDto> Sum
+);

@@ -563,4 +563,28 @@ public class StatsController : ControllerBase
             () => _queryService.GetTickVotesAsync(epoch, computorIndex, ct));
         return Ok(result);
     }
+
+    [HttpGet("tick-votes/{epoch:int}/compare")]
+    public async Task<IActionResult> GetTickVotesCompare(
+        uint epoch,
+        [FromQuery] string indices,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(indices))
+            return BadRequest("indices parameter required (comma-separated computor indices)");
+
+        var indexList = indices.Split(',')
+            .Select(s => int.TryParse(s.Trim(), out var v) ? v : -1)
+            .Where(v => v >= 0 && v < 676)
+            .ToList();
+
+        if (indexList.Count == 0)
+            return BadRequest("No valid computor indices provided");
+        var cacheKey = $"stats:tick-votes-compare:{epoch}:{string.Join(",", indexList.OrderBy(x => x))}";
+        var result = await _cache.GetOrSetAsync(
+            cacheKey,
+            AnalyticsCacheService.SnapshotHistoryTtl,
+            () => _queryService.GetTickVotesCompareAsync(epoch, indexList, ct));
+        return Ok(result);
+    }
 }

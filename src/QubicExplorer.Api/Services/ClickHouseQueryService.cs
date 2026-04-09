@@ -5930,4 +5930,63 @@ public class ClickHouseQueryService : IDisposable
             return new TickVotesResponseDto(epoch, null, items, null);
         }
     }
+
+    /// <summary>
+    /// Get tick vote progression for multiple computors + their sum.
+    /// </summary>
+    public async Task<TickVoteCompareResponseDto> GetTickVotesCompareAsync(
+        uint epoch, List<int> indices, CancellationToken ct = default)
+    {
+        // Build IN clause
+        var inList = string.Join(",", indices);
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT tick, computor_index, accumulated_votes
+            FROM tick_votes FINAL
+            WHERE epoch = {{epoch:UInt32}}
+              AND computor_index IN ({inList})
+            ORDER BY tick ASC, computor_index ASC";
+        AddParam(cmd, "epoch", epoch);
+
+        // Collect raw data grouped by tick
+        var tickData = new SortedDictionary<ulong, Dictionary<int, ulong>>();
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var tick = reader.GetFieldValue<ulong>(0);
+            var idx = (int)reader.GetFieldValue<ushort>(1);
+            var votes = reader.GetFieldValue<ulong>(2);
+
+            if (!tickData.TryGetValue(tick, out var compMap))
+            {
+                compMap = new Dictionary<int, ulong>();
+                tickData[tick] = compMap;
+            }
+            compMap[idx] = votes;
+        }
+
+        var ticks = tickData.Keys.ToList();
+
+        // Build per-computor series
+        var computors = indices.Select(idx => new TickVoteCompareEntryDto(
+            idx,
+            ticks.Select(t => new TickVoteComputorWindowDto(
+                t,
+                tickData[t].GetValueOrDefault(idx, 0UL)
+            )).ToList()
+        )).ToList();
+
+        // Build sum line
+        var sum = ticks.Select(t =>
+        {
+            ulong total = 0;
+            foreach (var idx in indices)
+                total += tickData[t].GetValueOrDefault(idx, 0UL);
+            return new TickVoteComputorWindowDto(t, total);
+        }).ToList();
+
+        return new TickVoteCompareResponseDto(epoch, indices, ticks, computors, sum);
+    }
 }
