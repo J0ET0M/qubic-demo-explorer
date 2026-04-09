@@ -194,6 +194,7 @@ public class TickVotePersistenceService : IDisposable
             ColumnNames = ["epoch", "tick", "computor_index", "accumulated_votes", "created_at"],
             BatchSize = QubicConstants.NumberOfComputors
         };
+        await bulk.InitAsync(ct);
 
         var rows = new List<object[]>(QubicConstants.NumberOfComputors);
         for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
