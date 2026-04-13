@@ -59,6 +59,19 @@ public class TicksController : ControllerBase
         return Ok(result);
     }
 
+    [HttpGet("empty")]
+    public async Task<IActionResult> GetEmptyTicks(
+        [FromQuery] ulong from,
+        [FromQuery] ulong to,
+        CancellationToken ct = default)
+    {
+        if (to <= from) return BadRequest("'to' must be greater than 'from'");
+        if (to - from > 1_000_000) return BadRequest("Range too large (max 1,000,000 ticks)");
+
+        var result = await _queryService.GetEmptyTicksInRangeAsync(from, to, ct);
+        return Ok(result);
+    }
+
     [HttpGet("{tickNumber}/logs")]
     public async Task<IActionResult> GetTickLogs(
         ulong tickNumber,

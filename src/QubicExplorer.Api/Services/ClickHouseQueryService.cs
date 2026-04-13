@@ -5860,6 +5860,29 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
+    /// Get empty tick numbers in a tick range.
+    /// </summary>
+    public async Task<List<ulong>> GetEmptyTicksInRangeAsync(
+        ulong from, ulong to, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT tick_number FROM ticks
+            WHERE tick_number >= {from:UInt64}
+              AND tick_number <= {to:UInt64}
+              AND is_empty = 1
+            ORDER BY tick_number ASC";
+        AddParam(cmd, "from", from);
+        AddParam(cmd, "to", to);
+
+        var ticks = new List<ulong>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            ticks.Add(reader.GetFieldValue<ulong>(0));
+        return ticks;
+    }
+
+    /// <summary>
     /// Get tick vote snapshots for an epoch.
     /// If computorIndex is null, returns aggregated summary (min/max/avg/median/quorum per window).
     /// If computorIndex is set, returns that computor's vote progression.
