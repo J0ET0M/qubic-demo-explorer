@@ -74,8 +74,39 @@ public class BobConnectionService : IDisposable
         _bobClient = new BobWebSocketClient(options);
 
         _logger.LogInformation("Connecting to Bob nodes: {Nodes}", string.Join(", ", effectiveNodes));
-        await _bobClient.ConnectAsync(cancellationToken);
-        _logger.LogInformation("Connected to Bob node: {ActiveNode}", _bobClient.ActiveNodeUrl);
+
+        // Loop the initial connect with a hard timeout so a single hanging node
+        // doesn't block us forever. On timeout we cancel, dispose, and retry —
+        // the client will rotate to the next node in its list.
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var connectTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var linkedConnectCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken, connectTimeoutCts.Token);
+
+                await _bobClient.ConnectAsync(linkedConnectCts.Token);
+                _logger.LogInformation("Connected to Bob node: {ActiveNode}", _bobClient.ActiveNodeUrl);
+                break;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Bob connect timed out after 10s, retrying...");
+                try { _bobClient.Dispose(); } catch { }
+                _bobClient = new BobWebSocketClient(options);
+                await Task.Delay(2000, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Bob connect failed, retrying in 5s...");
+                await Task.Delay(5000, cancellationToken);
+            }
+        }
 
         while (!cancellationToken.IsCancellationRequested)
         {

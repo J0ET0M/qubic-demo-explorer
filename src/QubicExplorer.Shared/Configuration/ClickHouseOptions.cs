@@ -31,14 +31,17 @@ public class BobOptions
     /// <summary>
     /// List of Bob node base URLs for multi-node failover.
     /// BobWebSocketClient derives WebSocket URLs automatically.
+    /// NOTE: do not give this a default list — .NET config binding appends to
+    /// existing list instances rather than replacing them. Use GetEffectiveNodes()
+    /// for the fallback.
     /// </summary>
-    public List<string> Nodes { get; set; } = ["https://bob02.qubic.li"];
+    public List<string> Nodes { get; set; } = [];
 
     /// <summary>
     /// Returns the configured nodes, or the default if none configured.
     /// </summary>
     public IReadOnlyList<string> GetEffectiveNodes() =>
-        Nodes.Count > 0 ? Nodes : ["https://bob02.qubic.li"];
+        Nodes.Count > 0 ? Nodes : ["https://bobnet.qubic.li"];
 
     public int ReconnectDelayMs { get; set; } = 5000;
     public int MaxReconnectDelayMs { get; set; } = 60000;
