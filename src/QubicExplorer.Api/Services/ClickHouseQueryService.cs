@@ -185,6 +185,7 @@ public class ClickHouseQueryService : IDisposable
         ulong tickNumber, int page, int limit, string? address = null, string? direction = null,
         ulong? minAmount = null, bool? executed = null, int? inputType = null,
         string? toAddress = null, bool coreOnly = false, bool detailed = false,
+        bool skipCount = false,
         CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
@@ -230,15 +231,26 @@ public class ClickHouseQueryService : IDisposable
                 AddParam(c, "burnAddr", AddressLabelService.BurnAddress);
         }
 
-        // Get total count
-        await using var countCmd = _connection.CreateCommand();
-        countCmd.CommandText = $"SELECT count() FROM transactions WHERE {whereClause}";
-        AddFilterParams(countCmd);
-        var totalCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct));
+        // Get total count (skipped when skipCount=true for speed)
+        long totalCount;
+        if (skipCount)
+        {
+            totalCount = -1;
+        }
+        else
+        {
+            await using var countCmd = _connection.CreateCommand();
+            countCmd.CommandText = $"SELECT count() FROM transactions WHERE {whereClause}";
+            AddFilterParams(countCmd);
+            totalCount = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
+        }
 
         var columns = detailed
             ? "hash, tick_number, epoch, from_address, to_address, amount, input_type, input_data, executed, timestamp, log_id_from, log_id_length"
             : "hash, tick_number, epoch, from_address, to_address, amount, input_type, executed, timestamp";
+
+        // When skipping count, fetch limit+1 rows to probe for next page
+        var fetchLimit = skipCount ? limit + 1 : limit;
 
         // Get paginated items
         await using var cmd = _connection.CreateCommand();
@@ -249,15 +261,21 @@ public class ClickHouseQueryService : IDisposable
             ORDER BY hash
             LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
         AddFilterParams(cmd);
-        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "lim", (uint)fetchLimit);
         AddParam(cmd, "off", (uint)offset);
-
-        var totalPages = (int)Math.Ceiling((double)totalCount / limit);
 
         if (detailed)
         {
             var items = await ReadDetailedTransactions(cmd, ct);
-            return new PaginatedResponse<TransactionDetailDto>(items, page, limit, totalCount, totalPages);
+            if (skipCount)
+            {
+                bool hasMore = items.Count > limit;
+                if (hasMore) items.RemoveAt(items.Count - 1);
+                var tp = hasMore ? page + 1 : page;
+                return new PaginatedResponse<TransactionDetailDto>(items, page, limit, -1, tp);
+            }
+            var totalPagesD = (int)Math.Ceiling((double)totalCount / limit);
+            return new PaginatedResponse<TransactionDetailDto>(items, page, limit, totalCount, totalPagesD);
         }
         else
         {
@@ -267,6 +285,14 @@ public class ClickHouseQueryService : IDisposable
             {
                 items.Add(ReadTransactionDto(reader));
             }
+            if (skipCount)
+            {
+                bool hasMore = items.Count > limit;
+                if (hasMore) items.RemoveAt(items.Count - 1);
+                var tp = hasMore ? page + 1 : page;
+                return new PaginatedResponse<TransactionDto>(items, page, limit, -1, tp);
+            }
+            var totalPages = (int)Math.Ceiling((double)totalCount / limit);
             return new PaginatedResponse<TransactionDto>(items, page, limit, totalCount, totalPages);
         }
     }
