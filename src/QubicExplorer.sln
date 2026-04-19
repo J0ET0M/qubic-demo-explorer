@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QubicExplorer.Analytics", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QubicExplorer.Indexer.Tests", "QubicExplorer.Indexer.Tests\QubicExplorer.Indexer.Tests.csproj", "{D3CD0233-B267-4E3F-9D14-AD3E1310B6C5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QubicExplorer.Pruner", "QubicExplorer.Pruner\QubicExplorer.Pruner.csproj", "{E2D545BD-6792-484B-9DAD-8F93C077E468}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -83,6 +85,18 @@ Global
 		{D3CD0233-B267-4E3F-9D14-AD3E1310B6C5}.Release|x64.Build.0 = Release|Any CPU
 		{D3CD0233-B267-4E3F-9D14-AD3E1310B6C5}.Release|x86.ActiveCfg = Release|Any CPU
 		{D3CD0233-B267-4E3F-9D14-AD3E1310B6C5}.Release|x86.Build.0 = Release|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Debug|x64.Build.0 = Debug|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Debug|x86.Build.0 = Debug|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Release|x64.ActiveCfg = Release|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Release|x64.Build.0 = Release|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Release|x86.ActiveCfg = Release|Any CPU
+		{E2D545BD-6792-484B-9DAD-8F93C077E468}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

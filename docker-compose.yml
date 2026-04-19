@@ -80,6 +80,25 @@ services:
       # - Seq__ApiKey=
     restart: unless-stopped
 
+  pruner:
+    build:
+      context: ./src
+      dockerfile: QubicExplorer.Pruner/Dockerfile
+    container_name: qubic-pruner
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - ClickHouse__Host=clickhouse
+      - ClickHouse__Port=8123
+      - ClickHouse__Database=qubic
+      - Pruner__DryRun=true
+      - Pruner__IntervalMinutes=60
+      # Optional: Seq logging (uncomment to enable)
+      # - Seq__ServerUrl=http://seq:5341
+      # - Seq__ApiKey=
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
