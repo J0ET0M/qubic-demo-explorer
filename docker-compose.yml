@@ -5,6 +5,7 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./docker/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./docker/clickhouse/disable-system-logs.xml:/etc/clickhouse-server/config.d/disable-system-logs.xml:ro
     ports:
       - "8123:8123"  # HTTP interface
       - "9000:9000"  # Native protocol

@@ -1,0 +1,41 @@
+<clickhouse>
+    <!-- Minimize system log tables to reduce disk usage -->
+
+    <!-- Disable entirely -->
+    <opentelemetry_span_log remove="remove"/>
+    <query_views_log remove="remove"/>
+    <asynchronous_metric_log remove="remove"/>
+
+    <!-- Keep but with short TTL and small flush -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 3 DAY</ttl>
+    </query_log>
+
+    <part_log>
+        <database>system</database>
+        <table>part_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 3 DAY</ttl>
+    </part_log>
+
+    <trace_log>
+        <database>system</database>
+        <table>trace_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 1 DAY</ttl>
+    </trace_log>
+
+    <metric_log>
+        <database>system</database>
+        <table>metric_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 1 DAY</ttl>
+    </metric_log>
+</clickhouse>
