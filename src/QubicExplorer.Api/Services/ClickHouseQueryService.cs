@@ -181,6 +181,28 @@ public class ClickHouseQueryService : IDisposable
             tick.TxCount, tick.LogCount, tick.IsEmpty, transactions.Items);
     }
 
+    public record TickAvailability(bool Exists, ulong LatestTick, ulong? NextAvailable);
+
+    public async Task<TickAvailability> GetTickAvailabilityAsync(ulong tickNumber, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                (SELECT count() FROM ticks WHERE tick_number = {tick:UInt64}) AS tick_exists,
+                (SELECT max(tick_number) FROM ticks) AS latest_tick,
+                (SELECT min(tick_number) FROM ticks WHERE tick_number > {tick:UInt64}) AS next_available";
+        AddParam(cmd, "tick", tickNumber);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return new TickAvailability(false, 0, null);
+
+        var exists = Convert.ToUInt64(reader.GetValue(0)) > 0;
+        var latest = reader.IsDBNull(1) ? 0UL : reader.GetFieldValue<ulong>(1);
+        var next = reader.IsDBNull(2) ? (ulong?)null : reader.GetFieldValue<ulong>(2);
+        return new TickAvailability(exists, latest, next);
+    }
+
     public async Task<object> GetTransactionsByTickPagedAsync(
         ulong tickNumber, int page, int limit, string? address = null, string? direction = null,
         ulong? minAmount = null, bool? executed = null, int? inputType = null,
@@ -1280,6 +1302,43 @@ public class ClickHouseQueryService : IDisposable
     // SC REWARD DISTRIBUTIONS
     // =====================================================
 
+    private async Task<List<RewardDistributionDto>> GetPersistedRewardDistributionsAsync(
+        uint epoch, string? contractAddress, CancellationToken ct)
+    {
+        var conditions = new List<string> { "epoch = {epoch:UInt32}" };
+        if (!string.IsNullOrEmpty(contractAddress))
+            conditions.Add("contract_address = {contractAddr:String}");
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT epoch, contract_address, tick_number, total_amount, transfer_count, timestamp
+            FROM reward_distributions FINAL
+            WHERE {string.Join(" AND ", conditions)}
+            ORDER BY tick_number DESC";
+        AddParam(cmd, "epoch", epoch);
+        if (!string.IsNullOrEmpty(contractAddress))
+            AddParam(cmd, "contractAddr", contractAddress);
+
+        var items = new List<RewardDistributionDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var totalAmount = reader.GetFieldValue<ulong>(3);
+            var amountPerShare = (decimal)totalAmount / LogTypes.NumberOfComputors;
+            items.Add(new RewardDistributionDto(
+                reader.GetFieldValue<uint>(0),
+                reader.GetString(1),
+                null,
+                reader.GetFieldValue<ulong>(2),
+                totalAmount,
+                amountPerShare,
+                reader.GetFieldValue<uint>(4),
+                reader.GetDateTime(5)
+            ));
+        }
+        return items;
+    }
+
     public async Task<EpochRewardSummaryDto> GetEpochRewardsAsync(uint epoch, CancellationToken ct = default)
     {
         var distributions = await GetRewardDistributionsAsync(epoch, null, ct);
@@ -1318,6 +1377,21 @@ public class ClickHouseQueryService : IDisposable
     private async Task<List<RewardDistributionDto>> GetRewardDistributionsAsync(
         uint? epoch, string? contractAddress, CancellationToken ct)
     {
+        // For completed epochs, read pre-computed results (instant lookup).
+        // Only fall back to the heavy live query when scanning the current epoch
+        // (which is still in progress and not yet persisted).
+        if (epoch.HasValue)
+        {
+            var currentEpoch = await GetCurrentEpochAsync(ct);
+            if (currentEpoch.HasValue && epoch.Value < currentEpoch.Value)
+            {
+                var persisted = await GetPersistedRewardDistributionsAsync(epoch.Value, contractAddress, ct);
+                // If persistence hasn't caught up yet (analytics service running behind),
+                // fall through to the live query so we don't return an empty list.
+                if (persisted.Count > 0) return persisted;
+            }
+        }
+
         // Build WHERE clause for filtering START markers (log_type = 255 is in PREWHERE)
         var startConditions = new List<string>();
         if (epoch.HasValue)
@@ -1372,11 +1446,14 @@ public class ClickHouseQueryService : IDisposable
                     s.timestamp,
                     min(e.end_log_id) as end_log_id
                 FROM start_markers s
-                CROSS JOIN end_markers e
-                WHERE e.end_tick_number = s.tick_number AND e.end_log_id > s.start_log_id
+                INNER JOIN end_markers e ON e.end_tick_number = s.tick_number
+                WHERE e.end_log_id > s.start_log_id
                 GROUP BY s.epoch, s.tick_number, s.start_log_id, s.timestamp
             ),
             transfers AS (
+                -- IMPORTANT: scope to only the ticks that contain reward distributions.
+                -- Without this filter, the CTE materializes every QU_TRANSFER log in the
+                -- database (tens of billions of rows) and OOMs the server.
                 SELECT
                     tick_number as t_tick_number,
                     log_id as t_log_id,
@@ -1384,6 +1461,7 @@ public class ClickHouseQueryService : IDisposable
                     amount
                 FROM logs
                 PREWHERE log_type = 0
+                  AND tick_number IN (SELECT tick_number FROM reward_ranges)
             )
             SELECT
                 dr.epoch,
@@ -1462,6 +1540,7 @@ public class ClickHouseQueryService : IDisposable
                 GROUP BY s.epoch, s.tick_number, s.start_log_id, s.timestamp
             ),
             transfers AS (
+                -- Scope to ticks that contain reward distributions (huge memory win at scale)
                 SELECT
                     tick_number as t_tick_number,
                     log_id as t_log_id,
@@ -1469,6 +1548,7 @@ public class ClickHouseQueryService : IDisposable
                     amount
                 FROM logs
                 PREWHERE source_address = {{contractAddr:String}} AND log_type = 0
+                  AND tick_number IN (SELECT tick_number FROM reward_ranges)
             ),
             aggregated AS (
                 SELECT

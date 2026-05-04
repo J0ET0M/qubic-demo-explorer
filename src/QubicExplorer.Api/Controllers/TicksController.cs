@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using QubicExplorer.Api.Services;
 
@@ -31,10 +32,15 @@ public class TicksController : ControllerBase
     public async Task<IActionResult> GetTick(ulong tickNumber, CancellationToken ct = default)
     {
         var result = await _queryService.GetTickByNumberAsync(tickNumber, ct);
-        if (result == null)
-            return NotFound(new { error = "Tick not found" });
+        if (result != null) return Ok(result);
 
-        return Ok(result);
+        // RPC-compatible: distinguish future / skipped ticks from true 404
+        var availability = await _queryService.GetTickAvailabilityAsync(tickNumber, ct);
+        if (tickNumber > availability.LatestTick)
+            return BadRequest(RpcBadRequestEnvelope.NotYetReached(tickNumber, availability.LatestTick));
+        if (availability.NextAvailable.HasValue)
+            return BadRequest(RpcBadRequestEnvelope.Skipped(tickNumber, availability.NextAvailable.Value));
+        return NotFound(new { error = "Tick not found" });
     }
 
     [HttpGet("{tickNumber}/transactions")]
@@ -55,6 +61,24 @@ public class TicksController : ControllerBase
     {
         if (page < 1) page = 1;
         if (limit < 1 || limit > 1024) limit = 20;
+
+        // RPC-compatible semantics: if the tick is beyond what we've indexed, or the
+        // tick was skipped (no row exists but later ticks do), return a BadRequest
+        // envelope matching the RPC archive shape so the tx validator's shared
+        // parser can handle both backends.
+        var availability = await _queryService.GetTickAvailabilityAsync(tickNumber, ct);
+        if (!availability.Exists)
+        {
+            if (tickNumber > availability.LatestTick)
+            {
+                return BadRequest(RpcBadRequestEnvelope.NotYetReached(tickNumber, availability.LatestTick));
+            }
+            if (availability.NextAvailable.HasValue)
+            {
+                return BadRequest(RpcBadRequestEnvelope.Skipped(tickNumber, availability.NextAvailable.Value));
+            }
+            return BadRequest(RpcBadRequestEnvelope.NotYetReached(tickNumber, availability.LatestTick));
+        }
 
         var result = await _queryService.GetTransactionsByTickPagedAsync(tickNumber, page, limit, address, direction, minAmount, executed, inputType, toAddress, coreOnly, detailed, skipCount, ct);
         return Ok(result);
@@ -87,7 +111,47 @@ public class TicksController : ControllerBase
         if (page < 1) page = 1;
         if (limit < 1 || limit > 100) limit = 20;
 
+        var availability = await _queryService.GetTickAvailabilityAsync(tickNumber, ct);
+        if (!availability.Exists)
+        {
+            if (tickNumber > availability.LatestTick)
+                return BadRequest(RpcBadRequestEnvelope.NotYetReached(tickNumber, availability.LatestTick));
+            if (availability.NextAvailable.HasValue)
+                return BadRequest(RpcBadRequestEnvelope.Skipped(tickNumber, availability.NextAvailable.Value));
+            return BadRequest(RpcBadRequestEnvelope.NotYetReached(tickNumber, availability.LatestTick));
+        }
+
         var result = await _queryService.GetLogsByTickPagedAsync(tickNumber, page, limit, fromAddress, toAddress, type, minAmount, ct);
         return Ok(result);
     }
+}
+
+// Shape-compatible with the RPC archive's BadRequest envelope used by
+// li.qubic.lib.Rpc.RpcBadRequestResponse. Do not rename field names.
+internal sealed class RpcBadRequestEnvelope
+{
+    [JsonPropertyName("code")] public int Code { get; init; }
+    [JsonPropertyName("message")] public string Message { get; init; } = string.Empty;
+    [JsonPropertyName("details")] public List<RpcBadRequestEnvelopeDetail> Details { get; init; } = new();
+
+    public static RpcBadRequestEnvelope Skipped(ulong requested, ulong nextAvailable) => new()
+    {
+        Code = 11,
+        Message = $"tick {requested} was skipped by the system, next available tick is {nextAvailable}",
+        Details = { new RpcBadRequestEnvelopeDetail { Type = "nextTickNumber", NextTickNumber = (long)nextAvailable } },
+    };
+
+    public static RpcBadRequestEnvelope NotYetReached(ulong requested, ulong lastProcessed) => new()
+    {
+        Code = 9,
+        Message = $"requested tick {requested} is greater than last processed tick {lastProcessed}",
+        Details = { new RpcBadRequestEnvelopeDetail { Type = "lastProcessedTick", LastProcessedTick = (long)lastProcessed } },
+    };
+}
+
+internal sealed class RpcBadRequestEnvelopeDetail
+{
+    [JsonPropertyName("@type")] public string Type { get; init; } = string.Empty;
+    [JsonPropertyName("nextTickNumber")] public long? NextTickNumber { get; init; }
+    [JsonPropertyName("lastProcessedTick")] public long? LastProcessedTick { get; init; }
 }

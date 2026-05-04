@@ -332,6 +332,17 @@ public class TickCrossCheckService : BackgroundService
                 var receipt = await bob.GetTransactionReceiptAsync(txHash, ct);
 
                 // Compute logIdFrom and logIdLength from the logs
+                // Bob 1.4.0: receipt can be "pending" — if so, abort the refetch
+                // for this tick. Re-running on the next pass lets Bob finish log
+                // verification before we persist.
+                if (receipt != null && receipt.IsPending)
+                {
+                    _logger.LogDebug(
+                        "Tick {Tick}: receipt for {Hash} is pending, aborting refetch — will retry later",
+                        tickNumber, txHash);
+                    return false;
+                }
+
                 var txLogs = bobLogs.Where(l => l.TxHash == txHash).OrderBy(l => l.LogId).ToList();
                 var logIdFrom = txLogs.Count > 0 ? (int)txLogs.First().LogId : -1;
                 var logIdLength = (ushort)txLogs.Count;
@@ -344,7 +355,7 @@ public class TickCrossCheckService : BackgroundService
                     Amount = (ulong)txResp.AmountValue,
                     InputType = (ushort)txResp.InputType,
                     InputData = txResp.InputData,
-                    Executed = receipt?.Status ?? false,
+                    Executed = receipt?.Executed ?? false,
                     LogIdFrom = logIdFrom,
                     LogIdLength = logIdLength
                 });

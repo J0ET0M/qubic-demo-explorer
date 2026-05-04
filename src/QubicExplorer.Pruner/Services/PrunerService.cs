@@ -152,7 +152,9 @@ public class PrunerService : BackgroundService
         {
             if (ct.IsCancellationRequested) break;
             await PruneEpochAsync(connection, rule, (uint)epoch, ct);
-            await UpdateStateAsync(connection, $"prune_{rule.Name}_last_epoch", epoch, ct);
+            // Only persist progress for real runs — dry-run should be fully observational.
+            if (!_options.DryRun)
+                await UpdateStateAsync(connection, $"prune_{rule.Name}_last_epoch", epoch, ct);
         }
     }
 

@@ -867,6 +867,22 @@ public static class ClickHouseSchema
         PARTITION BY epoch
         ORDER BY (epoch, tick, computor_index)
         """,
+
+        // Persisted reward distributions (computed once per completed epoch)
+        // Saves us from re-running the expensive START/END marker join on every API call.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.reward_distributions (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            contract_address String CODEC(LZ4HC),
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            total_amount UInt64 CODEC(LZ4),
+            transfer_count UInt32 CODEC(LZ4),
+            timestamp DateTime64(3) CODEC(Delta, LZ4),
+            computed_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(computed_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, contract_address, tick_number)
+        """,
     ];
 
     /// <summary>

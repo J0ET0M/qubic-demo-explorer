@@ -89,8 +89,17 @@ public class BobTransaction
     [JsonPropertyName("inputData")]
     public string? InputData { get; set; }
 
+    /// <summary>
+    /// Execution status from Bob. Bob 1.4.0+ may return null when the tick
+    /// has not yet been log-verified (pending). Tickstream consumers should
+    /// drop pending transactions and wait for the re-emission.
+    /// </summary>
     [JsonPropertyName("executed")]
-    public bool Executed { get; set; }
+    public bool? Executed { get; set; }
+
+    /// <summary>Tri-state status from Bob 1.4.0+: "success"/"failed"/"pending".</summary>
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
 
     [JsonPropertyName("logIdFrom")]
     public int LogIdFrom { get; set; }

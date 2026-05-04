@@ -152,6 +152,31 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PaginatedTickResponse' }
 
+  /api/ticks/empty:
+    get:
+      tags: [Ticks]
+      summary: Get empty tick numbers in a range
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: integer, format: uint64 }
+        - name: to
+          in: query
+          required: true
+          schema: { type: integer, format: uint64 }
+          description: Max range size 1,000,000 ticks
+      responses:
+        '200':
+          description: Array of empty tick numbers in the requested range
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: integer, format: uint64 }
+        '400':
+          description: Invalid range or range too large
+
   /api/ticks/{tickNumber}:
     get:
       tags: [Ticks]
@@ -167,8 +192,16 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TickDetailDto' }
+        '400':
+          description: |
+            RPC-compatible error envelope when the tick is in the future
+            (`code: 9` + `lastProcessedTick`) or was skipped (`code: 11` +
+            `nextTickNumber`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RpcBadRequestEnvelope' }
         '404':
-          description: Tick not found
+          description: Tick not found (no later tick exists either)
 
   /api/ticks/{tickNumber}/transactions:
     get:
@@ -210,12 +243,27 @@ paths:
           in: query
           schema: { type: boolean, default: false }
           description: When true, returns full TransactionDetailDto with inputData, parsedInput, and logs
+        - name: skipCount
+          in: query
+          schema: { type: boolean, default: false }
+          description: |
+            Skip the expensive total-count query for large ticks. When true,
+            response uses limit+1 probe — totalCount=-1 and totalPages reflects
+            only known pages. Recommended for high-throughput tools.
       responses:
         '200':
           description: Paginated transactions
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PaginatedTransactionResponse' }
+        '400':
+          description: |
+            RPC-compatible error envelope. Returned when the tick is in the
+            future (`code: 9` + `lastProcessedTick`) or was skipped by the
+            network (`code: 11` + `nextTickNumber`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RpcBadRequestEnvelope' }
 
   /api/ticks/{tickNumber}/logs:
     get:
@@ -250,6 +298,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PaginatedTransferResponse' }
+        '400':
+          description: |
+            RPC-compatible error envelope when the tick is in the future
+            (`code: 9` + `lastProcessedTick`) or was skipped (`code: 11` +
+            `nextTickNumber`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RpcBadRequestEnvelope' }
 
   # ── Address ─────────────────────────────────────────────────────────────
   /api/address/{address}:
@@ -399,6 +455,28 @@ paths:
           content:
             text/csv:
               schema: { type: string }
+
+  /api/address/{address}/ledger:
+    get:
+      tags: [Address]
+      summary: Get address ledger for an epoch (opening balance + running balance)
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema: { type: string }
+        - name: epoch
+          in: query
+          schema: { type: integer }
+          description: Defaults to current epoch when omitted
+      responses:
+        '200':
+          description: Ledger entries with opening/closing balance and running totals
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AddressLedgerDto' }
+        '404':
+          description: No epoch data available
 
   /api/address/{address}/flow:
     get:
@@ -1185,6 +1263,71 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BurnStatsExtendedDto' }
+
+  /api/stats/burn-stats/by-epoch:
+    get:
+      tags: [Stats]
+      summary: |
+        Burn statistics derived from spectrum supply per epoch.
+        Total burned in epoch N = (N × 1 trillion) − circulating supply.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Per-epoch burn data
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EpochBurnStatsDto' }
+
+  /api/stats/tick-votes/{epoch}:
+    get:
+      tags: [Stats]
+      summary: Vote progression per 676-tick window for an epoch
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: computorIndex
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 675 }
+          description: |
+            When omitted, returns aggregated summary (min/max/avg/median/quorum
+            per window). When set, returns the specific computor's vote
+            progression.
+      responses:
+        '200':
+          description: Tick vote response
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TickVotesResponseDto' }
+
+  /api/stats/tick-votes/{epoch}/compare:
+    get:
+      tags: [Stats]
+      summary: Compare vote progression for multiple computors with a sum line
+      parameters:
+        - name: epoch
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: indices
+          in: query
+          required: true
+          schema: { type: string }
+          description: Comma-separated computor indices (0-675)
+      responses:
+        '200':
+          description: Per-computor series + sum line
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TickVoteCompareResponseDto' }
+        '400':
+          description: Missing or invalid indices
 
   /api/stats/computor-revenue:
     get:
@@ -2813,3 +2956,120 @@ components:
       required: [endpoint]
       properties:
         endpoint: { type: string }
+
+    # ── RPC error envelope ─────────────────────────────────────────────────
+    RpcBadRequestEnvelope:
+      type: object
+      description: |
+        Shape-compatible with the Qubic RPC archive's BadRequest envelope.
+        - `code: 9` + `lastProcessedTick` detail → tick is in the future.
+        - `code: 11` + `nextTickNumber` detail → tick was skipped by the network.
+      properties:
+        code:
+          type: integer
+          enum: [9, 11]
+        message: { type: string }
+        details:
+          type: array
+          items: { $ref: '#/components/schemas/RpcBadRequestEnvelopeDetail' }
+
+    RpcBadRequestEnvelopeDetail:
+      type: object
+      properties:
+        '@type':
+          type: string
+          enum: [lastProcessedTick, nextTickNumber]
+        lastProcessedTick: { type: integer, format: int64, nullable: true }
+        nextTickNumber: { type: integer, format: int64, nullable: true }
+
+    # ── Address ledger ─────────────────────────────────────────────────────
+    AddressLedgerDto:
+      type: object
+      properties:
+        address: { type: string }
+        epoch: { type: integer }
+        openingBalance: { type: integer, format: int64 }
+        closingBalance: { type: integer, format: int64 }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/LedgerEntryDto' }
+
+    LedgerEntryDto:
+      type: object
+      properties:
+        tickNumber: { type: integer, format: uint64 }
+        timestamp: { type: string, format: date-time }
+        txHash: { type: string, nullable: true }
+        logType: { type: integer }
+        logTypeName: { type: string }
+        counterpartyAddress: { type: string, nullable: true }
+        direction:
+          type: string
+          enum: [in, out]
+        amount: { type: integer, format: int64 }
+        runningBalance: { type: integer, format: int64 }
+
+    # ── Per-epoch burn stats ───────────────────────────────────────────────
+    EpochBurnStatsDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        circulatingSupply: { type: number }
+        totalEmitted: { type: number }
+        totalBurned: { type: number }
+
+    # ── Tick votes ─────────────────────────────────────────────────────────
+    TickVoteWindowDto:
+      type: object
+      properties:
+        tick: { type: integer, format: uint64 }
+        minVotes: { type: integer, format: uint64 }
+        maxVotes: { type: integer, format: uint64 }
+        avgVotes: { type: integer, format: uint64 }
+        medianVotes: { type: integer, format: uint64 }
+        quorumThreshold: { type: integer, format: uint64 }
+
+    TickVoteComputorWindowDto:
+      type: object
+      properties:
+        tick: { type: integer, format: uint64 }
+        accumulatedVotes: { type: integer, format: uint64 }
+
+    TickVotesResponseDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        computorIndex: { type: integer, nullable: true }
+        summary:
+          type: array
+          nullable: true
+          items: { $ref: '#/components/schemas/TickVoteWindowDto' }
+        computorVotes:
+          type: array
+          nullable: true
+          items: { $ref: '#/components/schemas/TickVoteComputorWindowDto' }
+
+    TickVoteCompareEntryDto:
+      type: object
+      properties:
+        computorIndex: { type: integer }
+        votes:
+          type: array
+          items: { $ref: '#/components/schemas/TickVoteComputorWindowDto' }
+
+    TickVoteCompareResponseDto:
+      type: object
+      properties:
+        epoch: { type: integer }
+        indices:
+          type: array
+          items: { type: integer }
+        ticks:
+          type: array
+          items: { type: integer, format: uint64 }
+        computors:
+          type: array
+          items: { $ref: '#/components/schemas/TickVoteCompareEntryDto' }
+        sum:
+          type: array
+          items: { $ref: '#/components/schemas/TickVoteComputorWindowDto' }

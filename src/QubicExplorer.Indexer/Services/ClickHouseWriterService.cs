@@ -151,7 +151,9 @@ public class ClickHouseWriterService : IDisposable
                         Amount = tx.Amount,
                         InputType = tx.InputType,
                         InputData = tx.InputData,
-                        Executed = tx.Executed,
+                        // tx.Executed is nullable (Bob 1.4.0 tri-state) but pending
+                        // is already filtered upstream — default false is defensive.
+                        Executed = tx.Executed ?? false,
                         LogIdFrom = tx.LogIdFrom,
                         LogIdLength = tx.LogIdLength,
                         Timestamp = timestamp,

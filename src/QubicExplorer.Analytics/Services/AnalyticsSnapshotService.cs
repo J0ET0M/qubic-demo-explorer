@@ -91,6 +91,9 @@ public class AnalyticsSnapshotService : BackgroundService
                     // Persist tick vote snapshots (676-tick windows)
                     await PersistTickVotesAsync(scope, currentEpoch.Value, stoppingToken);
 
+                    // Persist reward distributions for completed epochs
+                    await PersistRewardDistributionsAsync(scope, currentEpoch.Value, stoppingToken);
+
                     // Process custom flow tracking jobs
                     var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
                     await customFlowService.ProcessPendingJobsAsync(stoppingToken);
@@ -649,6 +652,27 @@ public class AnalyticsSnapshotService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error persisting tick votes for epoch {Epoch}", currentEpoch);
+        }
+    }
+
+    private async Task PersistRewardDistributionsAsync(IServiceScope scope, uint currentEpoch, CancellationToken ct)
+    {
+        try
+        {
+            var rewardService = scope.ServiceProvider.GetRequiredService<RewardDistributionPersistenceService>();
+            var epochsProcessed = 0;
+            while (!ct.IsCancellationRequested && await rewardService.ProcessNextEpochAsync(currentEpoch, ct))
+            {
+                epochsProcessed++;
+                await Task.Delay(100, ct);
+            }
+
+            if (epochsProcessed > 0)
+                _logger.LogInformation("Persisted reward distributions for {Count} epoch(s)", epochsProcessed);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error persisting reward distributions");
         }
     }
 }

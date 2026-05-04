@@ -108,6 +108,9 @@ public class BobConnectionService : IDisposable
             }
         }
 
+        int consecutiveFailures = 0;
+        const int maxFailuresBeforeHardReset = 3;
+
         while (!cancellationToken.IsCancellationRequested)
         {
             // Create a new CTS for this subscription attempt - cancelled on disconnect
@@ -132,6 +135,7 @@ public class BobConnectionService : IDisposable
                 using var subscription = await _bobClient!.SubscribeTickStreamAsync(tickStreamOptions, cancellationToken);
 
                 _logger.LogInformation("Subscribed to tickStream: {SubscriptionId}", subscription.ServerSubscriptionId);
+                consecutiveFailures = 0; // success — reset counter
 
                 await foreach (var notification in subscription.WithCancellation(linkedCts.Token))
                 {
@@ -159,21 +163,65 @@ public class BobConnectionService : IDisposable
             {
                 // Disconnected - wait for reconnection then resubscribe
                 _logger.LogInformation("Subscription interrupted by disconnect, waiting for reconnection...");
+                consecutiveFailures++;
                 await WaitForReconnectionAsync(cancellationToken);
             }
             catch (InvalidOperationException) when (_bobClient?.State != BobConnectionState.Connected)
             {
                 // WebSocket not connected yet — wait for internal reconnection
                 _logger.LogWarning("WebSocket not connected, waiting for reconnection...");
+                consecutiveFailures++;
                 if (_bobClient != null)
-                    await _bobClient.WaitForConnectionAsync(cancellationToken: cancellationToken);
+                {
+                    using var waitCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    using var linkedWaitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, waitCts.Token);
+                    try
+                    {
+                        await _bobClient.WaitForConnectionAsync(cancellationToken: linkedWaitCts.Token);
+                    }
+                    catch (OperationCanceledException) when (waitCts.IsCancellationRequested)
+                    {
+                        // timed out — fall through to hard-reset check below
+                    }
+                }
                 else
+                {
                     await Task.Delay(5000, cancellationToken);
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "TickStream error, resubscribing in 5s...");
+                consecutiveFailures++;
                 await Task.Delay(5000, cancellationToken);
+            }
+
+            // Hard-reset: if reconnection keeps failing, the client is stuck.
+            // Dispose it and create a fresh one so we get a new TCP+TLS+WS handshake.
+            if (consecutiveFailures >= maxFailuresBeforeHardReset)
+            {
+                _logger.LogWarning("Bob client stuck after {Count} failures, hard-resetting connection...", consecutiveFailures);
+                try { _bobClient?.Dispose(); } catch { }
+                _bobClient = new BobWebSocketClient(options);
+                consecutiveFailures = 0;
+
+                try
+                {
+                    using var connectTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    using var linkedConnectCts = CancellationTokenSource.CreateLinkedTokenSource(
+                        cancellationToken, connectTimeoutCts.Token);
+                    await _bobClient.ConnectAsync(linkedConnectCts.Token);
+                    _logger.LogInformation("Bob client reconnected after hard-reset: {Node}", _bobClient.ActiveNodeUrl);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Hard-reset connect failed, retrying in 5s...");
+                    await Task.Delay(5000, cancellationToken);
+                }
             }
         }
     }
@@ -199,9 +247,48 @@ public class BobConnectionService : IDisposable
 
     /// <summary>
     /// Maps a Qubic.Bob TickStreamNotification to the explorer's TickStreamData model.
+    /// Drops transactions in "pending" state (Bob 1.4.0+) — these are not yet
+    /// log-verified and Bob will re-emit the tick once verification completes.
     /// </summary>
-    private static TickStreamData MapToTickStreamData(TickStreamNotification notification)
+    private TickStreamData MapToTickStreamData(TickStreamNotification notification)
     {
+        List<BobTransaction>? mappedTxs = null;
+        int droppedPending = 0;
+        if (notification.Transactions != null)
+        {
+            mappedTxs = new List<BobTransaction>(notification.Transactions.Count);
+            foreach (var tx in notification.Transactions)
+            {
+                // Bob 1.4.0+: executed can be null when tick hasn't been log-verified yet.
+                // Per Bob docs this is terminal for this delivery — skip and wait for re-emit.
+                if (tx.Executed == null)
+                {
+                    droppedPending++;
+                    continue;
+                }
+
+                mappedTxs.Add(new BobTransaction
+                {
+                    Hash = tx.Hash,
+                    From = tx.From,
+                    To = tx.To,
+                    Amount = (ulong)tx.GetAmount(),
+                    InputType = tx.InputType,
+                    InputData = tx.InputData,
+                    Executed = tx.Executed,
+                    LogIdFrom = (int)tx.LogIdFrom,
+                    LogIdLength = tx.LogIdLength
+                });
+            }
+
+            if (droppedPending > 0)
+            {
+                _logger.LogWarning(
+                    "Tick {Tick}: dropped {Count} pending tx(s) — will be re-emitted by Bob after log verification",
+                    notification.Tick, droppedPending);
+            }
+        }
+
         return new TickStreamData
         {
             Epoch = notification.Epoch,
@@ -214,18 +301,7 @@ public class BobConnectionService : IDisposable
             TxCountTotal = notification.TxCountTotal,
             LogCountFiltered = notification.LogCountFiltered,
             LogCountTotal = notification.LogCountTotal,
-            Transactions = notification.Transactions?.Select(tx => new BobTransaction
-            {
-                Hash = tx.Hash,
-                From = tx.From,
-                To = tx.To,
-                Amount = (ulong)tx.GetAmount(),
-                InputType = tx.InputType,
-                InputData = tx.InputData,
-                Executed = tx.Executed,
-                LogIdFrom = (int)tx.LogIdFrom,
-                LogIdLength = tx.LogIdLength
-            }).ToList(),
+            Transactions = mappedTxs,
             Logs = notification.Logs?.Select(log => new BobLog
             {
                 Ok = log.Ok,

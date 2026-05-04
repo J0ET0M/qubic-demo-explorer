@@ -72,6 +72,9 @@ builder.Services.AddSingleton<ComputorRevenueService>();
 // TickVotePersistenceService - persists vote snapshots every 676 ticks
 builder.Services.AddSingleton<TickVotePersistenceService>();
 
+// RewardDistributionPersistenceService - precomputes reward distributions per completed epoch
+builder.Services.AddSingleton<RewardDistributionPersistenceService>();
+
 // Background services
 builder.Services.AddHostedService<AnalyticsSnapshotService>();
 
