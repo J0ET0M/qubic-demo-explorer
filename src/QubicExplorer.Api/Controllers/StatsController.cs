@@ -564,6 +564,59 @@ public class StatsController : ControllerBase
         return Ok(result);
     }
 
+    // =====================================================
+    // EXECUTION FEE REPORTS
+    // =====================================================
+
+    [HttpGet("execution-fees/{epoch:int}")]
+    public async Task<IActionResult> GetExecutionFeeSummary(uint epoch, CancellationToken ct = default)
+    {
+        var ttl = await GetExecutionFeesTtlAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:exec-fees:{epoch}",
+            ttl,
+            () => _queryService.GetExecutionFeeSummaryAsync(epoch, ct));
+        return Ok(result);
+    }
+
+    [HttpGet("execution-fees/{epoch:int}/contract/{contractIndex:int}")]
+    public async Task<IActionResult> GetExecutionFeeContract(
+        uint epoch, int contractIndex, CancellationToken ct = default)
+    {
+        if (contractIndex < 0 || contractIndex > ushort.MaxValue)
+            return BadRequest("contractIndex out of range");
+        var ttl = await GetExecutionFeesTtlAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:exec-fees:{epoch}:contract:{contractIndex}",
+            ttl,
+            () => _queryService.GetExecutionFeeContractAsync(epoch, (ushort)contractIndex, ct));
+        return Ok(result);
+    }
+
+    [HttpGet("execution-fees/{epoch:int}/phase/{phaseNumber:int}")]
+    public async Task<IActionResult> GetExecutionFeePhase(
+        uint epoch, uint phaseNumber, CancellationToken ct = default)
+    {
+        var ttl = await GetExecutionFeesTtlAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:exec-fees:{epoch}:phase:{phaseNumber}",
+            ttl,
+            () => _queryService.GetExecutionFeePhaseAsync(epoch, phaseNumber, ct));
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// 10 minutes for the current epoch (new phases land every 7-15 min),
+    /// 24 hours for completed epochs (data is immutable).
+    /// </summary>
+    private async Task<TimeSpan> GetExecutionFeesTtlAsync(uint epoch, CancellationToken ct)
+    {
+        var currentEpoch = await _queryService.GetCurrentEpochAsync(ct);
+        return currentEpoch.HasValue && epoch >= currentEpoch.Value
+            ? AnalyticsCacheService.ExecutionFeesCurrentEpochTtl
+            : AnalyticsCacheService.ExecutionFeesCompletedEpochTtl;
+    }
+
     [HttpGet("tick-votes/{epoch:int}/compare")]
     public async Task<IActionResult> GetTickVotesCompare(
         uint epoch,

@@ -956,3 +956,45 @@ public record TickVoteCompareResponseDto(
     List<TickVoteCompareEntryDto> Computors,
     List<TickVoteComputorWindowDto> Sum
 );
+
+// Execution fee reports
+public record ExecutionFeePhaseSummaryDto(
+    uint PhaseNumber,
+    ulong PhaseTick,
+    DateTime? PhaseTimestamp,
+    ushort ContractIndex,
+    ulong MinFee,
+    ulong MaxFee,
+    ulong AvgFee,
+    ulong MedianFee,
+    ulong AgreedFee,    // 2/3 ascending percentile (the value the network actually deducts)
+    int ReportCount,
+    List<ExecutionFeeContractEntryDto>? Reports = null  // populated only on phase detail endpoint
+);
+
+public record ExecutionFeeContractEntryDto(
+    ushort ComputorIndex,
+    ulong ReportedFee,
+    string? TxHash = null
+);
+
+public record ExecutionFeeContractPhaseDto(
+    uint PhaseNumber,
+    ulong PhaseTick,
+    DateTime? PhaseTimestamp,
+    ulong AgreedFee,
+    List<ExecutionFeeContractEntryDto> Reports
+);
+
+public record ExecutionFeeContractResponseDto(
+    uint Epoch,
+    ushort ContractIndex,
+    List<ExecutionFeeContractPhaseDto> Phases
+);
+
+public record ExecutionFeePhaseDetailDto(
+    uint Epoch,
+    uint PhaseNumber,
+    ulong PhaseTick,
+    List<ExecutionFeePhaseSummaryDto> Contracts
+);

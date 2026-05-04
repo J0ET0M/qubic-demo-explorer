@@ -61,6 +61,12 @@ public class AnalyticsCacheService
     // Cache durations - computor revenue
     public static readonly TimeSpan ComputorRevenueTtl = TimeSpan.FromMinutes(5);
 
+    // Cache durations - execution fees
+    // Current epoch: short TTL because new phases land every 7-15 min.
+    // Completed epochs: long TTL because the data is immutable.
+    public static readonly TimeSpan ExecutionFeesCurrentEpochTtl = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan ExecutionFeesCompletedEpochTtl = TimeSpan.FromHours(24);
+
     // Cache durations - miner flow (static per epoch)
     public static readonly TimeSpan MinerFlowStatsTtl = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan MinerFlowVisualizationTtl = TimeSpan.FromHours(1);

@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Options;
+using QubicExplorer.Analytics.Configuration;
+
 namespace QubicExplorer.Analytics.Services;
 
 /// <summary>
@@ -10,18 +13,23 @@ namespace QubicExplorer.Analytics.Services;
 ///
 /// On startup, catches up on any missed snapshots by creating all windows
 /// from the last snapshot until the current time.
+///
+/// Each analytics feature can be individually disabled via AnalyticsOptions.
 /// </summary>
 public class AnalyticsSnapshotService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AnalyticsSnapshotService> _logger;
+    private readonly AnalyticsOptions _options;
     private readonly TimeSpan _snapshotInterval = TimeSpan.FromHours(4);
 
     public AnalyticsSnapshotService(
         IServiceProvider serviceProvider,
+        IOptions<AnalyticsOptions> options,
         ILogger<AnalyticsSnapshotService> logger)
     {
         _serviceProvider = serviceProvider;
+        _options = options.Value;
         _logger = logger;
     }
 
@@ -51,52 +59,65 @@ public class AnalyticsSnapshotService : BackgroundService
                 }
                 else
                 {
-                    // Create all pending snapshots (loop until no more can be created)
-                    while (!stoppingToken.IsCancellationRequested &&
-                           await CreateHolderDistributionSnapshotAsync(queryService, currentEpoch.Value, stoppingToken))
+                    _logger.LogInformation("=== Analytics pass starting (epoch {Epoch}) ===", currentEpoch.Value);
+
+                    await RunStepAsync("Holder distribution", _options.EnableHolderDistribution, async () =>
                     {
-                        await Task.Delay(100, stoppingToken);
-                    }
+                        while (!stoppingToken.IsCancellationRequested &&
+                               await CreateHolderDistributionSnapshotAsync(queryService, currentEpoch.Value, stoppingToken))
+                            await Task.Delay(100, stoppingToken);
+                    });
 
-                    while (!stoppingToken.IsCancellationRequested &&
-                           await CreateNetworkStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken))
+                    await RunStepAsync("Network stats", _options.EnableNetworkStats, async () =>
                     {
-                        await Task.Delay(100, stoppingToken);
-                    }
+                        while (!stoppingToken.IsCancellationRequested &&
+                               await CreateNetworkStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken))
+                            await Task.Delay(100, stoppingToken);
+                    });
 
-                    while (!stoppingToken.IsCancellationRequested &&
-                           await CreateBurnStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken))
+                    await RunStepAsync("Burn stats", _options.EnableBurnStats, async () =>
                     {
-                        await Task.Delay(100, stoppingToken);
-                    }
+                        while (!stoppingToken.IsCancellationRequested &&
+                               await CreateBurnStatsSnapshotAsync(queryService, currentEpoch.Value, stoppingToken))
+                            await Task.Delay(100, stoppingToken);
+                    });
 
-                    // Create miner flow snapshots
-                    var flowService = scope.ServiceProvider.GetRequiredService<ComputorFlowService>();
-                    while (!stoppingToken.IsCancellationRequested &&
-                           await CreateMinerFlowSnapshotAsync(queryService, flowService, currentEpoch.Value, stoppingToken))
+                    await RunStepAsync("Miner flow", _options.EnableMinerFlow, async () =>
                     {
-                        await Task.Delay(100, stoppingToken);
-                    }
+                        var flowService = scope.ServiceProvider.GetRequiredService<ComputorFlowService>();
+                        while (!stoppingToken.IsCancellationRequested &&
+                               await CreateMinerFlowSnapshotAsync(queryService, flowService, currentEpoch.Value, stoppingToken))
+                            await Task.Delay(100, stoppingToken);
+                    });
 
-                    // Compute Qearn stats for completed epochs
-                    await CreateQearnEpochStatsAsync(queryService, currentEpoch.Value, stoppingToken);
+                    await RunStepAsync("Qearn epoch stats", _options.EnableQearn,
+                        () => CreateQearnEpochStatsAsync(queryService, currentEpoch.Value, stoppingToken));
 
-                    // Poll CCF contract and persist new transfers
-                    var bobProxy = scope.ServiceProvider.GetRequiredService<BobProxyService>();
-                    await PersistCcfTransfersAsync(queryService, bobProxy, currentEpoch.Value, stoppingToken);
+                    await RunStepAsync("CCF transfers", _options.EnableCcf, () =>
+                    {
+                        var bobProxy = scope.ServiceProvider.GetRequiredService<BobProxyService>();
+                        return PersistCcfTransfersAsync(queryService, bobProxy, currentEpoch.Value, stoppingToken);
+                    });
 
-                    // Compute computor revenue for current epoch
-                    await ComputeComputorRevenueAsync(scope, currentEpoch.Value, stoppingToken);
+                    await RunStepAsync("Computor revenue", _options.EnableComputorRevenue,
+                        () => ComputeComputorRevenueAsync(scope, currentEpoch.Value, stoppingToken));
 
-                    // Persist tick vote snapshots (676-tick windows)
-                    await PersistTickVotesAsync(scope, currentEpoch.Value, stoppingToken);
+                    await RunStepAsync("Tick votes", _options.EnableTickVotes,
+                        () => PersistTickVotesAsync(scope, currentEpoch.Value, stoppingToken));
 
-                    // Persist reward distributions for completed epochs
-                    await PersistRewardDistributionsAsync(scope, currentEpoch.Value, stoppingToken);
+                    await RunStepAsync("Reward distributions", _options.EnableRewardDistributions,
+                        () => PersistRewardDistributionsAsync(scope, currentEpoch.Value, stoppingToken));
 
-                    // Process custom flow tracking jobs
-                    var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
-                    await customFlowService.ProcessPendingJobsAsync(stoppingToken);
+                    await RunStepAsync("Execution fee reports", _options.EnableExecutionFees,
+                        () => PersistExecutionFeeReportsAsync(scope, currentEpoch.Value, stoppingToken));
+
+                    await RunStepAsync("Custom flow jobs", _options.EnableCustomFlowJobs, () =>
+                    {
+                        var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
+                        return customFlowService.ProcessPendingJobsAsync(stoppingToken);
+                    });
+
+                    _logger.LogInformation("=== Analytics pass complete ===");
                 }
             }
             catch (Exception ex)
@@ -125,78 +146,67 @@ public class AnalyticsSnapshotService : BackgroundService
                 return;
             }
 
-            // Catch up on holder distribution snapshots
             var holderSnapshotsCreated = 0;
-            while (!ct.IsCancellationRequested)
+            await RunStepAsync("Catch-up: Holder distribution", _options.EnableHolderDistribution, async () =>
             {
-                var created = await CreateHolderDistributionSnapshotAsync(queryService, currentEpoch.Value, ct);
-                if (!created) break;
-                holderSnapshotsCreated++;
-                await Task.Delay(100, ct);
-            }
+                while (!ct.IsCancellationRequested)
+                {
+                    var created = await CreateHolderDistributionSnapshotAsync(queryService, currentEpoch.Value, ct);
+                    if (!created) break;
+                    holderSnapshotsCreated++;
+                    await Task.Delay(100, ct);
+                }
+            });
 
-            if (holderSnapshotsCreated > 0)
-            {
-                _logger.LogInformation("Created {Count} holder distribution snapshots during catch-up", holderSnapshotsCreated);
-            }
-
-            // Catch up on network stats snapshots
             var networkSnapshotsCreated = 0;
-            while (!ct.IsCancellationRequested)
+            await RunStepAsync("Catch-up: Network stats", _options.EnableNetworkStats, async () =>
             {
-                var created = await CreateNetworkStatsSnapshotAsync(queryService, currentEpoch.Value, ct);
-                if (!created) break;
-                networkSnapshotsCreated++;
-                await Task.Delay(100, ct);
-            }
+                while (!ct.IsCancellationRequested)
+                {
+                    var created = await CreateNetworkStatsSnapshotAsync(queryService, currentEpoch.Value, ct);
+                    if (!created) break;
+                    networkSnapshotsCreated++;
+                    await Task.Delay(100, ct);
+                }
+            });
 
-            if (networkSnapshotsCreated > 0)
-            {
-                _logger.LogInformation("Created {Count} network stats snapshots during catch-up", networkSnapshotsCreated);
-            }
-
-            // Catch up on burn stats snapshots
             var burnSnapshotsCreated = 0;
-            while (!ct.IsCancellationRequested)
+            await RunStepAsync("Catch-up: Burn stats", _options.EnableBurnStats, async () =>
             {
-                var created = await CreateBurnStatsSnapshotAsync(queryService, currentEpoch.Value, ct);
-                if (!created) break;
-                burnSnapshotsCreated++;
-                await Task.Delay(100, ct);
-            }
+                while (!ct.IsCancellationRequested)
+                {
+                    var created = await CreateBurnStatsSnapshotAsync(queryService, currentEpoch.Value, ct);
+                    if (!created) break;
+                    burnSnapshotsCreated++;
+                    await Task.Delay(100, ct);
+                }
+            });
 
-            if (burnSnapshotsCreated > 0)
-            {
-                _logger.LogInformation("Created {Count} burn stats snapshots during catch-up", burnSnapshotsCreated);
-            }
-
-            // Catch up on miner flow snapshots
-            var flowService = scope.ServiceProvider.GetRequiredService<ComputorFlowService>();
             var minerFlowSnapshotsCreated = 0;
-            while (!ct.IsCancellationRequested)
+            await RunStepAsync("Catch-up: Miner flow", _options.EnableMinerFlow, async () =>
             {
-                var created = await CreateMinerFlowSnapshotAsync(queryService, flowService, currentEpoch.Value, ct);
-                if (!created) break;
-                minerFlowSnapshotsCreated++;
-                await Task.Delay(100, ct);
-            }
+                var flowService = scope.ServiceProvider.GetRequiredService<ComputorFlowService>();
+                while (!ct.IsCancellationRequested)
+                {
+                    var created = await CreateMinerFlowSnapshotAsync(queryService, flowService, currentEpoch.Value, ct);
+                    if (!created) break;
+                    minerFlowSnapshotsCreated++;
+                    await Task.Delay(100, ct);
+                }
+            });
 
-            if (minerFlowSnapshotsCreated > 0)
+            await RunStepAsync("Catch-up: Qearn epoch stats", _options.EnableQearn,
+                () => CreateQearnEpochStatsAsync(queryService, currentEpoch.Value, ct));
+
+            await RunStepAsync("Catch-up: Custom flow jobs", _options.EnableCustomFlowJobs, () =>
             {
-                _logger.LogInformation("Created {Count} miner flow snapshots during catch-up", minerFlowSnapshotsCreated);
-            }
+                var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
+                return customFlowService.ProcessPendingJobsAsync(ct);
+            });
 
-            // Catch up on Qearn epoch stats
-            await CreateQearnEpochStatsAsync(queryService, currentEpoch.Value, ct);
-
-            // Process any pending custom flow tracking jobs
-            var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
-            await customFlowService.ProcessPendingJobsAsync(ct);
-
-            if (holderSnapshotsCreated == 0 && networkSnapshotsCreated == 0 && burnSnapshotsCreated == 0 && minerFlowSnapshotsCreated == 0)
-            {
-                _logger.LogInformation("Analytics snapshots are up to date");
-            }
+            _logger.LogInformation(
+                "Catch-up complete. Snapshots created: holder={H} network={N} burn={B} minerFlow={M}",
+                holderSnapshotsCreated, networkSnapshotsCreated, burnSnapshotsCreated, minerFlowSnapshotsCreated);
         }
         catch (Exception ex)
         {
@@ -475,22 +485,47 @@ public class AnalyticsSnapshotService : BackgroundService
         try
         {
             var persisted = await queryService.GetPersistedQearnEpochsAsync(ct);
-            var created = 0;
 
-            // Process completed epochs (up to current - 1)
-            for (var epoch = qearnInitialEpoch; epoch < currentEpoch && !ct.IsCancellationRequested; epoch++)
+            // Build the list of epochs we still need to compute, so we know
+            // total work upfront and can log meaningful progress.
+            var todo = new List<uint>();
+            for (var epoch = qearnInitialEpoch; epoch < currentEpoch; epoch++)
             {
-                if (persisted.Contains(epoch)) continue;
+                if (!persisted.Contains(epoch)) todo.Add(epoch);
+            }
+
+            if (todo.Count == 0) return;
+
+            _logger.LogInformation("Qearn: {Count} epoch(s) pending (range {First}..{Last})",
+                todo.Count, todo[0], todo[^1]);
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var created = 0;
+            var idx = 0;
+
+            foreach (var epoch in todo)
+            {
+                if (ct.IsCancellationRequested) break;
+                idx++;
 
                 var saved = await queryService.SaveQearnEpochStatsAsync(epoch, ct);
                 if (saved) created++;
+
+                // Progress every 10 epochs (or last one)
+                if (idx % 10 == 0 || idx == todo.Count)
+                {
+                    var rate = idx / Math.Max(sw.Elapsed.TotalSeconds, 0.001);
+                    var remaining = (todo.Count - idx) / Math.Max(rate, 0.001);
+                    _logger.LogInformation(
+                        "Qearn progress: {Done}/{Total} epochs (epoch {Epoch}, {Rate:F1}/s, ETA {Eta:mm\\:ss})",
+                        idx, todo.Count, epoch, rate, TimeSpan.FromSeconds(remaining));
+                }
+
                 await Task.Delay(50, ct);
             }
 
-            if (created > 0)
-            {
-                _logger.LogInformation("Computed Qearn stats for {Count} epochs", created);
-            }
+            _logger.LogInformation("Qearn: computed stats for {Count}/{Total} epochs in {Elapsed}",
+                created, todo.Count, sw.Elapsed);
         }
         catch (Exception ex)
         {
@@ -673,6 +708,65 @@ public class AnalyticsSnapshotService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error persisting reward distributions");
+        }
+    }
+
+    /// <summary>
+    /// Wraps a step with start/finish/duration log lines and a skipped message
+    /// when the toggle is off. Errors inside the step bubble up to the caller's
+    /// existing try/catch.
+    /// </summary>
+    private async Task RunStepAsync(string name, bool enabled, Func<Task> work)
+    {
+        if (!enabled)
+        {
+            _logger.LogInformation("[{Step}] skipped (disabled)", name);
+            return;
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        _logger.LogInformation("[{Step}] starting...", name);
+        try
+        {
+            await work();
+            _logger.LogInformation("[{Step}] finished in {Elapsed}", name, sw.Elapsed);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[{Step}] failed after {Elapsed}", name, sw.Elapsed);
+        }
+    }
+
+    private async Task PersistExecutionFeeReportsAsync(IServiceScope scope, uint currentEpoch, CancellationToken ct)
+    {
+        try
+        {
+            var feeService = scope.ServiceProvider.GetRequiredService<ExecutionFeeReportService>();
+            var totalTicks = 0;
+            var passes = 0;
+
+            // Drain pending work in this analytics step instead of waiting for the next 5min loop.
+            // Each pass is capped at 2M rows so we yield periodically and don't starve other work.
+            while (!ct.IsCancellationRequested)
+            {
+                var (ticks, hasMore) = await feeService.ProcessAsync(currentEpoch, ct);
+                totalTicks += ticks;
+                passes++;
+
+                if (!hasMore) break;
+
+                // Short delay between passes so other queries can interleave.
+                await Task.Delay(500, ct);
+            }
+
+            if (totalTicks > 0)
+                _logger.LogInformation(
+                    "Execution fee reports: processed {Ticks} phase tick(s) across {Passes} pass(es)",
+                    totalTicks, passes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error persisting execution fee reports");
         }
     }
 }

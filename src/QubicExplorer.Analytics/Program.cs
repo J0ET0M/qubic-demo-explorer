@@ -75,6 +75,13 @@ builder.Services.AddSingleton<TickVotePersistenceService>();
 // RewardDistributionPersistenceService - precomputes reward distributions per completed epoch
 builder.Services.AddSingleton<RewardDistributionPersistenceService>();
 
+// ExecutionFeeReportService - parses input_type=9 transactions into execution_fee_reports
+builder.Services.AddSingleton<ExecutionFeeReportService>();
+
+// Analytics feature toggles
+builder.Services.Configure<QubicExplorer.Analytics.Configuration.AnalyticsOptions>(
+    builder.Configuration.GetSection(QubicExplorer.Analytics.Configuration.AnalyticsOptions.SectionName));
+
 // Background services
 builder.Services.AddHostedService<AnalyticsSnapshotService>();
 

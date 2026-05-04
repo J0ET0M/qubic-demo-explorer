@@ -36,11 +36,19 @@ interface Props {
   title?: string
   yAxisLabel?: string
   height?: number
+  /** Hint that the chart is interactive (changes cursor + enables click events). */
+  clickable?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  height: 300
+  height: 300,
+  clickable: false
 })
+
+const emit = defineEmits<{
+  /** Emitted when the user clicks on a chart data point. Argument is the X-axis index. */
+  'point-click': [index: number]
+}>()
 
 const chartData = computed(() => ({
   labels: props.labels,
@@ -62,6 +70,15 @@ const chartOptions = computed(() => ({
     intersect: false,
     mode: 'index' as const
   },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onClick: props.clickable ? ((_e: any, elements: any) => {
+    if (elements?.length) emit('point-click', elements[0].index)
+  }) as any : undefined,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onHover: props.clickable ? ((event: any, elements: any) => {
+    const target = event?.native?.target as HTMLElement | undefined
+    if (target) target.style.cursor = elements.length ? 'pointer' : 'default'
+  }) as any : undefined,
   plugins: {
     legend: {
       display: props.datasets.length > 1,

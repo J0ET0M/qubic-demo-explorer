@@ -5966,6 +5966,242 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
+    /// Per-phase per-contract summary of execution fee reports.
+    /// AgreedFee replicates the network's 2/3 ascending percentile aggregation.
+    /// </summary>
+    public async Task<List<ExecutionFeePhaseSummaryDto>> GetExecutionFeeSummaryAsync(
+        uint epoch, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            WITH agg AS (
+                SELECT
+                    phase_number,
+                    any(phase_tick) AS phase_tick,
+                    contract_index,
+                    min(reported_fee) AS min_fee,
+                    max(reported_fee) AS max_fee,
+                    avg(reported_fee) AS avg_fee,
+                    median(reported_fee) AS median_fee,
+                    arrayElement(arraySort(groupArray(reported_fee)), toInt64(round(count() * 2 / 3))) AS agreed_fee,
+                    count() AS report_count
+                FROM execution_fee_reports FINAL
+                WHERE epoch = {{epoch:UInt32}}
+                GROUP BY phase_number, contract_index
+            )
+            SELECT
+                a.phase_number, a.phase_tick, t.timestamp,
+                a.contract_index, a.min_fee, a.max_fee, a.avg_fee, a.median_fee, a.agreed_fee, a.report_count
+            FROM agg a
+            LEFT JOIN (SELECT tick_number, any(timestamp) AS timestamp FROM ticks WHERE epoch = {{epoch:UInt32}} GROUP BY tick_number) AS t
+              ON t.tick_number = a.phase_tick
+            ORDER BY a.phase_number ASC, a.contract_index ASC";
+        AddParam(cmd, "epoch", epoch);
+
+        var items = new List<ExecutionFeePhaseSummaryDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            DateTime? ts = reader.IsDBNull(2) ? null : reader.GetDateTime(2);
+            // Filter out epoch placeholder timestamps from the fix earlier
+            if (ts.HasValue && ts.Value.Year < 2020) ts = null;
+
+            items.Add(new ExecutionFeePhaseSummaryDto(
+                reader.GetFieldValue<uint>(0),
+                reader.GetFieldValue<ulong>(1),
+                ts,
+                reader.GetFieldValue<ushort>(3),
+                ToUInt64(reader.GetValue(4)),
+                ToUInt64(reader.GetValue(5)),
+                (ulong)Convert.ToDouble(reader.GetValue(6)),
+                (ulong)Convert.ToDouble(reader.GetValue(7)),
+                ToUInt64(reader.GetValue(8)),
+                Convert.ToInt32(reader.GetValue(9))
+            ));
+        }
+        return items;
+    }
+
+    /// <summary>
+    /// Vote progression for a single contract across all phases of an epoch.
+    /// Returns every reported fee per phase + the agreed value.
+    /// </summary>
+    public async Task<ExecutionFeeContractResponseDto> GetExecutionFeeContractAsync(
+        uint epoch, ushort contractIndex, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT phase_number, phase_tick, computor_index, reported_fee
+            FROM execution_fee_reports FINAL
+            WHERE epoch = {{epoch:UInt32}}
+              AND contract_index = {{contractIdx:UInt16}}
+            ORDER BY phase_number ASC, computor_index ASC";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "contractIdx", contractIndex);
+
+        var byPhase = new SortedDictionary<uint, (ulong PhaseTick, List<ExecutionFeeContractEntryDto> Reports)>();
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                var phase = reader.GetFieldValue<uint>(0);
+                var phaseTick = reader.GetFieldValue<ulong>(1);
+                var compIdx = reader.GetFieldValue<ushort>(2);
+                var fee = reader.GetFieldValue<ulong>(3);
+
+                if (!byPhase.TryGetValue(phase, out var bucket))
+                {
+                    bucket = (phaseTick, new List<ExecutionFeeContractEntryDto>());
+                    byPhase[phase] = bucket;
+                }
+                bucket.Reports.Add(new ExecutionFeeContractEntryDto(compIdx, fee));
+            }
+        }
+
+        // Lookup tick → timestamp for all phase ticks in this contract's history
+        var phaseTicks = byPhase.Values.Select(v => v.PhaseTick).Distinct().ToList();
+        var tickTimestamps = await GetTickTimestampsAsync(epoch, phaseTicks, ct);
+
+        var phases = new List<ExecutionFeeContractPhaseDto>(byPhase.Count);
+        foreach (var (phase, bucket) in byPhase)
+        {
+            var sorted = bucket.Reports.Select(r => r.ReportedFee).OrderBy(f => f).ToList();
+            ulong agreed = 0;
+            if (sorted.Count > 0)
+            {
+                var idx = (int)Math.Round(sorted.Count * 2.0 / 3.0);
+                if (idx >= sorted.Count) idx = sorted.Count - 1;
+                agreed = sorted[idx];
+            }
+            tickTimestamps.TryGetValue(bucket.PhaseTick, out var ts);
+            phases.Add(new ExecutionFeeContractPhaseDto(phase, bucket.PhaseTick, ts, agreed, bucket.Reports));
+        }
+
+        return new ExecutionFeeContractResponseDto(epoch, contractIndex, phases);
+    }
+
+    private async Task<Dictionary<ulong, DateTime?>> GetTickTimestampsAsync(
+        uint epoch, List<ulong> ticks, CancellationToken ct)
+    {
+        var map = new Dictionary<ulong, DateTime?>();
+        if (ticks.Count == 0) return map;
+
+        var inList = string.Join(",", ticks);
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT tick_number, any(timestamp) FROM ticks
+            WHERE epoch = {{epoch:UInt32}} AND tick_number IN ({inList})
+            GROUP BY tick_number";
+        AddParam(cmd, "epoch", epoch);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var tick = reader.GetFieldValue<ulong>(0);
+            DateTime? ts = reader.IsDBNull(1) ? null : reader.GetDateTime(1);
+            if (ts.HasValue && ts.Value.Year < 2020) ts = null;
+            map[tick] = ts;
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// All contracts' summaries for a single phase.
+    /// </summary>
+    public async Task<ExecutionFeePhaseDetailDto> GetExecutionFeePhaseAsync(
+        uint epoch, uint phaseNumber, CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT
+                any(phase_tick) AS phase_tick,
+                contract_index,
+                min(reported_fee) AS min_fee,
+                max(reported_fee) AS max_fee,
+                avg(reported_fee) AS avg_fee,
+                median(reported_fee) AS median_fee,
+                arrayElement(arraySort(groupArray(reported_fee)), toInt64(round(count() * 2 / 3))) AS agreed_fee,
+                count() AS report_count
+            FROM execution_fee_reports FINAL
+            WHERE epoch = {{epoch:UInt32}}
+              AND phase_number = {{phase:UInt32}}
+            GROUP BY contract_index
+            ORDER BY agreed_fee DESC";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "phase", phaseNumber);
+
+        ulong phaseTick = 0;
+        var contracts = new List<ExecutionFeePhaseSummaryDto>();
+        var rawRows = new List<(ushort ContractIndex, ulong Min, ulong Max, ulong Avg, ulong Median, ulong Agreed, int ReportCount)>();
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                phaseTick = reader.GetFieldValue<ulong>(0);
+                rawRows.Add((
+                    reader.GetFieldValue<ushort>(1),
+                    ToUInt64(reader.GetValue(2)),
+                    ToUInt64(reader.GetValue(3)),
+                    (ulong)Convert.ToDouble(reader.GetValue(4)),
+                    (ulong)Convert.ToDouble(reader.GetValue(5)),
+                    ToUInt64(reader.GetValue(6)),
+                    Convert.ToInt32(reader.GetValue(7))
+                ));
+            }
+        }
+
+        // Single timestamp lookup for the phase tick
+        DateTime? phaseTimestamp = null;
+        if (phaseTick > 0)
+        {
+            var tsMap = await GetTickTimestampsAsync(epoch, new List<ulong> { phaseTick }, ct);
+            tsMap.TryGetValue(phaseTick, out phaseTimestamp);
+        }
+
+        // Fetch raw per-computor reports for this phase, grouped by contract.
+        // One row per (contract, computor). Used by the frontend heatmap.
+        // Include tx_hash so the UI can link directly to the publishing tx.
+        var reportsByContract = new Dictionary<ushort, List<ExecutionFeeContractEntryDto>>();
+        await using (var rawCmd = _connection.CreateCommand())
+        {
+            rawCmd.CommandText = $@"
+                SELECT contract_index, computor_index, reported_fee, tx_hash
+                FROM execution_fee_reports FINAL
+                WHERE epoch = {{epoch:UInt32}}
+                  AND phase_number = {{phase:UInt32}}
+                ORDER BY contract_index ASC, computor_index ASC";
+            AddParam(rawCmd, "epoch", epoch);
+            AddParam(rawCmd, "phase", phaseNumber);
+
+            await using var reader = await rawCmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var ci = reader.GetFieldValue<ushort>(0);
+                var cmpIdx = reader.GetFieldValue<ushort>(1);
+                var fee = reader.GetFieldValue<ulong>(2);
+                var txHash = reader.IsDBNull(3) ? null : reader.GetString(3);
+
+                if (!reportsByContract.TryGetValue(ci, out var list))
+                {
+                    list = new List<ExecutionFeeContractEntryDto>();
+                    reportsByContract[ci] = list;
+                }
+                list.Add(new ExecutionFeeContractEntryDto(cmpIdx, fee, txHash));
+            }
+        }
+
+        foreach (var r in rawRows)
+        {
+            reportsByContract.TryGetValue(r.ContractIndex, out var reports);
+            contracts.Add(new ExecutionFeePhaseSummaryDto(
+                phaseNumber, phaseTick, phaseTimestamp,
+                r.ContractIndex, r.Min, r.Max, r.Avg, r.Median, r.Agreed, r.ReportCount, reports));
+        }
+
+        return new ExecutionFeePhaseDetailDto(epoch, phaseNumber, phaseTick, contracts);
+    }
+
+    /// <summary>
     /// Get empty tick numbers in a tick range.
     /// </summary>
     public async Task<List<ulong>> GetEmptyTicksInRangeAsync(

@@ -369,6 +369,16 @@ export const useApi = () => {
     return fetchApi<TickVotesResponseDto>(`/api/stats/tick-votes/${epoch}${params}`)
   }
 
+  // Execution fee reports
+  const getExecutionFeeSummary = (epoch: number) =>
+    fetchApi<ExecutionFeePhaseSummaryDto[]>(`/api/stats/execution-fees/${epoch}`)
+
+  const getExecutionFeeContract = (epoch: number, contractIndex: number) =>
+    fetchApi<ExecutionFeeContractResponseDto>(`/api/stats/execution-fees/${epoch}/contract/${contractIndex}`)
+
+  const getExecutionFeePhase = (epoch: number, phaseNumber: number) =>
+    fetchApi<ExecutionFeePhaseDetailDto>(`/api/stats/execution-fees/${epoch}/phase/${phaseNumber}`)
+
   // Miner/Computor Flow
   const getMinerFlowStats = (limit = 500, from?: string, to?: string) => {
     const params = new URLSearchParams({ limit: String(limit) })
@@ -478,6 +488,9 @@ export const useApi = () => {
     getCcfStats,
     getComputorRevenue,
     getTickVotes,
+    getExecutionFeeSummary,
+    getExecutionFeeContract,
+    getExecutionFeePhase,
     getMinerFlowStats,
     getComputors,
     getFlowVisualization,
@@ -1077,6 +1090,48 @@ interface TickVotesResponseDto {
   computorIndex: number | null
   summary: TickVoteWindowDto[] | null
   computorVotes: TickVoteComputorWindowDto[] | null
+}
+
+// Execution fee reports
+interface ExecutionFeePhaseSummaryDto {
+  phaseNumber: number
+  phaseTick: number
+  phaseTimestamp: string | null
+  contractIndex: number
+  minFee: number
+  maxFee: number
+  avgFee: number
+  medianFee: number
+  agreedFee: number
+  reportCount: number
+  reports?: ExecutionFeeContractEntryDto[] | null
+}
+
+interface ExecutionFeeContractEntryDto {
+  computorIndex: number
+  reportedFee: number
+  txHash?: string | null
+}
+
+interface ExecutionFeeContractPhaseDto {
+  phaseNumber: number
+  phaseTick: number
+  phaseTimestamp: string | null
+  agreedFee: number
+  reports: ExecutionFeeContractEntryDto[]
+}
+
+interface ExecutionFeeContractResponseDto {
+  epoch: number
+  contractIndex: number
+  phases: ExecutionFeeContractPhaseDto[]
+}
+
+interface ExecutionFeePhaseDetailDto {
+  epoch: number
+  phaseNumber: number
+  phaseTick: number
+  contracts: ExecutionFeePhaseSummaryDto[]
 }
 
 // Rich list

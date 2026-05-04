@@ -3073,9 +3073,10 @@ public class AnalyticsQueryService : IDisposable
         var uniqueLockers = Convert.ToUInt64(reader.GetValue(6));
         var uniqueUnlockers = Convert.ToUInt64(reader.GetValue(7));
 
-        // Skip epochs with no Qearn activity
-        if (totalBurned == 0 && totalInput == 0 && totalOutput == 0)
-            return false;
+        // Always persist — even zero-activity epochs — so the "what's already
+        // done" check works on next startup. Otherwise we re-scan the same
+        // empty epochs forever.
+        var hasActivity = totalBurned != 0 || totalInput != 0 || totalOutput != 0;
 
         await using var insertCmd = _connection.CreateCommand();
         insertCmd.CommandText = $@"
@@ -3087,10 +3088,14 @@ public class AnalyticsQueryService : IDisposable
              {totalOutput}, {outputCount}, {uniqueLockers}, {uniqueUnlockers})";
 
         await insertCmd.ExecuteNonQueryAsync(ct);
-        _logger.LogInformation(
-            "Saved Qearn stats for epoch {Epoch}: burned={Burned}, in={Input}, out={Output}",
-            epoch, totalBurned, totalInput, totalOutput);
-        return true;
+
+        if (hasActivity)
+        {
+            _logger.LogInformation(
+                "Saved Qearn stats for epoch {Epoch}: burned={Burned}, in={Input}, out={Output}",
+                epoch, totalBurned, totalInput, totalOutput);
+        }
+        return hasActivity;
     }
 
     // =====================================================

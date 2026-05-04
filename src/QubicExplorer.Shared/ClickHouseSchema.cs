@@ -883,6 +883,25 @@ public static class ClickHouseSchema
         PARTITION BY epoch
         ORDER BY (epoch, contract_address, tick_number)
         """,
+
+        // Execution fee reports — one row per (computor, contract) per phase.
+        // Parsed from input_type=9 transactions (ExecutionFeeReportPayload).
+        // Used to visualize what fees each computor reported and how the
+        // network's 2/3-percentile consensus value was formed.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.execution_fee_reports (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            phase_number UInt32 CODEC(DoubleDelta, LZ4),
+            phase_tick UInt64 CODEC(DoubleDelta, LZ4),
+            computor_index UInt16 CODEC(LZ4),
+            contract_index UInt16 CODEC(LZ4),
+            reported_fee UInt64 CODEC(LZ4),
+            tx_hash String CODEC(LZ4HC),
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, phase_number, contract_index, computor_index)
+        """,
     ];
 
     /// <summary>

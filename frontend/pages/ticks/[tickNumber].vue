@@ -13,15 +13,32 @@ const txPage = ref(1)
 const logsPage = ref(1)
 const pageLimit = 20
 
-// Transaction filter state
-const txAddress = ref('')
-const txDirection = ref<'from' | 'to' | ''>('')
-const txMinAmount = ref<number | undefined>(undefined)
-const txExecuted = ref<boolean | undefined>(undefined)
-const txInputType = ref<number | undefined>(undefined)
-const txContractFilter = ref('')
-const showTxFilters = ref(false)
-const txMinAmountInput = ref('')
+// Transaction filter state — initialized from URL query params so deep-links
+// (e.g. from the execution-fees heatmap) land with the right filter applied.
+const q = route.query
+const parseBool = (v: unknown): boolean | undefined => v === 'true' ? true : v === 'false' ? false : undefined
+const parseNum = (v: unknown): number | undefined => {
+  if (typeof v !== 'string' && typeof v !== 'number') return undefined
+  const n = Number(v)
+  return Number.isFinite(n) ? n : undefined
+}
+
+const txAddress = ref(typeof q.address === 'string' ? q.address : '')
+const txDirection = ref<'from' | 'to' | ''>(q.direction === 'from' || q.direction === 'to' ? q.direction : '')
+const txMinAmount = ref<number | undefined>(parseNum(q.minAmount))
+const txExecuted = ref<boolean | undefined>(parseBool(q.executed))
+const txInputType = ref<number | undefined>(parseNum(q.inputType))
+const txContractFilter = ref(typeof q.contract === 'string' ? q.contract : (q.coreOnly === 'true' ? 'core' : ''))
+// Auto-expand the filter panel if any deep-link filters are active so the user
+// can immediately see what's being applied.
+const hasInitialFilters = txAddress.value !== ''
+  || txDirection.value !== ''
+  || txMinAmount.value !== undefined
+  || txExecuted.value !== undefined
+  || txInputType.value !== undefined
+  || txContractFilter.value !== ''
+const showTxFilters = ref(hasInitialFilters)
+const txMinAmountInput = ref(txMinAmount.value !== undefined ? String(txMinAmount.value) : '')
 
 // Contract list with addresses (fetched from labels API)
 const contracts = ref<Array<{ index: number; name: string; address: string }>>([])
