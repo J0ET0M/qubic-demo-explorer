@@ -937,106 +937,113 @@ const showClusters = ref(true)
             </div>
           </div>
 
-          <!-- Custom hover read-out (instant, no native title delay) -->
-          <div class="text-xs text-foreground-muted mb-2 h-5">
-            <template v-if="heatmapHover">
-              <span class="text-foreground font-mono">
-                Computor #{{ heatmapHover.computorIndex }}:
-              </span>
-              <span v-if="heatmapHover.fee !== null" class="ml-1 font-mono">
-                {{ heatmapHover.fee.toLocaleString() }} qus
-              </span>
-              <span v-else class="ml-1 italic">no report</span>
-            </template>
-            <span v-else>Hover a cell for details.</span>
-          </div>
+          <!-- Side-by-side on xl screens, stacked below.
+               Heatmap takes ~2x the width of the cluster panel. -->
+          <div class="grid grid-cols-1 xl:grid-cols-[1fr_minmax(280px,360px)] gap-6 items-start">
+            <!-- Left: heatmap (larger, fills available space) -->
+            <div class="min-w-0">
+              <!-- Custom hover read-out (instant, no native title delay) -->
+              <div class="text-xs text-foreground-muted mb-2 h-5">
+                <template v-if="heatmapHover">
+                  <span class="text-foreground font-mono">
+                    Computor #{{ heatmapHover.computorIndex }}:
+                  </span>
+                  <span v-if="heatmapHover.fee !== null" class="ml-1 font-mono">
+                    {{ heatmapHover.fee.toLocaleString() }} qus (click to open transaction)
+                  </span>
+                  <span v-else class="ml-1 italic">no report</span>
+                </template>
+                <span v-else>Hover a cell for details.</span>
+              </div>
 
-          <div
-            class="grid gap-[2px]"
-            style="grid-template-columns: repeat(38, minmax(0, 1fr));"
-            @mouseleave="heatmapHover = null"
-          >
-            <template v-for="cell in heatmapData" :key="cell.computorIndex">
-              <NuxtLink
-                v-if="heatmapCellLink(cell.computorIndex, cell.fee)"
-                :to="heatmapCellLink(cell.computorIndex, cell.fee)!"
-                class="aspect-square rounded-sm cursor-pointer hover:ring-2 hover:ring-accent transition-all"
-                :style="{
-                  backgroundColor: cell.color,
-                  boxShadow: showClusters && computorToCluster.get(cell.computorIndex) !== undefined
-                    ? `inset 0 0 0 1px ${clusterColor(computorToCluster.get(cell.computorIndex)!)}`
-                    : undefined
-                }"
-                @mouseenter="heatmapHover = { computorIndex: cell.computorIndex, fee: cell.fee }"
-              />
               <div
-                v-else
-                class="aspect-square rounded-sm cursor-help"
-                :style="{ backgroundColor: cell.color }"
-                @mouseenter="heatmapHover = { computorIndex: cell.computorIndex, fee: cell.fee }"
-              />
-            </template>
-          </div>
-          <p class="text-xs text-foreground-muted mt-3">
-            One cell per computor (0..675). Color = fee value (green→red). Grey = no report.
-            <strong>Click a colored cell</strong> to view that computor's fee-report transaction in this tick.
-          </p>
-
-          <!-- Cluster analysis -->
-          <div v-if="heatmapClusters && heatmapClusters.length > 1" class="mt-5">
-            <div class="flex items-center justify-between mb-2">
-              <h3 class="text-sm font-semibold">
-                Vote Clusters
-                <span class="text-foreground-muted font-normal text-xs ml-1">
-                  · gap-based grouping (5% of range)
-                </span>
-              </h3>
-              <label class="flex items-center gap-1.5 text-xs text-foreground-muted cursor-pointer">
-                <input type="checkbox" v-model="showClusters" class="rounded" />
-                Outline on heatmap
-              </label>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              <div
-                v-for="c in heatmapClusters"
-                :key="c.index"
-                class="rounded p-2 border"
-                :style="{ borderColor: clusterColor(c.index), borderLeftWidth: '4px' }"
+                class="grid gap-[2px] w-full"
+                style="grid-template-columns: repeat(38, minmax(0, 1fr));"
+                @mouseleave="heatmapHover = null"
               >
-                <div class="flex items-center justify-between gap-2">
-                  <div class="flex items-center gap-2">
-                    <span
-                      class="inline-block w-2 h-2 rounded"
-                      :style="{ background: clusterColor(c.index) }"
-                    ></span>
-                    <span class="font-semibold text-sm">{{ c.count }} computors</span>
-                    <span v-if="c.isMajority" class="text-[10px] px-1.5 py-0.5 rounded bg-accent text-white">majority</span>
-                    <span v-if="c.containsAgreed" class="text-[10px] px-1.5 py-0.5 rounded bg-destructive text-white">agreed</span>
+                <template v-for="cell in heatmapData" :key="cell.computorIndex">
+                  <NuxtLink
+                    v-if="heatmapCellLink(cell.computorIndex, cell.fee)"
+                    :to="heatmapCellLink(cell.computorIndex, cell.fee)!"
+                    class="aspect-square rounded-sm cursor-pointer hover:ring-2 hover:ring-accent transition-all"
+                    :style="{
+                      backgroundColor: cell.color,
+                      boxShadow: showClusters && computorToCluster.get(cell.computorIndex) !== undefined
+                        ? `inset 0 0 0 1px ${clusterColor(computorToCluster.get(cell.computorIndex)!)}`
+                        : undefined
+                    }"
+                    @mouseenter="heatmapHover = { computorIndex: cell.computorIndex, fee: cell.fee }"
+                  />
+                  <div
+                    v-else
+                    class="aspect-square rounded-sm cursor-help"
+                    :style="{ backgroundColor: cell.color }"
+                    @mouseenter="heatmapHover = { computorIndex: cell.computorIndex, fee: cell.fee }"
+                  />
+                </template>
+              </div>
+              <p class="text-xs text-foreground-muted mt-3 max-w-xl">
+                One cell per computor (0..675). Color = fee value (green→red). Grey = no report.
+                <strong>Click a colored cell</strong> to view that computor's fee-report transaction.
+              </p>
+            </div>
+
+            <!-- Right: cluster analysis -->
+            <div v-if="heatmapClusters && heatmapClusters.length > 1" class="min-w-0">
+              <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <h3 class="text-sm font-semibold">
+                  Vote Clusters
+                  <span class="text-foreground-muted font-normal text-xs ml-1">
+                    · gap-based grouping (5% of range)
+                  </span>
+                </h3>
+                <label class="flex items-center gap-1.5 text-xs text-foreground-muted cursor-pointer">
+                  <input type="checkbox" v-model="showClusters" class="rounded" />
+                  Outline on heatmap
+                </label>
+              </div>
+              <div class="grid grid-cols-1 gap-2">
+                <div
+                  v-for="c in heatmapClusters"
+                  :key="c.index"
+                  class="rounded p-2 border"
+                  :style="{ borderColor: clusterColor(c.index), borderLeftWidth: '4px' }"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <span
+                        class="inline-block w-2 h-2 rounded"
+                        :style="{ background: clusterColor(c.index) }"
+                      ></span>
+                      <span class="font-semibold text-sm">{{ c.count }} computors</span>
+                      <span v-if="c.isMajority" class="text-[10px] px-1.5 py-0.5 rounded bg-accent text-white">majority</span>
+                      <span v-if="c.containsAgreed" class="text-[10px] px-1.5 py-0.5 rounded bg-destructive text-white">agreed</span>
+                    </div>
+                    <span class="text-xs text-foreground-muted">
+                      {{ ((c.count / heatmapStats!.reporters) * 100).toFixed(1) }}%
+                    </span>
                   </div>
-                  <span class="text-xs text-foreground-muted">
-                    {{ ((c.count / heatmapStats!.reporters) * 100).toFixed(1) }}%
-                  </span>
-                </div>
-                <div class="mt-1 font-mono text-xs">
-                  <template v-if="c.min === c.max">
-                    {{ c.min.toLocaleString() }} qus
-                  </template>
-                  <template v-else>
-                    {{ c.min.toLocaleString() }} — {{ c.max.toLocaleString() }} qus
-                    <span class="text-foreground-muted ml-1">(mean {{ c.mean.toLocaleString() }})</span>
-                  </template>
-                </div>
-                <div v-if="c.count <= 12" class="mt-1 text-[11px] text-foreground-muted">
-                  Computors:
-                  <span v-for="(cmp, i) in c.computors" :key="cmp">
-                    <span v-if="i > 0">, </span>#{{ cmp }}
-                  </span>
+                  <div class="mt-1 font-mono text-xs">
+                    <template v-if="c.min === c.max">
+                      {{ c.min.toLocaleString() }} qus
+                    </template>
+                    <template v-else>
+                      {{ c.min.toLocaleString() }} — {{ c.max.toLocaleString() }} qus
+                      <span class="text-foreground-muted ml-1">(mean {{ c.mean.toLocaleString() }})</span>
+                    </template>
+                  </div>
+                  <div v-if="c.count <= 12" class="mt-1 text-[11px] text-foreground-muted">
+                    Computors:
+                    <span v-for="(cmp, i) in c.computors" :key="cmp">
+                      <span v-if="i > 0">, </span>#{{ cmp }}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-          <div v-else-if="heatmapClusters?.length === 1" class="mt-3 text-xs text-foreground-muted">
-            All {{ heatmapClusters[0].count }} reporting computors agree (single cluster).
+            <div v-else-if="heatmapClusters?.length === 1" class="text-xs text-foreground-muted self-center">
+              All {{ heatmapClusters[0].count }} reporting computors agree (single cluster).
+            </div>
           </div>
         </div>
       </template>
