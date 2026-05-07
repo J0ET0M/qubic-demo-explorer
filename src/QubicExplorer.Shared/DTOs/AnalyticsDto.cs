@@ -996,5 +996,12 @@ public record ExecutionFeePhaseDetailDto(
     uint Epoch,
     uint PhaseNumber,
     ulong PhaseTick,
-    List<ExecutionFeePhaseSummaryDto> Contracts
+    List<ExecutionFeePhaseSummaryDto> Contracts,
+    List<PhaseInputTypeCountDto>? TxCountsByInputType = null
+);
+
+public record PhaseInputTypeCountDto(
+    int InputType,
+    long TotalCount,
+    long ExecutedCount
 );

@@ -1,4 +1,7 @@
 using System.Data;
+using System.IO;
+using System.Net.Http;
+using System.Net.Sockets;
 using ClickHouse.Client.ADO;
 using ClickHouse.Client.Copy;
 using Microsoft.Extensions.Options;
@@ -44,6 +47,43 @@ public class ClickHouseWriterService : IDisposable
         await _connection.OpenAsync(cancellationToken);
         _logger.LogInformation("Connected to ClickHouse at {Host}:{Port}/{Database}",
             _options.Host, _options.Port, _options.Database);
+    }
+
+    /// <summary>
+    /// Ensure the ClickHouse connection is open. Handles connection-reset / idle-drop
+    /// scenarios by disposing the dead connection and creating a fresh one. Without
+    /// this, every retry after a server-side reset would reuse the dead socket and
+    /// fail with "Connection reset by peer" forever.
+    /// </summary>
+    private async Task EnsureConnectionOpenAsync(CancellationToken cancellationToken)
+    {
+        if (_connection != null && _connection.State == ConnectionState.Open)
+            return;
+
+        if (_connection != null)
+        {
+            try { await _connection.CloseAsync(); } catch { }
+            try { _connection.Dispose(); } catch { }
+        }
+
+        _logger.LogWarning("Reopening ClickHouse connection (was {State})",
+            _connection?.State.ToString() ?? "null");
+        _connection = new ClickHouseConnection(_options.ConnectionString);
+        await _connection.OpenAsync(cancellationToken);
+        _logger.LogInformation("ClickHouse connection reopened");
+    }
+
+    /// <summary>
+    /// Force reconnect on next call to EnsureConnectionOpenAsync. Use after a
+    /// transport error (HttpRequestException / SocketException) — the connection
+    /// may still report Open while the underlying socket is dead.
+    /// </summary>
+    private void InvalidateConnection()
+    {
+        if (_connection == null) return;
+        try { _connection.Close(); } catch { }
+        try { _connection.Dispose(); } catch { }
+        _connection = null;
     }
 
     private async Task EnsureSchemaAsync(CancellationToken cancellationToken)
@@ -228,12 +268,15 @@ public class ClickHouseWriterService : IDisposable
 
         for (var attempt = 1; attempt <= maxRetries; attempt++)
         {
+            // Reconnect if the connection isn't open (Bob server restart, idle drop, etc.)
+            await EnsureConnectionOpenAsync(cancellationToken);
+
             try
             {
                 // Insert ticks
                 if (_tickBatch.Count > 0)
                 {
-                    using var bulkCopy = new ClickHouseBulkCopy(_connection)
+                    using var bulkCopy = new ClickHouseBulkCopy(_connection!)
                     {
                         DestinationTableName = "ticks",
                         BatchSize = _tickBatch.Count
@@ -246,7 +289,7 @@ public class ClickHouseWriterService : IDisposable
                 // Insert transactions
                 if (_transactionBatch.Count > 0)
                 {
-                    using var bulkCopy = new ClickHouseBulkCopy(_connection)
+                    using var bulkCopy = new ClickHouseBulkCopy(_connection!)
                     {
                         DestinationTableName = "transactions",
                         BatchSize = _transactionBatch.Count
@@ -259,7 +302,7 @@ public class ClickHouseWriterService : IDisposable
                 // Insert logs
                 if (_logBatch.Count > 0)
                 {
-                    using var bulkCopy = new ClickHouseBulkCopy(_connection)
+                    using var bulkCopy = new ClickHouseBulkCopy(_connection!)
                     {
                         DestinationTableName = "logs",
                         BatchSize = _logBatch.Count,
@@ -296,6 +339,14 @@ public class ClickHouseWriterService : IDisposable
             }
             catch (Exception ex) when (attempt < maxRetries)
             {
+                // Transport errors (Connection reset, Broken pipe) leave the connection
+                // in a bad state even if .State == Open. Drop it so the next attempt
+                // creates a fresh one.
+                if (IsTransportError(ex))
+                {
+                    InvalidateConnection();
+                }
+
                 var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt)); // Exponential backoff: 2s, 4s, 8s
                 _logger.LogWarning(ex,
                     "Failed to flush batches (attempt {Attempt}/{MaxRetries}), retrying in {Delay}s...",
@@ -304,6 +355,7 @@ public class ClickHouseWriterService : IDisposable
             }
             catch (Exception ex)
             {
+                if (IsTransportError(ex)) InvalidateConnection();
                 _logger.LogCritical(ex,
                     "CRITICAL: Failed to flush batches after {MaxRetries} attempts. " +
                     "Batch contained {TickCount} ticks, {TxCount} transactions, {LogCount} logs (last tick: {LastTick})",
@@ -311,6 +363,15 @@ public class ClickHouseWriterService : IDisposable
                 throw;
             }
         }
+    }
+
+    private static bool IsTransportError(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is HttpRequestException or IOException or SocketException) return true;
+        }
+        return false;
     }
 
     private static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);

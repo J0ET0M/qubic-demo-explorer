@@ -1132,6 +1132,13 @@ interface ExecutionFeePhaseDetailDto {
   phaseNumber: number
   phaseTick: number
   contracts: ExecutionFeePhaseSummaryDto[]
+  txCountsByInputType?: PhaseInputTypeCountDto[] | null
+}
+
+interface PhaseInputTypeCountDto {
+  inputType: number
+  totalCount: number
+  executedCount: number
 }
 
 // Rich list

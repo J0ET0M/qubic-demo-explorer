@@ -6198,7 +6198,41 @@ public class ClickHouseQueryService : IDisposable
                 r.ContractIndex, r.Min, r.Max, r.Avg, r.Median, r.Agreed, r.ReportCount, reports));
         }
 
-        return new ExecutionFeePhaseDetailDto(epoch, phaseNumber, phaseTick, contracts);
+        // Tx counts by input_type for the 676-tick window of this phase.
+        // The publication tick (phaseTick) is the last tick of the phase,
+        // so the window is [phaseTick - 675 .. phaseTick] inclusive.
+        var txCountsByInputType = new List<PhaseInputTypeCountDto>();
+        if (phaseTick >= 675)
+        {
+            var windowStart = phaseTick - 675;
+            await using var txCmd = _connection.CreateCommand();
+            txCmd.CommandText = $@"
+                SELECT
+                    input_type,
+                    count() AS total_count,
+                    countIf(executed = 1) AS executed_count
+                FROM transactions
+                WHERE epoch = {{epoch:UInt32}}
+                  AND tick_number >= {{tickFrom:UInt64}}
+                  AND tick_number <= {{tickTo:UInt64}}
+                GROUP BY input_type
+                ORDER BY total_count DESC";
+            AddParam(txCmd, "epoch", epoch);
+            AddParam(txCmd, "tickFrom", windowStart);
+            AddParam(txCmd, "tickTo", phaseTick);
+
+            await using var reader = await txCmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                txCountsByInputType.Add(new PhaseInputTypeCountDto(
+                    reader.GetFieldValue<ushort>(0),
+                    Convert.ToInt64(reader.GetValue(1)),
+                    Convert.ToInt64(reader.GetValue(2))
+                ));
+            }
+        }
+
+        return new ExecutionFeePhaseDetailDto(epoch, phaseNumber, phaseTick, contracts, txCountsByInputType);
     }
 
     /// <summary>

@@ -68,6 +68,24 @@ const phaseTimestampByPhase = computed(() => {
   return m
 })
 
+// Core input-type labels (matching the tick-page list). Used to label the
+// "tx counts by input type" panel in the per-phase detail view.
+const coreInputTypeLabels: Record<number, string> = {
+  0: 'Transfer',
+  1: 'Vote Counter',
+  2: 'Mining Solution',
+  3: 'File Header',
+  4: 'File Fragment',
+  5: 'File Trailer',
+  6: 'Oracle Reply Commit',
+  7: 'Oracle Reply Reveal',
+  8: 'Mining Share Counter',
+  9: 'Execution Fee Report',
+  10: 'Oracle User Query',
+}
+
+const inputTypeLabel = (it: number): string => coreInputTypeLabels[it] ?? `Type ${it}`
+
 const formatTimestamp = (iso: string | null | undefined): string => {
   if (!iso) return ''
   const d = new Date(iso)
@@ -866,6 +884,45 @@ const showClusters = ref(true)
         <div class="text-xs text-foreground-muted mb-2">
           Phase {{ phaseDetail.phaseNumber }} (publication tick {{ phaseDetail.phaseTick.toLocaleString() }}) ·
           {{ phaseDetail.contracts.length }} contracts
+        </div>
+
+        <!-- Tx counts by input_type for the 676-tick phase window -->
+        <div v-if="phaseDetail.txCountsByInputType?.length" class="mb-4 p-3 bg-surface-elevated rounded-lg">
+          <div class="text-xs font-semibold text-foreground mb-2">
+            Transactions in this phase window
+            <span class="text-foreground-muted font-normal">
+              (ticks {{ (phaseDetail.phaseTick - 675).toLocaleString() }}..{{ phaseDetail.phaseTick.toLocaleString() }})
+            </span>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Input type</th>
+                  <th class="text-right">Total</th>
+                  <th class="text-right">Executed</th>
+                  <th class="text-right">Failed</th>
+                  <th class="text-right">Exec %</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in phaseDetail.txCountsByInputType" :key="row.inputType">
+                  <td>
+                    <span class="text-xs text-foreground-muted mr-2">#{{ row.inputType }}</span>
+                    {{ inputTypeLabel(row.inputType) }}
+                  </td>
+                  <td class="text-right">{{ row.totalCount.toLocaleString() }}</td>
+                  <td class="text-right text-success">{{ row.executedCount.toLocaleString() }}</td>
+                  <td class="text-right text-destructive">
+                    {{ (row.totalCount - row.executedCount).toLocaleString() }}
+                  </td>
+                  <td class="text-right text-foreground-muted">
+                    {{ row.totalCount === 0 ? '—' : ((row.executedCount / row.totalCount) * 100).toFixed(1) + '%' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
         <div class="table-wrapper">
           <table>
