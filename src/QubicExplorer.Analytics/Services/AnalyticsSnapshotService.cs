@@ -111,6 +111,9 @@ public class AnalyticsSnapshotService : BackgroundService
                     await RunStepAsync("Execution fee reports", _options.EnableExecutionFees,
                         () => PersistExecutionFeeReportsAsync(scope, currentEpoch.Value, stoppingToken));
 
+                    await RunStepAsync("Oracle events + aggregates", _options.EnableOracleEvents,
+                        () => PersistOracleEventsAsync(scope, currentEpoch.Value, stoppingToken));
+
                     await RunStepAsync("Custom flow jobs", _options.EnableCustomFlowJobs, () =>
                     {
                         var customFlowService = scope.ServiceProvider.GetRequiredService<CustomFlowTrackingService>();
@@ -767,6 +770,45 @@ public class AnalyticsSnapshotService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error persisting execution fee reports");
+        }
+    }
+
+    private async Task PersistOracleEventsAsync(IServiceScope scope, uint currentEpoch, CancellationToken ct)
+    {
+        try
+        {
+            var eventService = scope.ServiceProvider.GetRequiredService<OracleEventService>();
+            var aggregateService = scope.ServiceProvider.GetRequiredService<OracleAggregateService>();
+
+            // 1. Drain raw events
+            var totalEvents = 0;
+            var passes = 0;
+            while (!ct.IsCancellationRequested)
+            {
+                var (events, hasMore) = await eventService.ProcessAsync(currentEpoch, ct);
+                totalEvents += events;
+                passes++;
+                if (!hasMore) break;
+                await Task.Delay(500, ct);
+            }
+            if (totalEvents > 0)
+                _logger.LogInformation(
+                    "Oracle events: persisted {Events} events across {Passes} pass(es)",
+                    totalEvents, passes);
+
+            // 2. Build aggregates for any completed epoch we haven't aggregated yet
+            var epochsAggregated = 0;
+            while (!ct.IsCancellationRequested && await aggregateService.ProcessNextEpochAsync(currentEpoch, ct))
+            {
+                epochsAggregated++;
+                await Task.Delay(100, ct);
+            }
+            if (epochsAggregated > 0)
+                _logger.LogInformation("Oracle aggregates: built {Count} epoch(s)", epochsAggregated);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error persisting oracle events / aggregates");
         }
     }
 }

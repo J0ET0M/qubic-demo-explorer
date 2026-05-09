@@ -78,6 +78,12 @@ builder.Services.AddSingleton<RewardDistributionPersistenceService>();
 // ExecutionFeeReportService - parses input_type=9 transactions into execution_fee_reports
 builder.Services.AddSingleton<ExecutionFeeReportService>();
 
+// OracleEventService - parses input_type=6/7 transactions into oracle_query_events
+builder.Services.AddSingleton<OracleEventService>();
+
+// OracleAggregateService - builds long-term oracle aggregates for completed epochs
+builder.Services.AddSingleton<OracleAggregateService>();
+
 // Analytics feature toggles
 builder.Services.Configure<QubicExplorer.Analytics.Configuration.AnalyticsOptions>(
     builder.Configuration.GetSection(QubicExplorer.Analytics.Configuration.AnalyticsOptions.SectionName));

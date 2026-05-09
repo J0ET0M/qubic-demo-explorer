@@ -902,6 +902,65 @@ public static class ClickHouseSchema
         PARTITION BY epoch
         ORDER BY (epoch, phase_number, contract_index, computor_index)
         """,
+
+        // Oracle query events — raw per-event log of oracle reply commits/reveals.
+        // Parsed from input_type 6 (commit, multi-item) and 7 (reveal) transactions.
+        // Used to analyze who-committed-when per query (the "race" for oracle revenue
+        // points). Heavy table — pruned via the pruner DropPartitions rule beyond
+        // currentEpoch-5; aggregate tables retain the long-term per-epoch summary.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.oracle_query_events (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            query_id UInt64 CODEC(LZ4),
+            computor_index UInt16 CODEC(LZ4),
+            event_type UInt8 CODEC(LZ4),         -- 0=commit, 1=reveal
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            timestamp DateTime64(3) CODEC(Delta, LZ4),
+            tx_hash String CODEC(LZ4HC),
+            reply_digest String CODEC(LZ4HC),    -- 64 hex chars for commits, '' for reveals
+            knowledge_proof String CODEC(LZ4HC), -- 64 hex chars for commits, '' for reveals
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, query_id, event_type, computor_index, tick_number)
+        """,
+
+        // Oracle query summary — one row per (epoch, query_id). Built from
+        // oracle_query_events at end-of-epoch (or on-demand for current epoch).
+        // Kept forever even after raw events are pruned.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.oracle_query_summary (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            query_id UInt64 CODEC(LZ4),
+            first_commit_tick UInt64 CODEC(DoubleDelta, LZ4),
+            last_commit_tick UInt64 CODEC(DoubleDelta, LZ4),
+            quorum_cutoff_tick UInt64 CODEC(DoubleDelta, LZ4),  -- tick at which 451st commit landed (0 if quorum not reached)
+            total_commits UInt32 CODEC(LZ4),
+            total_reveals UInt32 CODEC(LZ4),
+            commits_in_quorum UInt32 CODEC(LZ4),    -- typically 451 + ties at the cutoff tick
+            unique_committors UInt32 CODEC(LZ4),
+            aggregated_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(aggregated_at)
+        PARTITION BY toYYYYMM(aggregated_at)
+        ORDER BY (epoch, query_id)
+        """,
+
+        // Oracle computor summary — one row per (epoch, computor_index).
+        // Built from oracle_query_events at end-of-epoch. Kept forever.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.oracle_computor_summary (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            computor_index UInt16 CODEC(LZ4),
+            commit_count UInt32 CODEC(LZ4),
+            reveal_count UInt32 CODEC(LZ4),
+            estimated_points UInt32 CODEC(LZ4),     -- queries where this computor was within the in-quorum cutoff
+            avg_tick_offset Float32 CODEC(LZ4),     -- avg ticks behind the first commit per query (lower = faster)
+            participations UInt32 CODEC(LZ4),       -- distinct queries the computor committed to
+            aggregated_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(aggregated_at)
+        PARTITION BY toYYYYMM(aggregated_at)
+        ORDER BY (epoch, computor_index)
+        """,
     ];
 
     /// <summary>
@@ -924,7 +983,8 @@ public static class ClickHouseSchema
                 tx_count_filtered UInt32 CODEC(LZ4),
                 log_count UInt32 CODEC(LZ4),
                 log_count_filtered UInt32 CODEC(LZ4),
-                created_at DateTime64(3) DEFAULT now64(3)
+                created_at DateTime64(3) DEFAULT now64(3),
+                is_empty UInt8 DEFAULT 0 CODEC(LZ4)
             ) ENGINE = ReplacingMergeTree(created_at)
             PARTITION BY epoch
             ORDER BY tick_number
@@ -1031,6 +1091,124 @@ public static class ClickHouseSchema
     ];
 
     /// <summary>
+    /// Materialized views that need to be dropped before migrating tables they reference.
+    /// They will be recreated by the application's schema bootstrap on next startup.
+    /// </summary>
+    private static readonly string[] MaterializedViewsToDrop =
+    [
+        "daily_tx_volume", "hourly_activity", "epoch_tx_stats",
+        "epoch_sender_stats", "epoch_receiver_stats",
+        "mv_address_first_seen_from", "mv_address_first_seen_to",
+        "daily_log_stats", "epoch_transfer_stats", "epoch_transfer_by_type",
+        "epoch_tick_stats", "epoch_tx_size_stats", "daily_tx_size_stats"
+    ];
+
+    /// <summary>
+    /// Per-table secondary indexes that need to be re-added after the rename swap.
+    /// Maps table name -> list of ALTER TABLE ADD INDEX statements.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string[]> GetSecondaryIndexesByTable() =>
+        new Dictionary<string, string[]>
+        {
+            ["transactions"] =
+            [
+                $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_from from_address TYPE bloom_filter GRANULARITY 4;",
+                $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_to to_address TYPE bloom_filter GRANULARITY 4;",
+                $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_hash hash TYPE bloom_filter GRANULARITY 4;",
+            ],
+            ["logs"] =
+            [
+                $"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_source source_address TYPE bloom_filter GRANULARITY 4;",
+                $"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_dest dest_address TYPE bloom_filter GRANULARITY 4;",
+                $"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_type log_type TYPE set(20) GRANULARITY 4;",
+                $"ALTER TABLE {DatabaseName}.logs ADD INDEX IF NOT EXISTS idx_tx_hash tx_hash TYPE bloom_filter GRANULARITY 4;",
+            ],
+            ["balance_snapshots"] =
+            [
+                $"ALTER TABLE {DatabaseName}.balance_snapshots ADD INDEX IF NOT EXISTS idx_address address TYPE bloom_filter GRANULARITY 4;",
+            ],
+            ["flow_hops"] =
+            [
+                $"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_emission_epoch emission_epoch TYPE minmax GRANULARITY 4;",
+                $"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_origin origin_address TYPE bloom_filter GRANULARITY 4;",
+                $"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_dest dest_address TYPE bloom_filter GRANULARITY 4;",
+                $"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_origin_type origin_type TYPE set(10) GRANULARITY 4;",
+                $"ALTER TABLE {DatabaseName}.flow_hops ADD INDEX IF NOT EXISTS idx_flow_dest_type dest_type TYPE set(10) GRANULARITY 4;",
+            ],
+            ["flow_tracking_state"] =
+            [
+                $"ALTER TABLE {DatabaseName}.flow_tracking_state ADD INDEX IF NOT EXISTS idx_fts_pending (emission_epoch, is_complete) TYPE set(2) GRANULARITY 4;",
+            ],
+        };
+
+    /// <summary>
+    /// Generates one self-contained migration script per table, plus a prelude that drops MVs.
+    /// Each table script: CREATE _new, INSERT SELECT, RENAME swap, ADD INDEXes, optional DROP _old (commented).
+    /// Designed to be run sequentially with disk reclamation between tables.
+    /// </summary>
+    public static IReadOnlyList<(string FileName, string Content)> GenerateMigrationScriptsPerTable()
+    {
+        var files = new List<(string, string)>();
+        var indexesByTable = GetSecondaryIndexesByTable();
+
+        // 00: prelude — drop MVs (they reference the tables being migrated)
+        var prelude = new System.Text.StringBuilder();
+        prelude.AppendLine("-- =============================================================");
+        prelude.AppendLine("-- 00 — Drop materialized views");
+        prelude.AppendLine("-- Run this FIRST. MVs will be recreated by the indexer on next startup.");
+        prelude.AppendLine("-- =============================================================");
+        foreach (var mv in MaterializedViewsToDrop)
+        {
+            prelude.AppendLine($"DROP VIEW IF EXISTS {DatabaseName}.{mv};");
+        }
+        files.Add(("00_drop_mvs.sql", prelude.ToString()));
+
+        // 01..NN: one script per table
+        var tables = GetPartitionMigrations();
+        for (int i = 0; i < tables.Count; i++)
+        {
+            var (tableName, createDdl) = tables[i];
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("-- =============================================================");
+            sb.AppendLine($"-- {(i + 1):D2} — Migrate {tableName}");
+            sb.AppendLine("-- Steps: CREATE _new -> INSERT SELECT -> RENAME swap -> ADD INDEXes");
+            sb.AppendLine("-- After verifying counts, uncomment the DROP at the bottom to free disk.");
+            sb.AppendLine("-- =============================================================");
+            sb.AppendLine();
+            sb.AppendLine($"-- 1. Create the new partitioned table");
+            sb.AppendLine($"{createDdl.TrimEnd()};");
+            sb.AppendLine();
+            sb.AppendLine($"-- 2. Copy data (this is the long step)");
+            sb.AppendLine($"INSERT INTO {DatabaseName}.{tableName}_new SELECT * FROM {DatabaseName}.{tableName};");
+            sb.AppendLine();
+            sb.AppendLine($"-- 3. Atomic swap: original -> _old, _new -> active");
+            sb.AppendLine($"RENAME TABLE {DatabaseName}.{tableName} TO {DatabaseName}.{tableName}_old, {DatabaseName}.{tableName}_new TO {DatabaseName}.{tableName};");
+            sb.AppendLine();
+
+            if (indexesByTable.TryGetValue(tableName, out var indexes) && indexes.Length > 0)
+            {
+                sb.AppendLine($"-- 4. Re-add secondary indexes");
+                foreach (var idx in indexes)
+                {
+                    sb.AppendLine(idx);
+                }
+                sb.AppendLine();
+            }
+
+            sb.AppendLine($"-- 5. Verify counts match before dropping the old table:");
+            sb.AppendLine($"--    SELECT count() FROM {DatabaseName}.{tableName};");
+            sb.AppendLine($"--    SELECT count() FROM {DatabaseName}.{tableName}_old;");
+            sb.AppendLine();
+            sb.AppendLine($"-- 6. Once verified, uncomment to free disk space:");
+            sb.AppendLine($"-- DROP TABLE IF EXISTS {DatabaseName}.{tableName}_old;");
+
+            files.Add(($"{(i + 1):D2}_{tableName}.sql", sb.ToString()));
+        }
+
+        return files;
+    }
+
+    /// <summary>
     /// Generates the full migration SQL script for an existing database.
     /// This migrates tables to use PARTITION BY, codecs, and TTL.
     /// IMPORTANT: Run during a maintenance window - the INSERT SELECTs can take time on large tables.
@@ -1051,15 +1229,7 @@ public static class ClickHouseSchema
 
         // Step 1: Drop materialized views that reference the tables being migrated
         sb.AppendLine("-- Step 1: Drop materialized views (they reference old tables)");
-        var mvsToRecreate = new[]
-        {
-            "daily_tx_volume", "hourly_activity", "epoch_tx_stats",
-            "epoch_sender_stats", "epoch_receiver_stats",
-            "mv_address_first_seen_from", "mv_address_first_seen_to",
-            "daily_log_stats", "epoch_transfer_stats", "epoch_transfer_by_type",
-            "epoch_tick_stats", "epoch_tx_size_stats", "daily_tx_size_stats"
-        };
-        foreach (var mv in mvsToRecreate)
+        foreach (var mv in MaterializedViewsToDrop)
         {
             sb.AppendLine($"DROP VIEW IF EXISTS {DatabaseName}.{mv};");
         }

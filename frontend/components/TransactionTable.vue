@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { TransactionDto } from '~/composables/useApi'
+import { getProcedureSchema, getContractSchema } from '~/utils/contractInputDecoder'
 
 const props = defineProps<{
   transactions: TransactionDto[]
@@ -17,6 +18,40 @@ watch(() => props.transactions, async (txs) => {
 
 const { formatVolume, truncateHash, formatDateTime } = useFormatting()
 const truncateHashShort = (hash: string) => hash.slice(0, 6) + '...'
+
+// Resolve a human-readable name for a transaction. Priority:
+//   1. Backend-provided inputTypeName (set for core txs to the burn address).
+//   2. inputType === 0 → "Transfer".
+//   3. toAddress maps to a known contract (via label cache) and inputType matches a known procedure.
+//   4. Fallback: "Type N".
+// Returns { label, title } so callers can render a short label with a longer tooltip.
+const txTypeInfo = (tx: TransactionDto): { label: string; title: string } => {
+  if (tx.inputTypeName) {
+    return { label: tx.inputTypeName, title: `Core: ${tx.inputTypeName} (type ${tx.inputType})` }
+  }
+  if (tx.inputType === 0) {
+    return { label: 'Transfer', title: 'Standard QU transfer' }
+  }
+  const lbl = getLabel(tx.toAddress)
+  const idx = lbl?.contractIndex ?? null
+  if (idx !== null && idx !== undefined) {
+    const proc = getProcedureSchema(idx, tx.inputType)
+    const contract = getContractSchema(idx)
+    if (proc) {
+      return {
+        label: proc.name,
+        title: `${contract?.name ?? `Contract ${idx}`}.${proc.name} (type ${tx.inputType})`
+      }
+    }
+    if (contract) {
+      return {
+        label: `${contract.name} #${tx.inputType}`,
+        title: `${contract.name} unknown procedure ${tx.inputType}`
+      }
+    }
+  }
+  return { label: `Type ${tx.inputType}`, title: `Unknown input type ${tx.inputType}` }
+}
 </script>
 
 <template>
@@ -30,6 +65,7 @@ const truncateHashShort = (hash: string) => hash.slice(0, 6) + '...'
           <th class="hide-mobile">Time</th>
           <th>From</th>
           <th>To</th>
+          <th class="hide-mobile">Type</th>
           <th>Amount</th>
           <th class="hide-mobile">Status</th>
         </tr>
@@ -88,6 +124,9 @@ const truncateHashShort = (hash: string) => hash.slice(0, 6) + '...'
                 short
               />
             </span>
+          </td>
+          <td class="hide-mobile text-foreground-muted text-xs">
+            <span :title="txTypeInfo(tx).title" class="font-mono">{{ txTypeInfo(tx).label }}</span>
           </td>
           <td class="amount">{{ formatVolume(tx.amount) }}</td>
           <td class="hide-mobile">

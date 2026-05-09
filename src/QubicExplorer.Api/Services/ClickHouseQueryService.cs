@@ -6388,4 +6388,585 @@ public class ClickHouseQueryService : IDisposable
 
         return new TickVoteCompareResponseDto(epoch, indices, ticks, computors, sum);
     }
+
+    // =====================================================
+    // ORACLE REVENUE ANALYTICS
+    // =====================================================
+    private const int OracleQuorum = 451;
+
+    /// <summary>
+    /// Whether raw oracle events still exist for this epoch (i.e. not yet pruned).
+    /// Used by all oracle endpoints to decide between raw computation vs aggregate fallback.
+    /// </summary>
+    private async Task<bool> OracleRawEventsAvailableAsync(uint epoch, CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"SELECT count() FROM oracle_query_events WHERE epoch = {{epoch:UInt32}} LIMIT 1";
+        AddParam(cmd, "epoch", epoch);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(result) > 0;
+    }
+
+    public async Task<OracleEpochSummaryDto> GetOracleEpochSummaryAsync(uint epoch, CancellationToken ct = default)
+    {
+        // Try aggregates first
+        long totalQueries = 0, totalCommits = 0, totalReveals = 0;
+        var computors = new List<OracleComputorEntryDto>();
+
+        await using (var aggCmd = _connection.CreateCommand())
+        {
+            aggCmd.CommandText = $@"
+                SELECT computor_index, commit_count, reveal_count, estimated_points, avg_tick_offset, participations
+                FROM oracle_computor_summary FINAL
+                WHERE epoch = {{epoch:UInt32}}
+                ORDER BY estimated_points DESC, computor_index ASC";
+            AddParam(aggCmd, "epoch", epoch);
+
+            await using var reader = await aggCmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                computors.Add(new OracleComputorEntryDto(
+                    reader.GetFieldValue<ushort>(0),
+                    Convert.ToInt64(reader.GetValue(1)),
+                    Convert.ToInt64(reader.GetValue(2)),
+                    Convert.ToInt64(reader.GetValue(3)),
+                    Convert.ToDouble(reader.GetValue(4)),
+                    Convert.ToInt64(reader.GetValue(5))
+                ));
+            }
+        }
+
+        var fromAggregates = computors.Count > 0;
+
+        if (fromAggregates)
+        {
+            // Pull totals from query summary
+            await using var qCmd = _connection.CreateCommand();
+            qCmd.CommandText = $@"
+                SELECT count() AS qs, sum(total_commits) AS c, sum(total_reveals) AS r
+                FROM oracle_query_summary FINAL
+                WHERE epoch = {{epoch:UInt32}}";
+            AddParam(qCmd, "epoch", epoch);
+            await using var reader = await qCmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                totalQueries = Convert.ToInt64(reader.GetValue(0));
+                totalCommits = Convert.ToInt64(reader.GetValue(1));
+                totalReveals = Convert.ToInt64(reader.GetValue(2));
+            }
+        }
+        else
+        {
+            // Compute on the fly from raw events (current epoch path)
+            (totalQueries, totalCommits, totalReveals, computors) = await ComputeOracleEpochSummaryFromRawAsync(epoch, ct);
+        }
+
+        return new OracleEpochSummaryDto(
+            epoch, totalQueries, totalCommits, totalReveals, fromAggregates, computors);
+    }
+
+    private async Task<(long Queries, long Commits, long Reveals, List<OracleComputorEntryDto> Computors)>
+        ComputeOracleEpochSummaryFromRawAsync(uint epoch, CancellationToken ct)
+    {
+        long queries = 0, commits = 0, reveals = 0;
+        var computors = new List<OracleComputorEntryDto>();
+
+        // Totals
+        await using (var totalsCmd = _connection.CreateCommand())
+        {
+            totalsCmd.CommandText = $@"
+                SELECT
+                    uniqExactIf(query_id, event_type = 0) AS queries,
+                    countIf(event_type = 0) AS commits,
+                    countIf(event_type = 1) AS reveals
+                FROM oracle_query_events
+                WHERE epoch = {{epoch:UInt32}}";
+            AddParam(totalsCmd, "epoch", epoch);
+            await using var reader = await totalsCmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                queries = Convert.ToInt64(reader.GetValue(0));
+                commits = Convert.ToInt64(reader.GetValue(1));
+                reveals = Convert.ToInt64(reader.GetValue(2));
+            }
+        }
+
+        // Per-computor stats with on-the-fly quorum cutoff per query
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $@"
+                WITH per_query AS (
+                    SELECT
+                        query_id,
+                        minIf(tick_number, event_type = 0) AS first_commit_tick,
+                        if(countIf(event_type = 0) >= {OracleQuorum},
+                           arrayElement(arraySort(groupArrayIf(tick_number, event_type = 0)), {OracleQuorum}),
+                           0) AS quorum_cutoff_tick
+                    FROM oracle_query_events
+                    WHERE epoch = {{epoch:UInt32}}
+                    GROUP BY query_id
+                )
+                SELECT
+                    e.computor_index,
+                    countIf(e.event_type = 0) AS commit_count,
+                    countIf(e.event_type = 1) AS reveal_count,
+                    countIf(e.event_type = 0 AND
+                            (q.quorum_cutoff_tick = 0 OR e.tick_number <= q.quorum_cutoff_tick)) AS estimated_points,
+                    avgIf(toFloat32(e.tick_number - q.first_commit_tick), e.event_type = 0) AS avg_offset,
+                    uniqExactIf(e.query_id, e.event_type = 0) AS participations
+                FROM oracle_query_events e
+                LEFT JOIN per_query AS q ON q.query_id = e.query_id
+                WHERE e.epoch = {{epoch:UInt32}}
+                GROUP BY e.computor_index
+                ORDER BY estimated_points DESC, e.computor_index ASC";
+            AddParam(cmd, "epoch", epoch);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                computors.Add(new OracleComputorEntryDto(
+                    reader.GetFieldValue<ushort>(0),
+                    Convert.ToInt64(reader.GetValue(1)),
+                    Convert.ToInt64(reader.GetValue(2)),
+                    Convert.ToInt64(reader.GetValue(3)),
+                    Convert.ToDouble(reader.GetValue(4)),
+                    Convert.ToInt64(reader.GetValue(5))
+                ));
+            }
+        }
+
+        return (queries, commits, reveals, computors);
+    }
+
+    public async Task<OracleQueryListDto> GetOracleQueryListAsync(
+        uint epoch, int limit, int offset, CancellationToken ct = default)
+    {
+        // Aggregates path
+        await using (var countCmd = _connection.CreateCommand())
+        {
+            countCmd.CommandText = $@"SELECT count() FROM oracle_query_summary FINAL WHERE epoch = {{epoch:UInt32}}";
+            AddParam(countCmd, "epoch", epoch);
+            var aggCount = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
+
+            if (aggCount > 0)
+            {
+                var items = new List<OracleQueryListEntryDto>();
+                await using var listCmd = _connection.CreateCommand();
+                listCmd.CommandText = $@"
+                    SELECT query_id, first_commit_tick, last_commit_tick, quorum_cutoff_tick,
+                           total_commits, total_reveals, commits_in_quorum, unique_committors
+                    FROM oracle_query_summary FINAL
+                    WHERE epoch = {{epoch:UInt32}}
+                    ORDER BY first_commit_tick DESC, query_id DESC
+                    LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+                AddParam(listCmd, "epoch", epoch);
+                AddParam(listCmd, "lim", (uint)limit);
+                AddParam(listCmd, "off", (uint)offset);
+
+                await using var reader = await listCmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    items.Add(new OracleQueryListEntryDto(
+                        reader.GetFieldValue<ulong>(0),
+                        reader.GetFieldValue<ulong>(1),
+                        reader.GetFieldValue<ulong>(2),
+                        reader.GetFieldValue<ulong>(3),
+                        Convert.ToInt64(reader.GetValue(4)),
+                        Convert.ToInt64(reader.GetValue(5)),
+                        Convert.ToInt64(reader.GetValue(6)),
+                        Convert.ToInt64(reader.GetValue(7))
+                    ));
+                }
+                return new OracleQueryListDto(epoch, aggCount, true, items);
+            }
+        }
+
+        // Compute on the fly from raw events
+        return await ComputeOracleQueryListFromRawAsync(epoch, limit, offset, ct);
+    }
+
+    private async Task<OracleQueryListDto> ComputeOracleQueryListFromRawAsync(
+        uint epoch, int limit, int offset, CancellationToken ct)
+    {
+        long total = 0;
+        await using (var countCmd = _connection.CreateCommand())
+        {
+            countCmd.CommandText = $@"
+                SELECT uniqExact(query_id) FROM oracle_query_events
+                WHERE epoch = {{epoch:UInt32}} AND event_type = 0";
+            AddParam(countCmd, "epoch", epoch);
+            total = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
+        }
+
+        var items = new List<OracleQueryListEntryDto>();
+        // Build groupings in a CTE so we can reference the sorted commit_ticks array
+        // multiple times (computing both quorum_cutoff_tick AND commits_in_quorum from it)
+        // without nesting aggregate functions.
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            WITH g AS (
+                SELECT
+                    query_id,
+                    minIf(tick_number, event_type = 0) AS first_commit_tick,
+                    maxIf(tick_number, event_type = 0) AS last_commit_tick,
+                    arraySort(groupArrayIf(tick_number, event_type = 0)) AS commit_ticks,
+                    countIf(event_type = 0) AS total_commits,
+                    countIf(event_type = 1) AS total_reveals,
+                    uniqExactIf(computor_index, event_type = 0) AS unique_committors
+                FROM oracle_query_events
+                WHERE epoch = {{epoch:UInt32}}
+                GROUP BY query_id
+            )
+            SELECT
+                query_id,
+                first_commit_tick,
+                last_commit_tick,
+                if(total_commits >= {OracleQuorum},
+                   arrayElement(commit_ticks, {OracleQuorum}),
+                   0) AS quorum_cutoff_tick,
+                total_commits,
+                total_reveals,
+                if(total_commits >= {OracleQuorum},
+                   arrayCount(t -> t <= arrayElement(commit_ticks, {OracleQuorum}), commit_ticks),
+                   total_commits) AS commits_in_quorum,
+                unique_committors
+            FROM g
+            ORDER BY first_commit_tick DESC, query_id DESC
+            LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "lim", (uint)limit);
+        AddParam(cmd, "off", (uint)offset);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            items.Add(new OracleQueryListEntryDto(
+                reader.GetFieldValue<ulong>(0),
+                reader.GetFieldValue<ulong>(1),
+                reader.GetFieldValue<ulong>(2),
+                reader.GetFieldValue<ulong>(3),
+                Convert.ToInt64(reader.GetValue(4)),
+                Convert.ToInt64(reader.GetValue(5)),
+                Convert.ToInt64(reader.GetValue(6)),
+                Convert.ToInt64(reader.GetValue(7))
+            ));
+        }
+
+        return new OracleQueryListDto(epoch, total, false, items);
+    }
+
+    public async Task<OracleQueryDetailDto?> GetOracleQueryDetailAsync(
+        uint epoch, ulong queryId, CancellationToken ct = default)
+    {
+        var hasRaw = await OracleRawEventsAvailableAsync(epoch, ct);
+
+        // Always pull the summary header (works for both aggregate and current-epoch paths
+        // — for current epoch we compute it from raw)
+        ulong firstCommit = 0, lastCommit = 0, cutoff = 0;
+        long totalCommits = 0, totalReveals = 0, commitsInQuorum = 0;
+
+        // Try aggregates first
+        await using (var sumCmd = _connection.CreateCommand())
+        {
+            sumCmd.CommandText = $@"
+                SELECT first_commit_tick, last_commit_tick, quorum_cutoff_tick,
+                       total_commits, total_reveals, commits_in_quorum
+                FROM oracle_query_summary FINAL
+                WHERE epoch = {{epoch:UInt32}} AND query_id = {{q:UInt64}}";
+            AddParam(sumCmd, "epoch", epoch);
+            AddParam(sumCmd, "q", queryId);
+            await using var reader = await sumCmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                firstCommit = reader.GetFieldValue<ulong>(0);
+                lastCommit = reader.GetFieldValue<ulong>(1);
+                cutoff = reader.GetFieldValue<ulong>(2);
+                totalCommits = Convert.ToInt64(reader.GetValue(3));
+                totalReveals = Convert.ToInt64(reader.GetValue(4));
+                commitsInQuorum = Convert.ToInt64(reader.GetValue(5));
+            }
+        }
+
+        // If summary missing AND raw available, compute from raw
+        if (totalCommits == 0 && hasRaw)
+        {
+            await using var rawCmd = _connection.CreateCommand();
+            rawCmd.CommandText = $@"
+                WITH g AS (
+                    SELECT
+                        minIf(tick_number, event_type = 0) AS first_commit_tick,
+                        maxIf(tick_number, event_type = 0) AS last_commit_tick,
+                        arraySort(groupArrayIf(tick_number, event_type = 0)) AS commit_ticks,
+                        countIf(event_type = 0) AS total_commits,
+                        countIf(event_type = 1) AS total_reveals
+                    FROM oracle_query_events
+                    WHERE epoch = {{epoch:UInt32}} AND query_id = {{q:UInt64}}
+                )
+                SELECT
+                    first_commit_tick, last_commit_tick,
+                    if(total_commits >= {OracleQuorum},
+                       arrayElement(commit_ticks, {OracleQuorum}), 0) AS quorum_cutoff_tick,
+                    total_commits, total_reveals,
+                    if(total_commits >= {OracleQuorum},
+                       arrayCount(t -> t <= arrayElement(commit_ticks, {OracleQuorum}), commit_ticks),
+                       total_commits) AS commits_in_quorum
+                FROM g";
+            AddParam(rawCmd, "epoch", epoch);
+            AddParam(rawCmd, "q", queryId);
+            await using var reader = await rawCmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                firstCommit = reader.IsDBNull(0) ? 0 : reader.GetFieldValue<ulong>(0);
+                lastCommit = reader.IsDBNull(1) ? 0 : reader.GetFieldValue<ulong>(1);
+                cutoff = reader.IsDBNull(2) ? 0 : reader.GetFieldValue<ulong>(2);
+                totalCommits = Convert.ToInt64(reader.GetValue(3));
+                totalReveals = Convert.ToInt64(reader.GetValue(4));
+                commitsInQuorum = Convert.ToInt64(reader.GetValue(5));
+            }
+        }
+
+        if (totalCommits == 0 && totalReveals == 0)
+            return null;
+
+        var tickHistogram = new List<OracleQueryTickHistogramDto>();
+        var computors = new List<OracleQueryComputorEntryDto>();
+
+        if (hasRaw)
+        {
+            // Tick histogram
+            await using (var histCmd = _connection.CreateCommand())
+            {
+                histCmd.CommandText = $@"
+                    SELECT tick_number, count() AS commit_count
+                    FROM oracle_query_events
+                    WHERE epoch = {{epoch:UInt32}} AND query_id = {{q:UInt64}} AND event_type = 0
+                    GROUP BY tick_number
+                    ORDER BY tick_number ASC";
+                AddParam(histCmd, "epoch", epoch);
+                AddParam(histCmd, "q", queryId);
+                await using var reader = await histCmd.ExecuteReaderAsync(ct);
+                long cum = 0;
+                while (await reader.ReadAsync(ct))
+                {
+                    var tick = reader.GetFieldValue<ulong>(0);
+                    var cnt = Convert.ToInt64(reader.GetValue(1));
+                    cum += cnt;
+                    tickHistogram.Add(new OracleQueryTickHistogramDto(tick, cnt, cum));
+                }
+            }
+
+            // Per-computor entries (commits joined with reveals by query+computor)
+            await using (var entriesCmd = _connection.CreateCommand())
+            {
+                entriesCmd.CommandText = $@"
+                    SELECT
+                        computor_index,
+                        anyIf(tick_number, event_type = 0) AS commit_tick,
+                        anyIf(tick_number, event_type = 1) AS reveal_tick,
+                        anyIf(tx_hash, event_type = 0) AS commit_tx_hash
+                    FROM oracle_query_events
+                    WHERE epoch = {{epoch:UInt32}} AND query_id = {{q:UInt64}}
+                    GROUP BY computor_index";
+                AddParam(entriesCmd, "epoch", epoch);
+                AddParam(entriesCmd, "q", queryId);
+
+                var raw = new List<(int Idx, ulong CommitTick, ulong RevealTick, string TxHash)>();
+                await using var reader = await entriesCmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    raw.Add((
+                        reader.GetFieldValue<ushort>(0),
+                        reader.IsDBNull(1) ? 0 : reader.GetFieldValue<ulong>(1),
+                        reader.IsDBNull(2) ? 0 : reader.GetFieldValue<ulong>(2),
+                        reader.IsDBNull(3) ? "" : reader.GetString(3)
+                    ));
+                }
+
+                // Sort by commit tick to compute rank (no commit → rank null, sort last)
+                var ranked = raw
+                    .Select((r, _) => r)
+                    .OrderBy(r => r.CommitTick == 0 ? ulong.MaxValue : r.CommitTick)
+                    .ThenBy(r => r.Idx)
+                    .ToList();
+
+                int rank = 0;
+                foreach (var r in ranked)
+                {
+                    int? rankOrNull = null;
+                    long? offsetOrNull = null;
+                    bool inQuorum = false;
+                    if (r.CommitTick != 0)
+                    {
+                        rank++;
+                        rankOrNull = rank;
+                        offsetOrNull = (long)(r.CommitTick - firstCommit);
+                        inQuorum = cutoff == 0 || r.CommitTick <= cutoff;
+                    }
+                    computors.Add(new OracleQueryComputorEntryDto(
+                        r.Idx,
+                        r.CommitTick == 0 ? null : r.CommitTick,
+                        r.RevealTick == 0 ? null : r.RevealTick,
+                        rankOrNull,
+                        inQuorum,
+                        offsetOrNull,
+                        string.IsNullOrEmpty(r.TxHash) ? null : r.TxHash
+                    ));
+                }
+            }
+        }
+
+        return new OracleQueryDetailDto(
+            epoch, queryId, firstCommit, lastCommit, cutoff,
+            totalCommits, totalReveals, commitsInQuorum,
+            hasRaw, tickHistogram, computors);
+    }
+
+    public async Task<OracleComputorProfileDto?> GetOracleComputorProfileAsync(
+        uint epoch, int computorIndex, int limit = 100, int offset = 0, CancellationToken ct = default)
+    {
+        // Try aggregate row first
+        long commits = 0, reveals = 0, points = 0, parts = 0;
+        double avgOffset = 0;
+        bool foundAgg = false;
+        await using (var aggCmd = _connection.CreateCommand())
+        {
+            aggCmd.CommandText = $@"
+                SELECT commit_count, reveal_count, estimated_points, avg_tick_offset, participations
+                FROM oracle_computor_summary FINAL
+                WHERE epoch = {{epoch:UInt32}} AND computor_index = {{c:UInt16}}";
+            AddParam(aggCmd, "epoch", epoch);
+            AddParam(aggCmd, "c", (ushort)computorIndex);
+            await using var reader = await aggCmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                commits = Convert.ToInt64(reader.GetValue(0));
+                reveals = Convert.ToInt64(reader.GetValue(1));
+                points = Convert.ToInt64(reader.GetValue(2));
+                avgOffset = Convert.ToDouble(reader.GetValue(3));
+                parts = Convert.ToInt64(reader.GetValue(4));
+                foundAgg = true;
+            }
+        }
+
+        var hasRaw = await OracleRawEventsAvailableAsync(epoch, ct);
+        var queries = new List<OracleComputorQueryEntryDto>();
+        long totalQueries = 0;
+
+        if (hasRaw)
+        {
+            // If no aggregate row, recompute the totals from raw too
+            if (!foundAgg)
+            {
+                await using var totalsCmd = _connection.CreateCommand();
+                totalsCmd.CommandText = $@"
+                    WITH per_query AS (
+                        SELECT
+                            query_id,
+                            minIf(tick_number, event_type = 0) AS first_commit_tick,
+                            if(countIf(event_type = 0) >= {OracleQuorum},
+                               arrayElement(arraySort(groupArrayIf(tick_number, event_type = 0)), {OracleQuorum}),
+                               0) AS quorum_cutoff_tick
+                        FROM oracle_query_events
+                        WHERE epoch = {{epoch:UInt32}}
+                        GROUP BY query_id
+                    )
+                    SELECT
+                        countIf(e.event_type = 0) AS commit_count,
+                        countIf(e.event_type = 1) AS reveal_count,
+                        countIf(e.event_type = 0 AND
+                                (q.quorum_cutoff_tick = 0 OR e.tick_number <= q.quorum_cutoff_tick)) AS estimated_points,
+                        avgIf(toFloat32(e.tick_number - q.first_commit_tick), e.event_type = 0) AS avg_offset,
+                        uniqExactIf(e.query_id, e.event_type = 0) AS participations
+                    FROM oracle_query_events e
+                    LEFT JOIN per_query AS q ON q.query_id = e.query_id
+                    WHERE e.epoch = {{epoch:UInt32}} AND e.computor_index = {{c:UInt16}}";
+                AddParam(totalsCmd, "epoch", epoch);
+                AddParam(totalsCmd, "c", (ushort)computorIndex);
+
+                await using var reader = await totalsCmd.ExecuteReaderAsync(ct);
+                if (await reader.ReadAsync(ct))
+                {
+                    commits = Convert.ToInt64(reader.GetValue(0));
+                    reveals = Convert.ToInt64(reader.GetValue(1));
+                    points = Convert.ToInt64(reader.GetValue(2));
+                    avgOffset = Convert.ToDouble(reader.GetValue(3));
+                    parts = Convert.ToInt64(reader.GetValue(4));
+                }
+            }
+
+            // Total count of distinct queries this computor committed in this epoch — used for paging.
+            await using (var countCmd = _connection.CreateCommand())
+            {
+                countCmd.CommandText = $@"
+                    SELECT uniqExact(query_id)
+                    FROM oracle_query_events
+                    WHERE epoch = {{epoch:UInt32}} AND computor_index = {{c:UInt16}} AND event_type = 0";
+                AddParam(countCmd, "epoch", epoch);
+                AddParam(countCmd, "c", (ushort)computorIndex);
+                var r = await countCmd.ExecuteScalarAsync(ct);
+                totalQueries = r == null || r == DBNull.Value ? 0 : Convert.ToInt64(r);
+            }
+
+            // Per-query rows for the computor (paged)
+            await using var perQ = _connection.CreateCommand();
+            perQ.CommandText = $@"
+                WITH per_query AS (
+                    SELECT
+                        query_id,
+                        minIf(tick_number, event_type = 0) AS first_commit_tick,
+                        if(countIf(event_type = 0) >= {OracleQuorum},
+                           arrayElement(arraySort(groupArrayIf(tick_number, event_type = 0)), {OracleQuorum}),
+                           0) AS quorum_cutoff_tick,
+                        groupArrayIf(tick_number, event_type = 0) AS commit_ticks
+                    FROM oracle_query_events
+                    WHERE epoch = {{epoch:UInt32}}
+                    GROUP BY query_id
+                ),
+                me AS (
+                    SELECT
+                        query_id,
+                        anyIf(tick_number, event_type = 0) AS my_commit_tick,
+                        anyIf(timestamp, event_type = 0) AS my_commit_timestamp
+                    FROM oracle_query_events
+                    WHERE epoch = {{epoch:UInt32}} AND computor_index = {{c:UInt16}} AND event_type = 0
+                    GROUP BY query_id
+                )
+                SELECT
+                    me.query_id,
+                    me.my_commit_tick,
+                    me.my_commit_timestamp,
+                    -- 1-based rank of my_commit_tick within sorted commit_ticks (count of strictly-earlier + 1)
+                    arrayCount(t -> t < me.my_commit_tick, p.commit_ticks) + 1 AS rank,
+                    p.quorum_cutoff_tick = 0 OR me.my_commit_tick <= p.quorum_cutoff_tick AS is_in_quorum,
+                    me.my_commit_tick - p.first_commit_tick AS ticks_after_first
+                FROM me
+                JOIN per_query AS p ON p.query_id = me.query_id
+                ORDER BY me.my_commit_tick DESC, me.query_id DESC
+                LIMIT {{limit:UInt32}} OFFSET {{offset:UInt32}}";
+            AddParam(perQ, "epoch", epoch);
+            AddParam(perQ, "c", (ushort)computorIndex);
+            AddParam(perQ, "limit", (uint)Math.Clamp(limit, 1, 1000));
+            AddParam(perQ, "offset", (uint)Math.Max(0, offset));
+
+            await using var reader2 = await perQ.ExecuteReaderAsync(ct);
+            while (await reader2.ReadAsync(ct))
+            {
+                queries.Add(new OracleComputorQueryEntryDto(
+                    reader2.GetFieldValue<ulong>(0),
+                    reader2.GetFieldValue<ulong>(1),
+                    reader2.GetFieldValue<DateTime>(2),
+                    Convert.ToInt32(reader2.GetValue(3)),
+                    Convert.ToInt32(reader2.GetValue(4)) != 0,
+                    Convert.ToInt64(reader2.GetValue(5))
+                ));
+            }
+        }
+
+        if (commits == 0 && reveals == 0 && !foundAgg)
+            return null;
+
+        return new OracleComputorProfileDto(
+            epoch, computorIndex, commits, reveals, points, avgOffset, parts,
+            hasRaw, totalQueries, queries);
+    }
 }

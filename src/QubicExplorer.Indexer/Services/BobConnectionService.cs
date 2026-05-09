@@ -42,11 +42,19 @@ public class BobConnectionService : IDisposable
     {
         _lastProcessedTick = startTick;
 
-        var effectiveNodes = _bobOptions.GetEffectiveNodes();
+        var allNodes = _bobOptions.GetEffectiveNodes().ToArray();
+        if (allNodes.Length == 0)
+            throw new InvalidOperationException("No Bob nodes configured");
 
-        var options = new BobWebSocketOptions
+        // Rotation offset — incremented every time a node fails so the next attempt
+        // starts with a different node. The client itself takes a list, but on
+        // Dispose+recreate it always starts at index 0, so we rotate the list
+        // ourselves to force trying the next node.
+        int rotation = 0;
+
+        BobWebSocketOptions BuildOptions(string[] nodes) => new()
         {
-            Nodes = effectiveNodes.ToArray(),
+            Nodes = nodes,
             ReconnectDelay = TimeSpan.FromMilliseconds(_bobOptions.ReconnectDelayMs),
             MaxReconnectDelay = TimeSpan.FromMilliseconds(_bobOptions.MaxReconnectDelayMs),
             OnConnectionEvent = e =>
@@ -58,7 +66,6 @@ public class BobConnectionService : IDisposable
                         break;
                     case BobConnectionEventType.Disconnected:
                         _logger.LogWarning("Disconnected from Bob node: {Url} - {Message}", e.NodeUrl, e.Message);
-                        // Cancel the subscription iterator so we can resubscribe
                         _disconnectCts?.Cancel();
                         break;
                     case BobConnectionEventType.Reconnecting:
@@ -71,18 +78,29 @@ public class BobConnectionService : IDisposable
             }
         };
 
+        string[] RotatedNodes()
+        {
+            var n = ((rotation % allNodes.Length) + allNodes.Length) % allNodes.Length;
+            return allNodes.Skip(n).Concat(allNodes.Take(n)).ToArray();
+        }
+
+        var rotatedNodes = RotatedNodes();
+        var options = BuildOptions(rotatedNodes);
         _bobClient = new BobWebSocketClient(options);
 
-        _logger.LogInformation("Connecting to Bob nodes: {Nodes}", string.Join(", ", effectiveNodes));
+        _logger.LogInformation("Configured Bob nodes: {Nodes}", string.Join(", ", allNodes));
 
         // Loop the initial connect with a hard timeout so a single hanging node
-        // doesn't block us forever. On timeout we cancel, dispose, and retry —
-        // the client will rotate to the next node in its list.
+        // doesn't block us forever. On timeout we rotate to the next node and retry.
         while (!cancellationToken.IsCancellationRequested)
         {
+            var attemptUrl = rotatedNodes[0];
+            _logger.LogInformation("Attempting Bob connection: {Url}", attemptUrl);
+
+            var connectTimeout = TimeSpan.FromSeconds(_bobOptions.ConnectTimeoutSeconds);
             try
             {
-                using var connectTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var connectTimeoutCts = new CancellationTokenSource(connectTimeout);
                 using var linkedConnectCts = CancellationTokenSource.CreateLinkedTokenSource(
                     cancellationToken, connectTimeoutCts.Token);
 
@@ -96,14 +114,32 @@ public class BobConnectionService : IDisposable
             }
             catch (OperationCanceledException)
             {
-                _logger.LogWarning("Bob connect timed out after 10s, retrying...");
+                rotation++;
+                rotatedNodes = RotatedNodes();
+                var nextUrl = rotatedNodes[0];
+                _logger.LogWarning(
+                    "Bob node {Failed} timed out after {Timeout}s, rotating to {Next}",
+                    attemptUrl, connectTimeout.TotalSeconds, nextUrl);
                 try { _bobClient.Dispose(); } catch { }
+                options = BuildOptions(rotatedNodes);
                 _bobClient = new BobWebSocketClient(options);
                 await Task.Delay(2000, cancellationToken);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Bob connect failed, retrying in 5s...");
+                rotation++;
+                rotatedNodes = RotatedNodes();
+                var nextUrl = rotatedNodes[0];
+                // Log full exception detail incl. inner — TLS / DNS / WebSocket errors
+                // come through here and are otherwise lost.
+                _logger.LogError(ex,
+                    "Bob node {Failed} connect failed: {ExType}: {Msg}{Inner}. Rotating to {Next} in 5s",
+                    attemptUrl, ex.GetType().Name, ex.Message,
+                    ex.InnerException is { } ie ? $" -> {ie.GetType().Name}: {ie.Message}" : "",
+                    nextUrl);
+                try { _bobClient.Dispose(); } catch { }
+                options = BuildOptions(rotatedNodes);
+                _bobClient = new BobWebSocketClient(options);
                 await Task.Delay(5000, cancellationToken);
             }
         }
@@ -197,11 +233,17 @@ public class BobConnectionService : IDisposable
             }
 
             // Hard-reset: if reconnection keeps failing, the client is stuck.
-            // Dispose it and create a fresh one so we get a new TCP+TLS+WS handshake.
+            // Dispose it, rotate to the next node, and create a fresh one.
             if (consecutiveFailures >= maxFailuresBeforeHardReset)
             {
-                _logger.LogWarning("Bob client stuck after {Count} failures, hard-resetting connection...", consecutiveFailures);
+                rotation++;
+                rotatedNodes = RotatedNodes();
+                var nextUrl = rotatedNodes[0];
+                _logger.LogWarning(
+                    "Bob client stuck after {Count} failures, hard-resetting and rotating to {Next}",
+                    consecutiveFailures, nextUrl);
                 try { _bobClient?.Dispose(); } catch { }
+                options = BuildOptions(rotatedNodes);
                 _bobClient = new BobWebSocketClient(options);
                 consecutiveFailures = 0;
 
@@ -219,7 +261,7 @@ public class BobConnectionService : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Hard-reset connect failed, retrying in 5s...");
+                    _logger.LogError(ex, "Hard-reset connect to {Url} failed, retrying in 5s", nextUrl);
                     await Task.Delay(5000, cancellationToken);
                 }
             }

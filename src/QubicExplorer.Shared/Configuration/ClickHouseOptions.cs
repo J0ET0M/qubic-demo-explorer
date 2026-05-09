@@ -45,6 +45,12 @@ public class BobOptions
 
     public int ReconnectDelayMs { get; set; } = 5000;
     public int MaxReconnectDelayMs { get; set; } = 60000;
+
+    /// <summary>
+    /// How long to wait for a single connect attempt before rotating to the next node.
+    /// Bumped from 10s default — TLS + WebSocket upgrade through some proxies can take longer.
+    /// </summary>
+    public int ConnectTimeoutSeconds { get; set; } = 30;
 }
 
 public class AddressLabelOptions

@@ -10,7 +10,7 @@
   <ItemGroup>
     <PackageReference Include="ClickHouse.Client" Version="7.14.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.3" />
-    <PackageReference Include="Qubic.Bob" Version="1.4.0" />
+    <PackageReference Include="Qubic.Bob" Version="1.4.1" />
     <PackageReference Include="Seq.Extensions.Logging" Version="9.0.0" />
   </ItemGroup>
 

@@ -72,6 +72,21 @@ public class PruneRule
     /// </summary>
     public bool PruneLogs { get; set; } = true;
 
+    // ── Whole-table partition drop mode ─────────────────────────────
+
+    /// <summary>
+    /// Drop entire epoch partitions from <see cref="Table"/> instead of running a
+    /// row-level mutation. Much faster for large tables that are partitioned by
+    /// epoch. Use for raw event tables (e.g. oracle_query_events) where keeping
+    /// individual rows past a retention window has no value.
+    /// </summary>
+    public bool DropPartitions { get; set; } = false;
+
+    /// <summary>
+    /// Target table name when <see cref="DropPartitions"/> is true.
+    /// </summary>
+    public string? Table { get; set; }
+
     /// <summary>
     /// Whether this is a log-only rule (no transaction conditions, only LogType).
     /// </summary>

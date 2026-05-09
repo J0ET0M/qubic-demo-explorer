@@ -568,6 +568,86 @@ public class StatsController : ControllerBase
     // EXECUTION FEE REPORTS
     // =====================================================
 
+    // =====================================================
+    // ORACLE REVENUE ANALYTICS
+    // =====================================================
+
+    [HttpGet("oracle/{epoch:int}")]
+    public async Task<IActionResult> GetOracleEpochSummary(uint epoch, CancellationToken ct = default)
+    {
+        var ttl = await GetOracleTtlAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:oracle:{epoch}",
+            ttl,
+            () => _queryService.GetOracleEpochSummaryAsync(epoch, ct));
+        return Ok(result);
+    }
+
+    [HttpGet("oracle/{epoch:int}/queries")]
+    public async Task<IActionResult> GetOracleQueryList(
+        uint epoch,
+        [FromQuery] int limit = 50,
+        [FromQuery] int offset = 0,
+        CancellationToken ct = default)
+    {
+        if (limit < 1 || limit > 500) limit = 50;
+        if (offset < 0) offset = 0;
+
+        var ttl = await GetOracleTtlAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:oracle:{epoch}:queries:{limit}:{offset}",
+            ttl,
+            () => _queryService.GetOracleQueryListAsync(epoch, limit, offset, ct));
+        return Ok(result);
+    }
+
+    [HttpGet("oracle/{epoch:int}/query/{queryId:long}")]
+    public async Task<IActionResult> GetOracleQueryDetail(
+        uint epoch, long queryId, CancellationToken ct = default)
+    {
+        if (queryId < 0) return BadRequest("queryId must be non-negative");
+
+        var ttl = await GetOracleTtlAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:oracle:{epoch}:query:{queryId}",
+            ttl,
+            () => _queryService.GetOracleQueryDetailAsync(epoch, (ulong)queryId, ct));
+        if (result == null) return NotFound();
+        return Ok(result);
+    }
+
+    [HttpGet("oracle/{epoch:int}/computor/{computorIndex:int}")]
+    public async Task<IActionResult> GetOracleComputorProfile(
+        uint epoch, int computorIndex,
+        [FromQuery] int limit = 100, [FromQuery] int offset = 0,
+        CancellationToken ct = default)
+    {
+        if (computorIndex < 0 || computorIndex >= 676)
+            return BadRequest("computorIndex out of range");
+        if (limit < 1 || limit > 1000) return BadRequest("limit must be 1..1000");
+        if (offset < 0) return BadRequest("offset must be >= 0");
+
+        var ttl = await GetOracleTtlAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:oracle:{epoch}:computor:{computorIndex}:{limit}:{offset}",
+            ttl,
+            () => _queryService.GetOracleComputorProfileAsync(epoch, computorIndex, limit, offset, ct));
+        if (result == null) return NotFound();
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// 10 minutes for the current epoch (events still arriving),
+    /// 24 hours for completed epochs (immutable).
+    /// </summary>
+    private async Task<TimeSpan> GetOracleTtlAsync(uint epoch, CancellationToken ct)
+    {
+        var currentEpoch = await _queryService.GetCurrentEpochAsync(ct);
+        return currentEpoch.HasValue && epoch >= currentEpoch.Value
+            ? TimeSpan.FromMinutes(10)
+            : TimeSpan.FromHours(24);
+    }
+
     [HttpGet("execution-fees/{epoch:int}")]
     public async Task<IActionResult> GetExecutionFeeSummary(uint epoch, CancellationToken ct = default)
     {

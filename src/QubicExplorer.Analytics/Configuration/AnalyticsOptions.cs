@@ -21,5 +21,6 @@ public class AnalyticsOptions
     public bool EnableTickVotes { get; set; } = true;
     public bool EnableRewardDistributions { get; set; } = true;
     public bool EnableExecutionFees { get; set; } = true;
+    public bool EnableOracleEvents { get; set; } = true;
     public bool EnableCustomFlowJobs { get; set; } = true;
 }

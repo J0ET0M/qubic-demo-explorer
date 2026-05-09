@@ -161,6 +161,12 @@ public class PrunerService : BackgroundService
     private async Task PruneEpochAsync(
         ClickHouseConnection connection, PruneRule rule, uint epoch, CancellationToken ct)
     {
+        if (rule.DropPartitions)
+        {
+            await DropPartitionAsync(connection, rule, epoch, ct);
+            return;
+        }
+
         if (rule.IsLogOnly)
         {
             await PruneLogsOnlyAsync(connection, rule, epoch, ct);
@@ -220,6 +226,49 @@ public class PrunerService : BackgroundService
             $"ALTER TABLE transactions DELETE WHERE {whereClause}", ct);
 
         _logger.LogInformation("Rule '{Rule}' epoch {Epoch}: deletion mutations submitted", rule.Name, epoch);
+    }
+
+    private async Task DropPartitionAsync(
+        ClickHouseConnection connection, PruneRule rule, uint epoch, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(rule.Table))
+        {
+            _logger.LogWarning("Rule '{Rule}': DropPartitions=true but Table not set, skipping", rule.Name);
+            return;
+        }
+
+        // Quick row count for visibility (skipped on dry-run errors silently)
+        long rowCount = -1;
+        try
+        {
+            await using var countCmd = connection.CreateCommand();
+            countCmd.CommandText = $"SELECT count() FROM {rule.Table} WHERE epoch = {epoch}";
+            rowCount = Convert.ToInt64(await countCmd.ExecuteScalarAsync(ct));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Rule '{Rule}': could not count partition for epoch {Epoch}", rule.Name, epoch);
+        }
+
+        if (rowCount == 0)
+        {
+            _logger.LogDebug("Rule '{Rule}' epoch {Epoch}: empty partition, skipping", rule.Name, epoch);
+            return;
+        }
+
+        if (_options.DryRun)
+        {
+            _logger.LogInformation("[DRY RUN] Rule '{Rule}' epoch {Epoch}: would DROP PARTITION from {Table} (~{Rows} rows)",
+                rule.Name, epoch, rule.Table, rowCount);
+            return;
+        }
+
+        _logger.LogInformation("Rule '{Rule}' epoch {Epoch}: DROP PARTITION from {Table} (~{Rows} rows)",
+            rule.Name, epoch, rule.Table, rowCount);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"ALTER TABLE {rule.Table} DROP PARTITION {epoch}";
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     private async Task PruneLogsOnlyAsync(

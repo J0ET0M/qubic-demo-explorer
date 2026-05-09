@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace QubicExplorer.Shared.DTOs;
 
 /// <summary>
@@ -1004,4 +1006,96 @@ public record PhaseInputTypeCountDto(
     int InputType,
     long TotalCount,
     long ExecutedCount
+);
+
+// ── Oracle revenue analytics ──────────────────────────────────────────
+
+public record OracleComputorEntryDto(
+    int ComputorIndex,
+    long Commits,
+    long Reveals,
+    long EstimatedPoints,
+    double AvgTickOffset,
+    long Participations
+);
+
+public record OracleEpochSummaryDto(
+    uint Epoch,
+    long TotalQueries,
+    long TotalCommits,
+    long TotalReveals,
+    bool DataFromAggregates,
+    List<OracleComputorEntryDto> Computors
+);
+
+public record OracleQueryListEntryDto(
+    // Serialized as a JSON string — values exceed JS Number.MAX_SAFE_INTEGER (~2^53)
+    // because queryId = (tick << 31) | txIndex, and tick alone is already in the tens of millions.
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString)] ulong QueryId,
+    ulong FirstCommitTick,
+    ulong LastCommitTick,
+    ulong QuorumCutoffTick,
+    long TotalCommits,
+    long TotalReveals,
+    long CommitsInQuorum,
+    long UniqueCommittors
+);
+
+public record OracleQueryListDto(
+    uint Epoch,
+    long TotalCount,
+    bool DataFromAggregates,
+    List<OracleQueryListEntryDto> Items
+);
+
+public record OracleQueryComputorEntryDto(
+    int ComputorIndex,
+    ulong? CommitTick,
+    ulong? RevealTick,
+    int? Rank,           // 1-based rank by commit tick (null if no commit)
+    bool IsInQuorum,     // true if commit tick <= quorum_cutoff_tick (or quorum not reached)
+    long? TicksAfterFirst,
+    string? CommitTxHash
+);
+
+public record OracleQueryTickHistogramDto(
+    ulong Tick,
+    long CommitCount,
+    long CumulativeCount
+);
+
+public record OracleQueryDetailDto(
+    uint Epoch,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString)] ulong QueryId,
+    ulong FirstCommitTick,
+    ulong LastCommitTick,
+    ulong QuorumCutoffTick,
+    long TotalCommits,
+    long TotalReveals,
+    long CommitsInQuorum,
+    bool RawEventsAvailable,    // false if events have been pruned for this epoch
+    List<OracleQueryTickHistogramDto> TickHistogram,
+    List<OracleQueryComputorEntryDto> Computors
+);
+
+public record OracleComputorQueryEntryDto(
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString)] ulong QueryId,
+    ulong CommitTick,
+    DateTime CommitTimestamp,
+    int Rank,
+    bool IsInQuorum,
+    long TicksAfterFirst
+);
+
+public record OracleComputorProfileDto(
+    uint Epoch,
+    int ComputorIndex,
+    long Commits,
+    long Reveals,
+    long EstimatedPoints,
+    double AvgTickOffset,
+    long Participations,
+    bool RawEventsAvailable,
+    long TotalQueries,
+    List<OracleComputorQueryEntryDto> Queries
 );

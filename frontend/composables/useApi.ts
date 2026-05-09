@@ -370,6 +370,23 @@ export const useApi = () => {
   }
 
   // Execution fee reports
+  // Oracle revenue analytics
+  const getOracleEpochSummary = (epoch: number) =>
+    fetchApi<OracleEpochSummaryDto>(`/api/stats/oracle/${epoch}`)
+
+  const getOracleQueryList = (epoch: number, limit = 50, offset = 0) =>
+    fetchApi<OracleQueryListDto>(`/api/stats/oracle/${epoch}/queries?limit=${limit}&offset=${offset}`)
+
+  const getOracleQueryDetail = (epoch: number, queryId: string | number) =>
+    fetchApi<OracleQueryDetailDto>(`/api/stats/oracle/${epoch}/query/${queryId}`)
+
+  const getOracleComputorProfile = (
+    epoch: number, computorIndex: number, limit = 100, offset = 0
+  ) =>
+    fetchApi<OracleComputorProfileDto>(
+      `/api/stats/oracle/${epoch}/computor/${computorIndex}?limit=${limit}&offset=${offset}`
+    )
+
   const getExecutionFeeSummary = (epoch: number) =>
     fetchApi<ExecutionFeePhaseSummaryDto[]>(`/api/stats/execution-fees/${epoch}`)
 
@@ -491,6 +508,10 @@ export const useApi = () => {
     getExecutionFeeSummary,
     getExecutionFeeContract,
     getExecutionFeePhase,
+    getOracleEpochSummary,
+    getOracleQueryList,
+    getOracleQueryDetail,
+    getOracleComputorProfile,
     getMinerFlowStats,
     getComputors,
     getFlowVisualization,
@@ -1133,6 +1154,96 @@ interface ExecutionFeePhaseDetailDto {
   phaseTick: number
   contracts: ExecutionFeePhaseSummaryDto[]
   txCountsByInputType?: PhaseInputTypeCountDto[] | null
+}
+
+// ── Oracle revenue analytics ──────────────────────────────────────────
+
+interface OracleComputorEntryDto {
+  computorIndex: number
+  commits: number
+  reveals: number
+  estimatedPoints: number
+  avgTickOffset: number
+  participations: number
+}
+
+interface OracleEpochSummaryDto {
+  epoch: number
+  totalQueries: number
+  totalCommits: number
+  totalReveals: number
+  dataFromAggregates: boolean
+  computors: OracleComputorEntryDto[]
+}
+
+interface OracleQueryListEntryDto {
+  queryId: string         // ulong serializes as string in JSON.NET sometimes; treat as string-or-number
+  firstCommitTick: number
+  lastCommitTick: number
+  quorumCutoffTick: number
+  totalCommits: number
+  totalReveals: number
+  commitsInQuorum: number
+  uniqueCommittors: number
+}
+
+interface OracleQueryListDto {
+  epoch: number
+  totalCount: number
+  dataFromAggregates: boolean
+  items: OracleQueryListEntryDto[]
+}
+
+interface OracleQueryComputorEntryDto {
+  computorIndex: number
+  commitTick: number | null
+  revealTick: number | null
+  rank: number | null
+  isInQuorum: boolean
+  ticksAfterFirst: number | null
+  commitTxHash: string | null
+}
+
+interface OracleQueryTickHistogramDto {
+  tick: number
+  commitCount: number
+  cumulativeCount: number
+}
+
+interface OracleQueryDetailDto {
+  epoch: number
+  queryId: string
+  firstCommitTick: number
+  lastCommitTick: number
+  quorumCutoffTick: number
+  totalCommits: number
+  totalReveals: number
+  commitsInQuorum: number
+  rawEventsAvailable: boolean
+  tickHistogram: OracleQueryTickHistogramDto[]
+  computors: OracleQueryComputorEntryDto[]
+}
+
+interface OracleComputorQueryEntryDto {
+  queryId: string
+  commitTick: number
+  commitTimestamp: string
+  rank: number
+  isInQuorum: boolean
+  ticksAfterFirst: number
+}
+
+interface OracleComputorProfileDto {
+  epoch: number
+  computorIndex: number
+  commits: number
+  reveals: number
+  estimatedPoints: number
+  avgTickOffset: number
+  participations: number
+  rawEventsAvailable: boolean
+  totalQueries: number
+  queries: OracleComputorQueryEntryDto[]
 }
 
 interface PhaseInputTypeCountDto {

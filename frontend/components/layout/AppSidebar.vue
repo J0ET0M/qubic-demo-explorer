@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Blocks, ArrowLeftRight, Send, Calendar, Users, X, BarChart3, ChevronDown, ChevronRight, Pickaxe, Network, PanelLeftClose, PanelLeftOpen, PieChart, Building2, Cpu, TrendingUp, Flame, Radar, Crown, Coins, Fish, Gem, Star, Lock, Landmark, Monitor, Receipt } from 'lucide-vue-next'
+import { Blocks, ArrowLeftRight, Send, Calendar, Users, X, BarChart3, ChevronDown, ChevronRight, Pickaxe, Network, PanelLeftClose, PanelLeftOpen, PieChart, Building2, Cpu, TrendingUp, Flame, Radar, Crown, Coins, Fish, Gem, Star, Lock, Landmark, Monitor, Receipt, Database } from 'lucide-vue-next'
 
 const APP_VERSION = '0.1.0'
 
@@ -53,6 +53,7 @@ const navItems: NavItem[] = [
       { label: 'CCF', path: '/analytics/ccf', icon: Landmark },
       { label: 'Computors', path: '/analytics/computors', icon: Monitor },
       { label: 'Execution Fees', path: '/analytics/execution-fees', icon: Receipt },
+      { label: 'Oracle Revenue', path: '/analytics/oracle-revenue', icon: Database },
     ]
   },
   { label: 'Assets', path: '/assets', icon: Gem },
