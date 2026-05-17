@@ -1,4 +1,4 @@
-// Service Worker for QLI Explorer Push Notifications
+// Service Worker for QLI Analytics Push Notifications
 // This runs in the background even when the browser tab is closed.
 
 self.addEventListener('install', (event) => {
@@ -17,7 +17,7 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data.json()
   } catch {
-    data = { title: 'QLI Explorer', body: event.data.text() }
+    data = { title: 'QLI Analytics', body: event.data.text() }
   }
 
   const options = {
@@ -31,7 +31,7 @@ self.addEventListener('push', (event) => {
   }
 
   event.waitUntil(
-    self.registration.showNotification(data.title || 'QLI Explorer', options)
+    self.registration.showNotification(data.title || 'QLI Analytics', options)
   )
 })
 

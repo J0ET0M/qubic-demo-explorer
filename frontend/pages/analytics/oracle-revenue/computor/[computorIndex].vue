@@ -79,7 +79,17 @@ watch([computorIndex, epochParam], () => { page.value = 0 })
 
     <template v-else-if="profile">
       <div class="card">
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
+          <div
+            class="rounded p-2 bg-surface-elevated"
+            :title="`V2 oracle revenue factor (0..1024). Quorum threshold (rank 451) = ${profile.quorumScore.toLocaleString()} estimated points. Mirrors qubic core ComputeRevFactor.`"
+          >
+            <div class="text-xs text-foreground-muted">Oracle factor</div>
+            <div class="font-mono font-bold text-lg" :class="profile.oracleFactor === 1024 ? 'text-success' : profile.oracleFactor === 0 ? 'text-destructive' : 'text-info'">
+              {{ profile.oracleFactor }}
+              <span class="text-foreground-muted text-xs">/ 1024</span>
+            </div>
+          </div>
           <div class="rounded p-2 bg-surface-elevated">
             <div class="text-xs text-foreground-muted">Estimated points</div>
             <div class="font-mono text-success font-bold text-lg">{{ profile.estimatedPoints.toLocaleString() }}</div>

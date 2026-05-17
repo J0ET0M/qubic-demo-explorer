@@ -126,7 +126,7 @@ watchEffect(() => {
       <NuxtLink to="/" class="flex items-center gap-2.5 min-w-0" @click="emit('close')">
         <img src="/logo.svg" alt="QLI" class="h-7 w-auto shrink-0" />
         <span v-if="!isCollapsed" class="text-[0.9375rem] font-semibold text-foreground tracking-tight truncate">
-          QLI Explorer
+          QLI Analytics
         </span>
       </NuxtLink>
       <button
@@ -265,7 +265,7 @@ watchEffect(() => {
         :class="isCollapsed ? 'text-[0.5rem]' : 'text-[0.625rem]'"
       >
         <template v-if="isCollapsed">v{{ APP_VERSION }}</template>
-        <template v-else>QLI Explorer v{{ APP_VERSION }}</template>
+        <template v-else>QLI Analytics v{{ APP_VERSION }}</template>
       </a>
     </div>
   </aside>

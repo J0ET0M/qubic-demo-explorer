@@ -72,12 +72,12 @@ const breadcrumbs = computed<Breadcrumb[]>(() => {
     ]
   }
 
-  return [{ label: 'QLI Explorer' }]
+  return [{ label: 'QLI Analytics' }]
 })
 
 const pageTitle = computed(() => {
   const last = breadcrumbs.value[breadcrumbs.value.length - 1]
-  return last?.label || 'QLI Explorer'
+  return last?.label || 'QLI Analytics'
 })
 </script>
 

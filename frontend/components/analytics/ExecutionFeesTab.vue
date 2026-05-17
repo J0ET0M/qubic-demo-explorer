@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { Receipt, ListOrdered, Activity, Layers, Search, X } from 'lucide-vue-next'
+import { getProcedureSchema, getContractSchema } from '~/utils/contractInputDecoder'
 
 const api = useApi()
-const { formatAmount } = useFormatting()
+const { formatAmount, truncateAddress } = useFormatting()
+const { getLabel, fetchLabels } = useAddressLabels()
 
 // Default to current epoch
 const { data: epochCountdown } = await useAsyncData(
@@ -84,7 +86,50 @@ const coreInputTypeLabels: Record<number, string> = {
   10: 'Oracle User Query',
 }
 
-const inputTypeLabel = (it: number): string => coreInputTypeLabels[it] ?? `Type ${it}`
+// Qubic contract addresses self-encode the contract index in their first byte.
+// A contract address has the form: <single non-A first char> + 55 A's + 4-char
+// checksum (e.g. "BAAAAA...AARMID" = QX, contract index 1). Index 0 produces an
+// all-A public-key portion which is also the BURN address; we treat that as
+// "no contract" so the core-type fallback kicks in. Doesn't rely on label bundle.
+const contractIndexFromAddress = (addr: string): number | null => {
+  if (!addr || addr.length !== 60) return null
+  // chars 1..55 must all be 'A' for it to be a contract-form address
+  for (let i = 1; i < 56; i++) {
+    if (addr.charCodeAt(i) !== 65 /* 'A' */) return null
+  }
+  const c = addr.charCodeAt(0)
+  if (c < 65 || c > 90) return null
+  const idx = c - 65
+  return idx > 0 ? idx : null
+}
+
+// Resolve (toAddress, inputType) to a human-readable type. Priority:
+//   1. type 0 → Transfer (regardless of destination)
+//   2. destination is a contract address → contract.procedure (e.g. QX.RemoveFromAskOrder).
+//      Resolved via the address bytes; falls back to label bundle's contractIndex
+//      if the address shape isn't the canonical contract form.
+//   3. otherwise (destination is the burn address or unknown) → core type name
+//   4. fallback → "Type N"
+const phaseTypeInfo = (toAddress: string, inputType: number): { label: string; sub: string } => {
+  if (inputType === 0) return { label: 'Transfer', sub: '' }
+  const idx = contractIndexFromAddress(toAddress)
+            ?? (getLabel(toAddress)?.contractIndex ?? null)
+  if (idx !== null && idx !== undefined) {
+    const proc = getProcedureSchema(idx, inputType)
+    const contract = getContractSchema(idx)
+    if (proc) {
+      return { label: proc.name, sub: `${contract?.name ?? `Contract ${idx}`} · type ${inputType}` }
+    }
+    if (contract) {
+      return { label: `${contract.name} #${inputType}`, sub: `unknown procedure` }
+    }
+    return { label: `Type ${inputType}`, sub: `contract ${idx}` }
+  }
+  if (inputType in coreInputTypeLabels) {
+    return { label: coreInputTypeLabels[inputType], sub: `core · type ${inputType}` }
+  }
+  return { label: `Type ${inputType}`, sub: getLabel(toAddress)?.label ?? '' }
+}
 
 const formatTimestamp = (iso: string | null | undefined): string => {
   if (!iso) return ''
@@ -275,6 +320,15 @@ const phaseSearch = ref('')
 const showPhaseDD = ref(false)
 const phaseDetail = ref<Awaited<ReturnType<typeof api.getExecutionFeePhase>> | null>(null)
 const phaseLoading = ref(false)
+
+// Fetch labels for the toAddresses appearing in the phase tx-counts table so
+// the contract resolver in phaseTypeInfo (above) can map address → contract index.
+watch(() => phaseDetail.value?.txCountsByInputType, async (rows) => {
+  if (rows?.length) {
+    const addrs = Array.from(new Set(rows.map(r => r.toAddress).filter(Boolean)))
+    if (addrs.length) await fetchLabels(addrs)
+  }
+}, { immediate: true })
 
 const filteredPhases = computed(() => {
   if (!phaseSearch.value.trim()) return distinctPhases.value
@@ -898,7 +952,8 @@ const showClusters = ref(true)
             <table>
               <thead>
                 <tr>
-                  <th>Input type</th>
+                  <th>Destination</th>
+                  <th>Type</th>
                   <th class="text-right">Total</th>
                   <th class="text-right">Executed</th>
                   <th class="text-right">Failed</th>
@@ -906,10 +961,18 @@ const showClusters = ref(true)
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="row in phaseDetail.txCountsByInputType" :key="row.inputType">
+                <tr v-for="row in phaseDetail.txCountsByInputType" :key="`${row.toAddress}-${row.inputType}`">
+                  <td class="font-mono text-xs">
+                    <NuxtLink v-if="row.toAddress" :to="`/address/${row.toAddress}`" class="text-accent hover:underline">
+                      {{ getLabel(row.toAddress)?.label || truncateAddress(row.toAddress, 6) }}
+                    </NuxtLink>
+                    <span v-else class="text-foreground-muted italic">various</span>
+                  </td>
                   <td>
-                    <span class="text-xs text-foreground-muted mr-2">#{{ row.inputType }}</span>
-                    {{ inputTypeLabel(row.inputType) }}
+                    <div class="text-sm">{{ phaseTypeInfo(row.toAddress, row.inputType).label }}</div>
+                    <div v-if="phaseTypeInfo(row.toAddress, row.inputType).sub" class="text-[10px] text-foreground-muted">
+                      {{ phaseTypeInfo(row.toAddress, row.inputType).sub }}
+                    </div>
                   </td>
                   <td class="text-right">{{ row.totalCount.toLocaleString() }}</td>
                   <td class="text-right text-success">{{ row.executedCount.toLocaleString() }}</td>

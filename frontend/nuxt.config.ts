@@ -17,7 +17,7 @@ export default defineNuxtConfig({
   app: {
     pageTransition: { name: 'page', mode: 'out-in' },
     head: {
-      title: 'QLI Explorer',
+      title: 'QLI Analytics',
       htmlAttrs: {
         lang: 'en',
         class: 'dark'
@@ -25,7 +25,7 @@ export default defineNuxtConfig({
       meta: [
         { charset: 'utf-8' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-        { name: 'description', content: 'QLI Explorer - Explore Qubic blockchain ticks, transactions, transfers and addresses' },
+        { name: 'description', content: 'QLI Analytics - Explore Qubic blockchain ticks, transactions, transfers and addresses' },
         { name: 'theme-color', content: '#0f1117' }
       ],
       link: [

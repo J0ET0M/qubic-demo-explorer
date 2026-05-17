@@ -8,11 +8,18 @@ using QubicExplorer.Shared.Services;
 namespace QubicExplorer.Analytics.Services;
 
 /// <summary>
-/// Computes per-computor revenue for an epoch by replicating the C++ revenue calculation
-/// from the Qubic core (revenue.h). Uses three multiplicative score factors:
-/// TX points × vote points × custom mining points.
+/// Computes per-computor revenue for an epoch.
 ///
-/// Runs periodically in the Analytics service and persists results to ClickHouse.
+/// For epochs ≥ <see cref="RevenueV2Calculator.DefaultV2FromEpoch"/> (qubic core PR #829)
+/// uses the V2 additive-bonus formula: M = (17·tx + 3·oracle)/20 combined with a DOGE
+/// mining factor via revenue = IPC × M × (S² + B·E) / (S·(S+B)·S). TX uses a 1351-tick
+/// sliding window (per-tick log score normalised by window sum), oracle replaces vote
+/// (vote is kept only as a metric), and DOGE-only mining (XMR removed in PR #844).
+///
+/// For older epochs, computes the legacy V1 multiplicative formula
+/// (txFactor × voteFactor × miningFactor × IPC / S³).
+///
+/// Runs periodically in the Analytics service and persists to ClickHouse.
 /// </summary>
 public class ComputorRevenueService : IDisposable
 {
@@ -23,6 +30,7 @@ public class ComputorRevenueService : IDisposable
     private bool _disposed;
 
     private const ulong ScalingThreshold = (ulong)QubicConstants.RevenueScalingThreshold;
+    private const uint V2FromEpoch = RevenueV2Calculator.DefaultV2FromEpoch;
 
     public ComputorRevenueService(
         IOptions<ClickHouseOptions> options,
@@ -62,62 +70,173 @@ public class ComputorRevenueService : IDisposable
         }
 
         var addresses = computorsResult.Computors;
+        var useV2 = epoch >= V2FromEpoch;
 
-        // Calculate all three score types
-        var txScores = await CalculateTxScoresAsync(epoch, ct);
+        // V1 / shared score sources
+        var txScoresV1 = await CalculateTxScoresAsync(epoch, ct);
         var voteScores = await CalculateVoteScoresAsync(epoch, ct);
         var miningScores = await CalculateMiningScoresAsync(epoch, ct);
 
-        // Compute factors (replicates computeRevFactor from revenue.h)
-        var txQuorum = GetQuorumScore(txScores);
+        // V1 quorum + factors (kept for divergence monitoring; older epochs use this as "active").
+        var txQuorum = GetQuorumScore(txScoresV1);
         var voteQuorum = GetQuorumScore(voteScores);
-        var miningQuorum = GetQuorumScore(miningScores);
+        var miningQuorumV1 = GetQuorumScore(miningScores);
 
-        var txFactors = ComputeFactors(txScores, txQuorum);
-        var voteFactors = ComputeFactors(voteScores, voteQuorum);
-        var miningFactors = ComputeFactors(miningScores, miningQuorum);
+        var txFactorsV1 = ComputeFactors(txScoresV1, txQuorum);
+        var voteFactorsV1 = ComputeFactors(voteScores, voteQuorum);
+        var miningFactorsV1 = ComputeFactors(miningScores, miningQuorumV1);
 
-        // Compute per-computor revenue (replicates computeRevenue from revenue.h)
-        var revenues = new long[QubicConstants.NumberOfComputors];
-        long totalRevenue = 0;
+        // V1 revenue = (tx × vote × mining) × IPC / S³.
+        var revenuesV1 = new long[QubicConstants.NumberOfComputors];
         for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
         {
-            ulong combined = txFactors[i] * voteFactors[i] * miningFactors[i];
-            revenues[i] = (long)(combined * (ulong)QubicConstants.IssuancePerComputor
+            ulong combined = txFactorsV1[i] * voteFactorsV1[i] * miningFactorsV1[i];
+            revenuesV1[i] = (long)(combined * (ulong)QubicConstants.IssuancePerComputor
                 / ScalingThreshold / ScalingThreshold / ScalingThreshold);
-            totalRevenue += revenues[i];
         }
+
+        // V2 — sliding-window TX, oracle factor, DOGE-only mining, additive bonus formula.
+        // For epochs before V2FromEpoch we still compute V2 with what we have but don't make it active.
+        var (perTickTxCount, initialTick) = await GetPerTickTxCountsAsync(epoch, ct);
+        var oracleScores = await CalculateOracleScoresAsync(epoch, ct);
+
+        var txRevenuePoints = QubicConstants.TxRevenuePoints.ToArray();
+        var v2 = RevenueV2Calculator.Compute(
+            (long)initialTick, perTickTxCount, oracleScores, miningScores, txRevenuePoints);
+
+        // Quorum scores for the V2 inputs (sliding-window TX and oracle), reported at top level.
+        ulong slidingTxQuorum = ComputeQuorumScore(v2.SlidingWindowTxScoreFull);
+        ulong oracleQuorum = ComputeQuorumScore(oracleScores);
+        // For V2, mining is the same DOGE counter as V1 → reuse miningQuorumV1.
 
         // Build result entries
         var entries = new ComputorRevenueEntryDto[QubicConstants.NumberOfComputors];
+        long totalRevenue = 0;
         for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
         {
             var address = addresses[i];
+            long active = useV2 ? v2.Revenue[i] : revenuesV1[i];
+            totalRevenue += active;
+
             entries[i] = new ComputorRevenueEntryDto(
                 ComputorIndex: (ushort)i,
                 Address: address,
                 Label: _labelService.GetLabel(address),
-                TxScore: txScores[i],
+                TxScore: txScoresV1[i],
                 VoteScore: voteScores[i],
                 MiningScore: miningScores[i],
-                TxFactor: txFactors[i],
-                VoteFactor: voteFactors[i],
-                MiningFactor: miningFactors[i],
-                Revenue: revenues[i]
+                SlidingWindowTxScore: v2.SlidingWindowTxScoreFull[i],
+                OracleScore: oracleScores[i],
+                TxFactor: useV2 ? v2.TxFactor[i] : txFactorsV1[i],
+                VoteFactor: voteFactorsV1[i],
+                OracleFactor: v2.OracleFactor[i],
+                MiningFactor: useV2 ? v2.MiningFactor[i] : miningFactorsV1[i],
+                CombinedMandatoryFactor: v2.CombinedMandatoryFactor[i],
+                RevenueV1: revenuesV1[i],
+                RevenueV2: v2.Revenue[i],
+                RevenueFormula: useV2 ? 2 : 1,
+                Revenue: active
             );
         }
+
+        _logger.LogInformation(
+            "Revenue computed for epoch {Epoch}: useV2={UseV2}, totalRev={Total} (V1 sum={V1Sum}, V2 sum={V2Sum})",
+            epoch, useV2, totalRevenue, revenuesV1.Sum(), v2.Revenue.Sum());
 
         return new ComputorRevenueDto(
             Epoch: epoch,
             ComputorCount: QubicConstants.NumberOfComputors,
             IssuanceRate: QubicConstants.IssuanceRate,
-            TxQuorumScore: txQuorum,
+            TxQuorumScore: useV2 ? slidingTxQuorum : txQuorum,
             VoteQuorumScore: voteQuorum,
-            MiningQuorumScore: miningQuorum,
+            OracleQuorumScore: oracleQuorum,
+            MiningQuorumScore: miningQuorumV1,
+            ActiveFormula: useV2 ? 2 : 1,
             TotalComputorRevenue: totalRevenue,
             ArbRevenue: QubicConstants.IssuanceRate - totalRevenue,
             Computors: entries
         );
+    }
+
+    /// <summary>
+    /// Per-tick TX counts for the epoch range. Returns (counts, initialTick) where
+    /// counts is indexed by (tick - initialTick). Length = (latestTick - initialTick + 1).
+    /// </summary>
+    private async Task<(ushort[] PerTick, ulong InitialTick)> GetPerTickTxCountsAsync(uint epoch, CancellationToken ct)
+    {
+        // Get the epoch's initial tick (start of the window).
+        ulong initialTick = 0;
+        await using (var metaCmd = _connection.CreateCommand())
+        {
+            metaCmd.CommandText = $"SELECT initial_tick FROM epoch_meta FINAL WHERE epoch = {epoch}";
+            var r = await metaCmd.ExecuteScalarAsync(ct);
+            if (r != null && r != DBNull.Value)
+                initialTick = Convert.ToUInt64(r);
+        }
+
+        ulong maxTick = 0;
+        await using (var maxCmd = _connection.CreateCommand())
+        {
+            maxCmd.CommandText = $"SELECT max(tick_number) FROM ticks WHERE epoch = {epoch}";
+            var r = await maxCmd.ExecuteScalarAsync(ct);
+            if (r != null && r != DBNull.Value)
+                maxTick = Convert.ToUInt64(r);
+        }
+
+        if (initialTick == 0 || maxTick < initialTick)
+            return (Array.Empty<ushort>(), initialTick);
+
+        var totalTicks = (int)(maxTick - initialTick + 1);
+        var perTick = new ushort[totalTicks];
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"SELECT tick_number, tx_count FROM ticks WHERE epoch = {epoch} AND is_empty = 0 AND tx_count > 0";
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var t = reader.GetFieldValue<ulong>(0);
+            var c = reader.GetFieldValue<uint>(1);
+            int idx = (int)(t - initialTick);
+            if (idx >= 0 && idx < totalTicks)
+                perTick[idx] = (ushort)Math.Min(c, ushort.MaxValue);
+        }
+
+        return (perTick, initialTick);
+    }
+
+    /// <summary>
+    /// Per-computor oracle revenue points for the epoch (= our estimated_points).
+    /// Reads from the aggregate table if present, otherwise returns zeros (V2 will fall back to "all full").
+    /// </summary>
+    private async Task<ulong[]> CalculateOracleScoresAsync(uint epoch, CancellationToken ct)
+    {
+        var scores = new ulong[QubicConstants.NumberOfComputors];
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT computor_index, estimated_points
+            FROM oracle_computor_summary FINAL
+            WHERE epoch = {epoch}";
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            int idx = reader.GetFieldValue<ushort>(0);
+            long pts = Convert.ToInt64(reader.GetValue(1));
+            if (idx >= 0 && idx < scores.Length && pts > 0)
+                scores[idx] = (ulong)pts;
+        }
+
+        return scores;
+    }
+
+    private static ulong ComputeQuorumScore(ulong[] scores)
+    {
+        if (scores.Length == 0) return 0;
+        var sorted = (ulong[])scores.Clone();
+        Array.Sort(sorted);
+        Array.Reverse(sorted);
+        int rank = RevenueV2Calculator.GlobalQuorumRank(scores.Length);
+        return sorted[rank - 1];
     }
 
     private async Task PersistRevenueAsync(ComputorRevenueDto result, CancellationToken ct)
@@ -129,15 +248,17 @@ public class ComputorRevenueService : IDisposable
         cmd.CommandText = $@"
             INSERT INTO computor_revenue
             (epoch, computor_count, issuance_rate, tx_quorum_score, vote_quorum_score,
-             mining_quorum_score, total_computor_revenue, arb_revenue, computors)
+             oracle_quorum_score, mining_quorum_score, active_formula,
+             total_computor_revenue, arb_revenue, computors)
             VALUES
             ({result.Epoch}, {result.ComputorCount}, {result.IssuanceRate},
-             {result.TxQuorumScore}, {result.VoteQuorumScore}, {result.MiningQuorumScore},
+             {result.TxQuorumScore}, {result.VoteQuorumScore},
+             {result.OracleQuorumScore}, {result.MiningQuorumScore}, {result.ActiveFormula},
              {result.TotalComputorRevenue}, {result.ArbRevenue}, '{escapedJson}')";
 
         await cmd.ExecuteNonQueryAsync(ct);
-        _logger.LogInformation("Persisted computor revenue for epoch {Epoch} ({Active} active computors)",
-            result.Epoch, result.Computors.Count(c => c.Revenue > 0));
+        _logger.LogInformation("Persisted computor revenue for epoch {Epoch} (formula V{Formula}, {Active} active computors)",
+            result.Epoch, result.ActiveFormula, result.Computors.Count(c => c.Revenue > 0));
     }
 
     /// <summary>
@@ -171,7 +292,13 @@ public class ComputorRevenueService : IDisposable
 
     private async Task<ulong[]> CalculateMiningScoresAsync(uint epoch, CancellationToken ct)
     {
-        return await CalculatePackedScoresAsync(epoch, CoreTransactionInputTypes.CustomMiningShareCounter, ct);
+        // qubic core PR #844 removed XMR (input_type 8) and replaced it with DOGE (input_type 11).
+        // V2 epochs read DOGE; older epochs keep reading the legacy XMR counter so historical V1
+        // numbers stay reproducible.
+        var inputType = epoch >= V2FromEpoch
+            ? RevenueV2Calculator.DogeSharesInputType
+            : CoreTransactionInputTypes.CustomMiningShareCounter;
+        return await CalculatePackedScoresAsync(epoch, inputType, ct);
     }
 
     /// <summary>

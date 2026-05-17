@@ -26,6 +26,13 @@ const props = defineProps<{
   width?: number
   height?: number
   filteredNodeId?: string | null
+  /** Minimum width per column in pixels. Higher = more breathing room between hops. */
+  minColumnWidth?: number
+  /**
+   * When a node is selected, hide non-connected nodes/links entirely instead of
+   * just dimming them. Has no effect when no node is selected.
+   */
+  hideUnrelated?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -60,12 +67,25 @@ const renderChart = () => {
   const svg = d3.select(svgRef.value)
   svg.selectAll('*').remove()
 
-  const margin = { top: 20, right: 150, bottom: 20, left: 150 }
-  const width = chartWidth.value - margin.left - margin.right
+  // Minimum column width so labels don't overlap. Default sized so a 6-column
+  // flow (Computors + 5 hops) renders at ~1920px total: 80 + 6×293 + 80 ≈ 1918.
+  // Caller can override via the minColumnWidth prop.
+  const MIN_COLUMN_WIDTH = props.minColumnWidth && props.minColumnWidth > 0
+    ? props.minColumnWidth
+    : 293
+  const margin = { top: 20, right: 80, bottom: 20, left: 80 }
+
+  // Pre-compute column count from the (already-validated) nodes so we can
+  // expand the SVG when the container would otherwise cram the columns.
+  const provisionalMaxDepth = Math.max(...props.nodes.map(n => n.depth))
+  const columnsNeeded = Math.max(1, provisionalMaxDepth + 1)
+  const requiredWidth = margin.left + margin.right + columnsNeeded * MIN_COLUMN_WIDTH
+  const renderWidth = Math.max(chartWidth.value, requiredWidth)
+  const width = renderWidth - margin.left - margin.right
   const height = chartHeight.value - margin.top - margin.bottom
 
   const g = svg
-    .attr('width', chartWidth.value)
+    .attr('width', renderWidth)
     .attr('height', chartHeight.value)
     .append('g')
     .attr('transform', `translate(${margin.left},${margin.top})`)
@@ -194,6 +214,7 @@ const renderChart = () => {
   }
 
   const isFiltering = selectedNodeId.value !== null
+  const hide = props.hideUnrelated === true
 
   // Draw links
   const link = g.append('g')
@@ -203,6 +224,8 @@ const renderChart = () => {
     .data(layoutLinks)
     .join('path')
     .attr('d', sankeyLinkHorizontal())
+    .attr('display', (_d: any, i: number) =>
+      (isFiltering && hide && !connectedLinkIndices.has(i)) ? 'none' : null)
     .attr('stroke', (d: any, i: number) => {
       const sourceColor = getNodeColor(d.source.type)
       if (isFiltering && !connectedLinkIndices.has(i)) {
@@ -226,6 +249,7 @@ const renderChart = () => {
         { text: `Transactions: ${d.transactionCount || 'N/A'}`, classes: 'text-sm' },
       ])
     })
+    .on('mousemove', function(event: MouseEvent) { positionTooltip(event) })
     .on('mouseleave', function(event: MouseEvent, d: any) {
       const idx = layoutLinks.indexOf(d)
       const baseOpacity = (isFiltering && !connectedLinkIndices.has(idx)) ? 0.1 : (isFiltering ? 0.8 : 0.6)
@@ -240,6 +264,8 @@ const renderChart = () => {
     .data(layoutNodes)
     .join('g')
     .attr('transform', (d: any) => `translate(${d.x0},${d.y0})`)
+    .attr('display', (d: any) =>
+      (isFiltering && hide && !connectedNodeIds.has(d.id)) ? 'none' : null)
 
   // Node rectangles
   node.append('rect')
@@ -274,15 +300,24 @@ const renderChart = () => {
       const filterHintText = d.id === selectedNodeId.value
         ? 'Click to clear filter'
         : 'Click to filter flow paths'
+      // d3-sankey decorates each node with sourceLinks (outgoing) and
+      // targetLinks (incoming). Sum the per-link transactionCount to get
+      // total transactions in/out of this node.
+      const inTx = (d.targetLinks ?? []).reduce(
+        (sum: number, l: any) => sum + (l.transactionCount || 0), 0)
+      const outTx = (d.sourceLinks ?? []).reduce(
+        (sum: number, l: any) => sum + (l.transactionCount || 0), 0)
       showTooltip(event, [
         { text: d.name, classes: 'font-medium' },
         { text: d.address, classes: 'text-xs text-gray-400' },
         { text: `Type: ${d.type}`, classes: 'text-sm mt-1' },
         { text: `Inflow: ${formatVolume(d.totalInflow)}`, classes: 'text-sm' },
         { text: `Outflow: ${formatVolume(d.totalOutflow)}`, classes: 'text-sm' },
+        { text: `Transactions: ${(inTx + outTx).toLocaleString()} (${inTx.toLocaleString()} in / ${outTx.toLocaleString()} out)`, classes: 'text-sm' },
         { text: filterHintText, classes: 'text-xs text-accent mt-2' },
       ])
     })
+    .on('mousemove', function(event: MouseEvent) { positionTooltip(event) })
     .on('mouseleave', function(event: MouseEvent, d: any) {
       d3.select(this).attr('stroke-width', d.id === selectedNodeId.value ? 3 : 1)
       hideTooltip()
@@ -355,8 +390,27 @@ const showTooltip = (event: MouseEvent, lines: TooltipLine[]) => {
     tooltipRef.value.appendChild(div)
   }
   tooltipRef.value.style.display = 'block'
-  tooltipRef.value.style.left = `${event.pageX + 10}px`
-  tooltipRef.value.style.top = `${event.pageY + 10}px`
+  positionTooltip(event)
+}
+
+// Position the (position: fixed) tooltip near the cursor using viewport coords.
+// Mirrors with clamping so it doesn't disappear off the right/bottom edges.
+const positionTooltip = (event: MouseEvent) => {
+  if (!tooltipRef.value) return
+  const tt = tooltipRef.value
+  const margin = 12
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  let x = event.clientX + margin
+  let y = event.clientY + margin
+  const w = tt.offsetWidth
+  const h = tt.offsetHeight
+  if (x + w + margin > vw) x = event.clientX - w - margin
+  if (y + h + margin > vh) y = event.clientY - h - margin
+  if (x < 0) x = margin
+  if (y < 0) y = margin
+  tt.style.left = `${x}px`
+  tt.style.top = `${y}px`
 }
 
 const hideTooltip = () => {
@@ -364,17 +418,73 @@ const hideTooltip = () => {
   tooltipRef.value.style.display = 'none'
 }
 
+// Click-and-drag horizontal panning. The chart can be wider than the viewport
+// and the bottom scrollbar is often hidden below the fold — dragging makes the
+// content reachable without scrolling the page. Clicks (mousedown without
+// movement) still register as clicks on nodes via the SVG handlers.
+const setupPanning = () => {
+  const c = containerRef.value
+  if (!c) return
+  let isDown = false
+  let dragged = false
+  let startClientX = 0
+  let startScrollLeft = 0
+  const DRAG_THRESHOLD = 4 // px
+
+  c.style.cursor = 'grab'
+
+  const onDown = (e: MouseEvent) => {
+    // Only react to primary button
+    if (e.button !== 0) return
+    isDown = true
+    dragged = false
+    startClientX = e.clientX
+    startScrollLeft = c.scrollLeft
+  }
+  const onMove = (e: MouseEvent) => {
+    if (!isDown) return
+    const dx = e.clientX - startClientX
+    if (!dragged && Math.abs(dx) > DRAG_THRESHOLD) {
+      dragged = true
+      c.style.cursor = 'grabbing'
+      // Suppress text/SVG selection during drag
+      document.body.style.userSelect = 'none'
+    }
+    if (dragged) {
+      c.scrollLeft = startScrollLeft - dx
+      e.preventDefault()
+    }
+  }
+  const onUp = () => {
+    if (!isDown) return
+    isDown = false
+    c.style.cursor = 'grab'
+    document.body.style.userSelect = ''
+    // If the user actually dragged, swallow the click that fires next on the
+    // SVG to avoid accidentally selecting a node on drag-release.
+    if (dragged) {
+      const swallow = (e: MouseEvent) => { e.stopPropagation(); e.preventDefault() }
+      c.addEventListener('click', swallow, { capture: true, once: true })
+    }
+  }
+
+  c.addEventListener('mousedown', onDown)
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
 onMounted(() => {
   renderChart()
+  setupPanning()
 })
 
-watch(() => [props.nodes, props.links, props.width, props.height, props.filteredNodeId], () => {
+watch(() => [props.nodes, props.links, props.width, props.height, props.filteredNodeId, props.minColumnWidth, props.hideUnrelated], () => {
   renderChart()
 }, { deep: true })
 </script>
 
 <template>
-  <div ref="containerRef" class="relative">
+  <div ref="containerRef" class="relative overflow-x-auto">
     <svg ref="svgRef" class="sankey-chart"></svg>
     <div
       ref="tooltipRef"

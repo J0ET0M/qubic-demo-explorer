@@ -1178,26 +1178,53 @@ public class ClickHouseQueryService : IDisposable
 
     public async Task<EpochStatsDto?> GetEpochStatsAsync(uint epoch, CancellationToken ct = default)
     {
+        // Fast path: completed epochs with stored stats — single primary-key lookup,
+        // no MV joins. The persisted snapshot is filled by ComputeAndStoreEpochStatsAsync
+        // on epoch transition (and is backfillable via the admin endpoint).
+        var meta = await GetEpochMetaAsync(epoch, ct);
+        if (meta == null)
+            return null;
+
+        if (meta.IsComplete && meta.TickCount > 0 && meta.StartTime.HasValue && meta.EndTime.HasValue)
+        {
+            return new EpochStatsDto(
+                meta.Epoch,
+                meta.TickCount,
+                meta.EmptyTickCount,
+                meta.InitialTick,
+                meta.EndTick > 0 ? meta.EndTick : meta.InitialTick,
+                meta.StartTime.Value,
+                meta.EndTime.Value,
+                meta.TxCount,
+                meta.TotalVolume,
+                0, // unique_senders — not stored separately, only the aggregate active_addresses is
+                0, // unique_receivers
+                meta.ActiveAddresses,
+                meta.TransferCount,
+                meta.QuTransferred,
+                meta.AssetTransferCount
+            );
+        }
+
+        // Slow path: current/incomplete epoch — derive from materialized views.
+        // Filter bad pre-2020 timestamps so the page never shows the "1999-11-30" sentinel.
         await using var cmd = _connection.CreateCommand();
-        // For completed epochs with stored stats, use them directly.
-        // For the current (incomplete) epoch, fall back to materialized views.
         cmd.CommandText = $@"
             SELECT
                 em.epoch,
-                if(em.is_complete = 1 AND em.tick_count > 0, em.tick_count, COALESCE(ts.tick_count, 0)) as tick_count,
-                if(em.is_complete = 1 AND em.empty_tick_count > 0, em.empty_tick_count, COALESCE(ts.empty_tick_count, 0)) as empty_tick_count,
+                COALESCE(ts.tick_count, 0) as tick_count,
+                COALESCE(ts.empty_tick_count, 0) as empty_tick_count,
                 em.initial_tick as first_tick,
-                if(em.is_complete = 1 AND em.end_tick > 0, em.end_tick, COALESCE(ts.last_tick, em.initial_tick)) as last_tick,
-                COALESCE(ts.start_time, em.updated_at) as start_time,
-                COALESCE(ts.end_time, em.updated_at) as end_time,
-                if(em.is_complete = 1 AND em.tx_count > 0, em.tx_count, COALESCE(tx.tx_count, 0)) as tx_count,
-                if(em.is_complete = 1 AND em.total_volume > 0, em.total_volume, COALESCE(tx.total_volume, 0)) as total_volume,
+                COALESCE(ts.last_tick, em.initial_tick) as last_tick,
+                COALESCE(tt.start_time, em.updated_at) as start_time,
+                COALESCE(tt.end_time, em.updated_at) as end_time,
+                COALESCE(tx.tx_count, 0) as tx_count,
+                COALESCE(tx.total_volume, 0) as total_volume,
                 COALESCE(tx.unique_senders, 0) as unique_senders,
                 COALESCE(tx.unique_receivers, 0) as unique_receivers,
-                if(em.is_complete = 1 AND em.active_addresses > 0, em.active_addresses,
-                   COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0)) as active_addresses,
-                if(em.is_complete = 1 AND em.transfer_count > 0, em.transfer_count, COALESCE(tr.transfer_count, 0)) as transfer_count,
-                if(em.is_complete = 1 AND em.qu_transferred > 0, em.qu_transferred, COALESCE(tr.qu_transferred, 0)) as qu_transferred,
+                COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0) as active_addresses,
+                COALESCE(tr.transfer_count, 0) as transfer_count,
+                COALESCE(tr.qu_transferred, 0) as qu_transferred,
                 COALESCE(asset.asset_transfer_count, 0) as asset_transfer_count
             FROM epoch_meta AS em FINAL
             LEFT JOIN (
@@ -1205,13 +1232,20 @@ public class ClickHouseQueryService : IDisposable
                     epoch,
                     countMerge(tick_count_state) as tick_count,
                     sumMerge(empty_tick_count_state) as empty_tick_count,
-                    minMerge(start_time_state) as start_time,
-                    maxMerge(end_time_state) as end_time,
                     maxMerge(last_tick_state) as last_tick
                 FROM epoch_tick_stats
                 WHERE epoch = {{epoch:UInt32}}
                 GROUP BY epoch
             ) ts ON em.epoch = ts.epoch
+            LEFT JOIN (
+                SELECT
+                    epoch,
+                    minIf(timestamp, timestamp > toDateTime('2020-01-01')) AS start_time,
+                    maxIf(timestamp, timestamp > toDateTime('2020-01-01')) AS end_time
+                FROM ticks
+                WHERE epoch = {{epoch:UInt32}}
+                GROUP BY epoch
+            ) tt ON em.epoch = tt.epoch
             LEFT JOIN (
                 SELECT
                     epoch,
@@ -3392,7 +3426,8 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = @"
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
                    is_complete, updated_at,
-                   tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
+                   tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred,
+                   start_time, end_time, asset_transfer_count
             FROM epoch_meta FINAL
             WHERE epoch = {epoch:UInt32}";
         AddParam(cmd, "epoch", epoch);
@@ -3415,9 +3450,17 @@ public class ClickHouseQueryService : IDisposable
             TotalVolume: ToBigDecimal(reader.GetValue(10)),
             ActiveAddresses: reader.GetFieldValue<ulong>(11),
             TransferCount: reader.GetFieldValue<ulong>(12),
-            QuTransferred: ToBigDecimal(reader.GetValue(13))
+            QuTransferred: ToBigDecimal(reader.GetValue(13)),
+            StartTime: NullableDateTime(reader.GetDateTime(14)),
+            EndTime: NullableDateTime(reader.GetDateTime(15)),
+            AssetTransferCount: reader.GetFieldValue<ulong>(16)
         );
     }
+
+    // Treat 0 / pre-2020 timestamps as null — they're either DEFAULT 0 or the
+    // "1999-11-30" sentinel from old bad-data ticks (see filter in compute step).
+    private static DateTime? NullableDateTime(DateTime dt) =>
+        dt.Year < 2020 ? (DateTime?)null : dt;
 
     /// <summary>
     /// Get all epoch metadata, ordered by epoch descending
@@ -3428,7 +3471,8 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = $@"
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
                    is_complete, updated_at,
-                   tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred
+                   tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred,
+                   start_time, end_time, asset_transfer_count
             FROM epoch_meta FINAL
             ORDER BY epoch DESC
             LIMIT {{lim:UInt32}}";
@@ -3452,7 +3496,10 @@ public class ClickHouseQueryService : IDisposable
                 TotalVolume: ToBigDecimal(reader.GetValue(10)),
                 ActiveAddresses: reader.GetFieldValue<ulong>(11),
                 TransferCount: reader.GetFieldValue<ulong>(12),
-                QuTransferred: ToBigDecimal(reader.GetValue(13))
+                QuTransferred: ToBigDecimal(reader.GetValue(13)),
+                StartTime: NullableDateTime(reader.GetDateTime(14)),
+                EndTime: NullableDateTime(reader.GetDateTime(15)),
+                AssetTransferCount: reader.GetFieldValue<ulong>(16)
             ));
         }
 
@@ -3468,13 +3515,15 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = @"
             INSERT INTO epoch_meta
             (epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id, is_complete,
-             tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred)
+             tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred,
+             start_time, end_time, asset_transfer_count)
             VALUES
             ({epoch:UInt32}, {initialTick:UInt64}, {endTick:UInt64},
              {startLogId:UInt64}, {endLogId:UInt64},
              {isComplete:UInt8},
              {tickCount:UInt64}, {emptyTickCount:UInt64}, {txCount:UInt64}, {totalVolume:Float64},
-             {activeAddresses:UInt64}, {transferCount:UInt64}, {quTransferred:Float64})";
+             {activeAddresses:UInt64}, {transferCount:UInt64}, {quTransferred:Float64},
+             {startTime:DateTime64(3)}, {endTime:DateTime64(3)}, {assetTransferCount:UInt64})";
         AddParam(cmd, "epoch", epochMeta.Epoch);
         AddParam(cmd, "initialTick", epochMeta.InitialTick);
         AddParam(cmd, "endTick", epochMeta.EndTick);
@@ -3488,6 +3537,10 @@ public class ClickHouseQueryService : IDisposable
         AddParam(cmd, "activeAddresses", epochMeta.ActiveAddresses);
         AddParam(cmd, "transferCount", epochMeta.TransferCount);
         AddParam(cmd, "quTransferred", (double)epochMeta.QuTransferred);
+        // Null start/end → ClickHouse default 0 → read-side mapped back to null.
+        AddParam(cmd, "startTime", epochMeta.StartTime ?? new DateTime(1970, 1, 1));
+        AddParam(cmd, "endTime", epochMeta.EndTime ?? new DateTime(1970, 1, 1));
+        AddParam(cmd, "assetTransferCount", epochMeta.AssetTransferCount);
 
         await cmd.ExecuteNonQueryAsync(ct);
         _logger.LogInformation("Upserted epoch metadata for epoch {Epoch} (initial_tick={InitialTick}, end_tick={EndTick}, complete={IsComplete})",
@@ -3545,7 +3598,8 @@ public class ClickHouseQueryService : IDisposable
             return;
         }
 
-        // Query all stats from MVs in one go
+        // Query all stats from MVs + actual start/end timestamps from the ticks table
+        // (filtering bad pre-2020 timestamps that come from corrupt early-indexed rows).
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
             SELECT
@@ -3555,7 +3609,10 @@ public class ClickHouseQueryService : IDisposable
                 COALESCE(tx.total_volume, 0),
                 COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0),
                 COALESCE(tr.transfer_count, 0),
-                COALESCE(tr.qu_transferred, 0)
+                COALESCE(tr.qu_transferred, 0),
+                COALESCE(tt.start_time, toDateTime64(0, 3)) AS start_time,
+                COALESCE(tt.end_time, toDateTime64(0, 3)) AS end_time,
+                COALESCE(asset.asset_count, 0) AS asset_transfer_count
             FROM (SELECT 1 as _join) d
             LEFT JOIN (
                 SELECT
@@ -3579,7 +3636,19 @@ public class ClickHouseQueryService : IDisposable
                     sum(qu_transferred) as qu_transferred
                 FROM epoch_transfer_stats FINAL
                 WHERE epoch = {{epoch:UInt32}}
-            ) tr ON 1=1";
+            ) tr ON 1=1
+            LEFT JOIN (
+                SELECT
+                    minIf(timestamp, timestamp > toDateTime('2020-01-01')) AS start_time,
+                    maxIf(timestamp, timestamp > toDateTime('2020-01-01')) AS end_time
+                FROM ticks
+                WHERE epoch = {{epoch:UInt32}}
+            ) tt ON 1=1
+            LEFT JOIN (
+                SELECT sum(count) AS asset_count
+                FROM epoch_transfer_by_type FINAL
+                WHERE epoch = {{epoch:UInt32}} AND log_type != 0
+            ) asset ON 1=1";
         AddParam(cmd, "epoch", epoch);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -3588,6 +3657,9 @@ public class ClickHouseQueryService : IDisposable
             _logger.LogWarning("No stats data found for epoch {Epoch}", epoch);
             return;
         }
+
+        var startTime = NullableDateTime(reader.GetDateTime(7));
+        var endTime = NullableDateTime(reader.GetDateTime(8));
 
         var updatedMeta = meta with
         {
@@ -3598,14 +3670,17 @@ public class ClickHouseQueryService : IDisposable
             ActiveAddresses = ToUInt64(reader.GetValue(4)),
             TransferCount = ToUInt64(reader.GetValue(5)),
             QuTransferred = ToBigDecimal(reader.GetValue(6)),
+            StartTime = startTime,
+            EndTime = endTime,
+            AssetTransferCount = ToUInt64(reader.GetValue(9)),
             UpdatedAt = DateTime.UtcNow
         };
 
         await UpsertEpochMetaAsync(updatedMeta, ct);
         _logger.LogInformation(
-            "Stored epoch {Epoch} stats: ticks={TickCount}, txs={TxCount}, volume={Volume}, addresses={Addresses}, transfers={Transfers}",
+            "Stored epoch {Epoch} stats: ticks={TickCount}, txs={TxCount}, volume={Volume}, addresses={Addresses}, transfers={Transfers}, start={Start}, end={End}",
             epoch, updatedMeta.TickCount, updatedMeta.TxCount, updatedMeta.TotalVolume,
-            updatedMeta.ActiveAddresses, updatedMeta.TransferCount);
+            updatedMeta.ActiveAddresses, updatedMeta.TransferCount, startTime, endTime);
     }
 
     // =====================================================
@@ -5482,8 +5557,8 @@ public class ClickHouseQueryService : IDisposable
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
             SELECT epoch, computor_count, issuance_rate,
-                   tx_quorum_score, vote_quorum_score, mining_quorum_score,
-                   total_computor_revenue, arb_revenue, computors
+                   tx_quorum_score, vote_quorum_score, oracle_quorum_score, mining_quorum_score,
+                   active_formula, total_computor_revenue, arb_revenue, computors
             FROM computor_revenue FINAL
             WHERE epoch = {epoch:UInt32}";
         AddParam(cmd, "epoch", epoch);
@@ -5492,7 +5567,7 @@ public class ClickHouseQueryService : IDisposable
         if (!await reader.ReadAsync(ct))
             return null;
 
-        var computorsJson = reader.GetString(8);
+        var computorsJson = reader.GetString(10);
         var computors = JsonSerializer.Deserialize<ComputorRevenueEntryDto[]>(computorsJson,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
 
@@ -5502,9 +5577,11 @@ public class ClickHouseQueryService : IDisposable
             IssuanceRate: reader.GetFieldValue<long>(2),
             TxQuorumScore: ToUInt64(reader.GetValue(3)),
             VoteQuorumScore: ToUInt64(reader.GetValue(4)),
-            MiningQuorumScore: ToUInt64(reader.GetValue(5)),
-            TotalComputorRevenue: reader.GetFieldValue<long>(6),
-            ArbRevenue: reader.GetFieldValue<long>(7),
+            OracleQuorumScore: ToUInt64(reader.GetValue(5)),
+            MiningQuorumScore: ToUInt64(reader.GetValue(6)),
+            ActiveFormula: Convert.ToInt32(reader.GetValue(7)),
+            TotalComputorRevenue: reader.GetFieldValue<long>(8),
+            ArbRevenue: reader.GetFieldValue<long>(9),
             Computors: computors
         );
     }
@@ -5553,61 +5630,86 @@ public class ClickHouseQueryService : IDisposable
         var effectiveVoteTick = voteTick ?? networkTick;
         var effectiveMiningTick = miningTick ?? networkTick;
 
-        // Calculate scores with tick cutoffs
+        // V1 score sources (legacy multiplicative formula).
+        // Mining: V2 epochs (≥ 209) read DOGE (input_type 11); older epochs read the legacy
+        // XMR CustomMiningShareCounter (input_type 8). PR #844 removed XMR and DOGE took over.
+        var miningInputType = epoch >= RevenueV2Calculator.DefaultV2FromEpoch
+            ? RevenueV2Calculator.DogeSharesInputType
+            : CoreTransactionInputTypes.CustomMiningShareCounter;
+
         var txResult = await CalculateTxScoresUpToTickAsync(epoch, effectiveTxTick, ct);
         var voteResult = await CalculatePackedScoresUpToTickAsync(epoch, CoreTransactionInputTypes.VoteCounter, effectiveVoteTick, ct);
-        var miningResult = await CalculatePackedScoresUpToTickAsync(epoch, CoreTransactionInputTypes.CustomMiningShareCounter, effectiveMiningTick, ct);
+        var miningResult = await CalculatePackedScoresUpToTickAsync(epoch, miningInputType, effectiveMiningTick, ct);
 
-        var txScores = txResult.Scores;
+        var txScoresV1 = txResult.Scores;
         var voteScores = voteResult.Scores;
         var miningScores = miningResult.Scores;
 
-        // Compute quorum scores (450th highest)
-        var txQuorum = RevenueGetQuorumScore(txScores);
+        // V1 quorum + factors
+        var txQuorumV1 = RevenueGetQuorumScore(txScoresV1);
         var voteQuorum = RevenueGetQuorumScore(voteScores);
-        var miningQuorum = RevenueGetQuorumScore(miningScores);
+        var miningQuorumV1 = RevenueGetQuorumScore(miningScores);
 
-        // Compute factors
-        var txFactors = RevenueComputeFactors(txScores, txQuorum);
-        var voteFactors = RevenueComputeFactors(voteScores, voteQuorum);
-        var miningFactors = RevenueComputeFactors(miningScores, miningQuorum);
+        var txFactorsV1 = RevenueComputeFactors(txScoresV1, txQuorumV1);
+        var voteFactorsV1 = RevenueComputeFactors(voteScores, voteQuorum);
+        var miningFactorsV1 = RevenueComputeFactors(miningScores, miningQuorumV1);
 
-        // Compute per-computor revenue
+        // V1 revenue
         const ulong scalingThreshold = (ulong)QubicConstants.RevenueScalingThreshold;
-        var revenues = new long[QubicConstants.NumberOfComputors];
-        long totalRevenue = 0;
+        var revenuesV1 = new long[QubicConstants.NumberOfComputors];
         for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
         {
-            ulong combined = txFactors[i] * voteFactors[i] * miningFactors[i];
-            revenues[i] = (long)(combined * (ulong)QubicConstants.IssuancePerComputor
+            ulong combined = txFactorsV1[i] * voteFactorsV1[i] * miningFactorsV1[i];
+            revenuesV1[i] = (long)(combined * (ulong)QubicConstants.IssuancePerComputor
                 / scalingThreshold / scalingThreshold / scalingThreshold);
-            totalRevenue += revenues[i];
         }
 
-        // Build entries
+        // V2: sliding-window TX up to txTick, oracle scores from oracle_computor_summary, DOGE-only mining.
+        var (perTickTxCount, initialTick) = await GetPerTickTxCountsForRevenueAsync(epoch, effectiveTxTick, ct);
+        var oracleScores = await GetOracleScoresForRevenueAsync(epoch, ct);
+        var v2 = RevenueV2Calculator.Compute(
+            (long)initialTick, perTickTxCount, oracleScores, miningScores,
+            QubicConstants.TxRevenuePoints.ToArray());
+
+        var slidingTxQuorum = RevenueGetQuorumScore(v2.SlidingWindowTxScoreFull);
+        var oracleQuorum = RevenueGetQuorumScore(oracleScores);
+
+        var useV2 = epoch >= RevenueV2Calculator.DefaultV2FromEpoch;
+
+        // Build entries (active = V2 if useV2, else V1)
         var entries = new ComputorRevenueEntryDto[QubicConstants.NumberOfComputors];
+        long totalRevenue = 0;
         long minRevenue = long.MaxValue, maxRevenue = long.MinValue;
         int activeCount = 0;
         for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
         {
             var address = addresses[i];
+            long active = useV2 ? v2.Revenue[i] : revenuesV1[i];
+            totalRevenue += active;
             entries[i] = new ComputorRevenueEntryDto(
                 ComputorIndex: (ushort)i,
                 Address: address,
                 Label: _labelService.GetLabel(address),
-                TxScore: txScores[i],
+                TxScore: txScoresV1[i],
                 VoteScore: voteScores[i],
                 MiningScore: miningScores[i],
-                TxFactor: txFactors[i],
-                VoteFactor: voteFactors[i],
-                MiningFactor: miningFactors[i],
-                Revenue: revenues[i]
+                SlidingWindowTxScore: v2.SlidingWindowTxScoreFull[i],
+                OracleScore: oracleScores[i],
+                TxFactor: useV2 ? v2.TxFactor[i] : txFactorsV1[i],
+                VoteFactor: voteFactorsV1[i],
+                OracleFactor: v2.OracleFactor[i],
+                MiningFactor: useV2 ? v2.MiningFactor[i] : miningFactorsV1[i],
+                CombinedMandatoryFactor: v2.CombinedMandatoryFactor[i],
+                RevenueV1: revenuesV1[i],
+                RevenueV2: v2.Revenue[i],
+                RevenueFormula: useV2 ? 2 : 1,
+                Revenue: active
             );
-            if (revenues[i] > 0)
+            if (active > 0)
             {
                 activeCount++;
-                if (revenues[i] < minRevenue) minRevenue = revenues[i];
-                if (revenues[i] > maxRevenue) maxRevenue = revenues[i];
+                if (active < minRevenue) minRevenue = active;
+                if (active > maxRevenue) maxRevenue = active;
             }
         }
 
@@ -5640,15 +5742,76 @@ public class ClickHouseQueryService : IDisposable
             ComputorCount: QubicConstants.NumberOfComputors,
             IssuanceRate: QubicConstants.IssuanceRate,
             TickHeights: new RevenueTickHeightsDto(networkTick, effectiveTxTick, effectiveVoteTick, effectiveMiningTick),
-            TxQuorumScore: txQuorum,
+            TxQuorumScore: useV2 ? slidingTxQuorum : txQuorumV1,
             VoteQuorumScore: voteQuorum,
-            MiningQuorumScore: miningQuorum,
+            OracleQuorumScore: oracleQuorum,
+            MiningQuorumScore: miningQuorumV1,
+            ActiveFormula: useV2 ? 2 : 1,
             Overview: new RevenueOverviewDto(minRevenue, maxRevenue, avgRevenue, Math.Round(avgPercent, 2)),
             CalculationStats: calcStats,
             TotalComputorRevenue: totalRevenue,
             ArbRevenue: QubicConstants.IssuanceRate - totalRevenue,
             Computors: entries
         );
+    }
+
+    /// <summary>Per-tick TX counts for V2 sliding window. Caps at maxTick so simulations honour the txTick cutoff.</summary>
+    private async Task<(ushort[] PerTick, ulong InitialTick)> GetPerTickTxCountsForRevenueAsync(
+        uint epoch, ulong maxTick, CancellationToken ct)
+    {
+        ulong initialTick = 0;
+        await using (var metaCmd = _connection.CreateCommand())
+        {
+            metaCmd.CommandText = "SELECT initial_tick FROM epoch_meta FINAL WHERE epoch = {epoch:UInt32}";
+            AddParam(metaCmd, "epoch", epoch);
+            var r = await metaCmd.ExecuteScalarAsync(ct);
+            if (r != null && r != DBNull.Value)
+                initialTick = Convert.ToUInt64(r);
+        }
+
+        if (initialTick == 0 || maxTick < initialTick)
+            return (Array.Empty<ushort>(), initialTick);
+
+        var totalTicks = (int)(maxTick - initialTick + 1);
+        var perTick = new ushort[totalTicks];
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT tick_number, tx_count FROM ticks " +
+                          "WHERE epoch = {epoch:UInt32} AND is_empty = 0 AND tx_count > 0 " +
+                          "AND tick_number <= {maxTick:UInt64}";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "maxTick", maxTick);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var t = reader.GetFieldValue<ulong>(0);
+            var c = reader.GetFieldValue<uint>(1);
+            int idx = (int)(t - initialTick);
+            if (idx >= 0 && idx < totalTicks)
+                perTick[idx] = (ushort)Math.Min(c, ushort.MaxValue);
+        }
+
+        return (perTick, initialTick);
+    }
+
+    /// <summary>Per-computor oracle scores from the aggregate table. Returns zeros if not yet aggregated.</summary>
+    private async Task<ulong[]> GetOracleScoresForRevenueAsync(uint epoch, CancellationToken ct)
+    {
+        var scores = new ulong[QubicConstants.NumberOfComputors];
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT computor_index, estimated_points FROM oracle_computor_summary FINAL " +
+                          "WHERE epoch = {epoch:UInt32}";
+        AddParam(cmd, "epoch", epoch);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            int idx = reader.GetFieldValue<ushort>(0);
+            long pts = Convert.ToInt64(reader.GetValue(1));
+            if (idx >= 0 && idx < scores.Length && pts > 0)
+                scores[idx] = (ulong)pts;
+        }
+        return scores;
     }
 
     private record TxScoreResult(ulong[] Scores, int TicksProcessed);
@@ -6198,16 +6361,22 @@ public class ClickHouseQueryService : IDisposable
                 r.ContractIndex, r.Min, r.Max, r.Avg, r.Median, r.Agreed, r.ReportCount, reports));
         }
 
-        // Tx counts by input_type for the 676-tick window of this phase.
-        // The publication tick (phaseTick) is the last tick of the phase,
-        // so the window is [phaseTick - 675 .. phaseTick] inclusive.
+        // Tx counts by (to_address, input_type) for the 676-tick window of this phase.
+        // The pair identifies the actual contract procedure invoked — same resolution
+        // as the tx-list filters. The publication tick (phaseTick) is the last tick
+        // of the phase, so the window is [phaseTick - 675 .. phaseTick] inclusive.
         var txCountsByInputType = new List<PhaseInputTypeCountDto>();
         if (phaseTick >= 675)
         {
             var windowStart = phaseTick - 675;
             await using var txCmd = _connection.CreateCommand();
+            // Standard transfers (input_type = 0) are aggregated together regardless of
+            // destination — the destination doesn't change what they are. Contract calls
+            // (input_type > 0) are still grouped per (to_address, input_type) so each
+            // contract.procedure pair shows separately.
             txCmd.CommandText = $@"
                 SELECT
+                    if(input_type = 0, '', to_address) AS to_address,
                     input_type,
                     count() AS total_count,
                     countIf(executed = 1) AS executed_count
@@ -6215,7 +6384,7 @@ public class ClickHouseQueryService : IDisposable
                 WHERE epoch = {{epoch:UInt32}}
                   AND tick_number >= {{tickFrom:UInt64}}
                   AND tick_number <= {{tickTo:UInt64}}
-                GROUP BY input_type
+                GROUP BY to_address, input_type
                 ORDER BY total_count DESC";
             AddParam(txCmd, "epoch", epoch);
             AddParam(txCmd, "tickFrom", windowStart);
@@ -6225,9 +6394,10 @@ public class ClickHouseQueryService : IDisposable
             while (await reader.ReadAsync(ct))
             {
                 txCountsByInputType.Add(new PhaseInputTypeCountDto(
-                    reader.GetFieldValue<ushort>(0),
-                    Convert.ToInt64(reader.GetValue(1)),
-                    Convert.ToInt64(reader.GetValue(2))
+                    reader.GetFieldValue<ushort>(1),
+                    Convert.ToInt64(reader.GetValue(2)),
+                    Convert.ToInt64(reader.GetValue(3)),
+                    ToAddress: reader.GetString(0)
                 ));
             }
         }
@@ -6430,6 +6600,7 @@ public class ClickHouseQueryService : IDisposable
                     Convert.ToInt64(reader.GetValue(1)),
                     Convert.ToInt64(reader.GetValue(2)),
                     Convert.ToInt64(reader.GetValue(3)),
+                    0u, // OracleFactor — populated below from full distribution
                     Convert.ToDouble(reader.GetValue(4)),
                     Convert.ToInt64(reader.GetValue(5))
                 ));
@@ -6459,6 +6630,22 @@ public class ClickHouseQueryService : IDisposable
         {
             // Compute on the fly from raw events (current epoch path)
             (totalQueries, totalCommits, totalReveals, computors) = await ComputeOracleEpochSummaryFromRawAsync(epoch, ct);
+        }
+
+        // Compute V2 oracle revenue factor (0..1024) per computor — needs all 676
+        // scores to know the rank-451 quorum threshold. Pad missing computors with 0.
+        if (computors.Count > 0)
+        {
+            var scores = new ulong[OracleRevenueFactor.N];
+            foreach (var c in computors)
+            {
+                if (c.ComputorIndex >= 0 && c.ComputorIndex < OracleRevenueFactor.N)
+                    scores[c.ComputorIndex] = (ulong)Math.Max(0, c.EstimatedPoints);
+            }
+            var factors = OracleRevenueFactor.ComputeFactors(scores);
+            computors = computors
+                .Select(c => c with { OracleFactor = (uint)factors[c.ComputorIndex] })
+                .ToList();
         }
 
         return new OracleEpochSummaryDto(
@@ -6529,6 +6716,7 @@ public class ClickHouseQueryService : IDisposable
                     Convert.ToInt64(reader.GetValue(1)),
                     Convert.ToInt64(reader.GetValue(2)),
                     Convert.ToInt64(reader.GetValue(3)),
+                    0u, // OracleFactor — populated by caller
                     Convert.ToDouble(reader.GetValue(4)),
                     Convert.ToInt64(reader.GetValue(5))
                 ));
@@ -6965,8 +7153,72 @@ public class ClickHouseQueryService : IDisposable
         if (commits == 0 && reveals == 0 && !foundAgg)
             return null;
 
+        // V2 oracle revenue factor — needs the rank-451 estimated_points across the
+        // whole epoch. Try aggregates first, fall back to computing from raw.
+        var quorumScore = await GetOracleQuorumScoreAsync(epoch, hasRaw, ct);
+        var oracleFactor = OracleRevenueFactor.ComputeFactor((ulong)Math.Max(0, points), quorumScore);
+
         return new OracleComputorProfileDto(
-            epoch, computorIndex, commits, reveals, points, avgOffset, parts,
-            hasRaw, totalQueries, queries);
+            epoch, computorIndex, commits, reveals, points,
+            (uint)oracleFactor, (long)quorumScore,
+            avgOffset, parts, hasRaw, totalQueries, queries);
+    }
+
+    /// <summary>
+    /// Quorum score = rank-451 estimated_points (DESC sort). Needed for V2 oracle
+    /// revenue factor. Returns 0 if fewer than 451 non-zero entries — matches the
+    /// core's "all full" fallback.
+    /// </summary>
+    private async Task<ulong> GetOracleQuorumScoreAsync(uint epoch, bool hasRaw, CancellationToken ct)
+    {
+        // Try aggregates: OFFSET 450 (0-indexed) on DESC-sorted estimated_points.
+        await using (var aggCmd = _connection.CreateCommand())
+        {
+            aggCmd.CommandText = $@"
+                SELECT estimated_points
+                FROM oracle_computor_summary FINAL
+                WHERE epoch = {{epoch:UInt32}}
+                ORDER BY estimated_points DESC
+                LIMIT 1 OFFSET {OracleRevenueFactor.QuorumRank - 1}";
+            AddParam(aggCmd, "epoch", epoch);
+            var r = await aggCmd.ExecuteScalarAsync(ct);
+            if (r != null && r != DBNull.Value)
+                return (ulong)Math.Max(0, Convert.ToInt64(r));
+        }
+
+        if (!hasRaw) return 0;
+
+        // Raw fallback: re-derive per-computor estimated_points and pick rank-451.
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            WITH per_query AS (
+                SELECT
+                    query_id,
+                    if(countIf(event_type = 0) >= {OracleQuorum},
+                       arrayElement(arraySort(groupArrayIf(tick_number, event_type = 0)), {OracleQuorum}),
+                       0) AS quorum_cutoff_tick
+                FROM oracle_query_events
+                WHERE epoch = {{epoch:UInt32}}
+                GROUP BY query_id
+            ),
+            per_computor AS (
+                SELECT
+                    e.computor_index,
+                    countIf(e.event_type = 0 AND
+                            (q.quorum_cutoff_tick = 0 OR e.tick_number <= q.quorum_cutoff_tick)) AS estimated_points
+                FROM oracle_query_events e
+                LEFT JOIN per_query AS q ON q.query_id = e.query_id
+                WHERE e.epoch = {{epoch:UInt32}}
+                GROUP BY e.computor_index
+            )
+            SELECT estimated_points
+            FROM per_computor
+            ORDER BY estimated_points DESC
+            LIMIT 1 OFFSET {OracleRevenueFactor.QuorumRank - 1}";
+        AddParam(cmd, "epoch", epoch);
+        var r2 = await cmd.ExecuteScalarAsync(ct);
+        if (r2 != null && r2 != DBNull.Value)
+            return (ulong)Math.Max(0, Convert.ToInt64(r2));
+        return 0;
     }
 }

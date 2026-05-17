@@ -415,7 +415,10 @@ public record EpochMetaDto(
     decimal TotalVolume = 0,
     ulong ActiveAddresses = 0,
     ulong TransferCount = 0,
-    decimal QuTransferred = 0
+    decimal QuTransferred = 0,
+    DateTime? StartTime = null,
+    DateTime? EndTime = null,
+    ulong AssetTransferCount = 0
 );
 
 // =====================================================
@@ -845,13 +848,32 @@ public record ComputorRevenueEntryDto(
     ushort ComputorIndex,
     string Address,
     string? Label,
+
+    // V1 inputs (kept for back-compat / divergence monitoring).
+    // TxScore is the legacy per-computor sum at (tick % 676).
+    // VoteScore is no longer used in the formula under V2 — kept as a metric.
     ulong TxScore,
     ulong VoteScore,
     ulong MiningScore,
+
+    // V2 inputs (sliding-window TX + oracle revenue points).
+    ulong SlidingWindowTxScore,
+    ulong OracleScore,
+
+    // Factors [0..S=1024].
     ulong TxFactor,
     ulong VoteFactor,
+    ulong OracleFactor,
     ulong MiningFactor,
-    long Revenue
+
+    // V2 combined-mandatory factor M = (17·tx + 3·oracle) / 20.
+    ulong CombinedMandatoryFactor,
+
+    // Revenue values.
+    long RevenueV1,    // legacy: tx × vote × mining
+    long RevenueV2,    // V2 additive bonus formula
+    int RevenueFormula, // 1 or 2 — which formula contributed to Revenue
+    long Revenue       // active revenue (= V2 for epoch ≥ V2FromEpoch, else V1)
 );
 
 public record ComputorRevenueDto(
@@ -860,7 +882,9 @@ public record ComputorRevenueDto(
     long IssuanceRate,
     ulong TxQuorumScore,
     ulong VoteQuorumScore,
+    ulong OracleQuorumScore,
     ulong MiningQuorumScore,
+    int ActiveFormula,                  // 1 (V1) or 2 (V2)
     long TotalComputorRevenue,
     long ArbRevenue,
     ComputorRevenueEntryDto[] Computors
@@ -916,7 +940,9 @@ public record ComputorRevenueSimulationDto(
     RevenueTickHeightsDto TickHeights,
     ulong TxQuorumScore,
     ulong VoteQuorumScore,
+    ulong OracleQuorumScore,
     ulong MiningQuorumScore,
+    int ActiveFormula,
     RevenueOverviewDto Overview,
     RevenueCalculationStatsDto CalculationStats,
     long TotalComputorRevenue,
@@ -1005,7 +1031,10 @@ public record ExecutionFeePhaseDetailDto(
 public record PhaseInputTypeCountDto(
     int InputType,
     long TotalCount,
-    long ExecutedCount
+    long ExecutedCount,
+    // Destination address — combined with InputType, this identifies the actual
+    // contract procedure being invoked. Same lookup as the tx-list filters.
+    string ToAddress = ""
 );
 
 // ── Oracle revenue analytics ──────────────────────────────────────────
@@ -1015,6 +1044,10 @@ public record OracleComputorEntryDto(
     long Commits,
     long Reveals,
     long EstimatedPoints,
+    // V2 oracle revenue factor in [0..1024]. 1024 = at or above rank-451 quorum,
+    // 0 = no in-quorum commits, otherwise proportional. Mirrors qubic core's
+    // ComputeRevFactor (revenue.h, PR #829) and qli-manager's RevenueV2Calculator.
+    uint OracleFactor,
     double AvgTickOffset,
     long Participations
 );
@@ -1093,6 +1126,10 @@ public record OracleComputorProfileDto(
     long Commits,
     long Reveals,
     long EstimatedPoints,
+    // V2 oracle revenue factor in [0..1024] for this computor relative to all 676.
+    uint OracleFactor,
+    // Quorum score = rank-451 estimated_points across the epoch (0 if fewer than 451 non-zero).
+    long QuorumScore,
     double AvgTickOffset,
     long Participations,
     bool RawEventsAvailable,

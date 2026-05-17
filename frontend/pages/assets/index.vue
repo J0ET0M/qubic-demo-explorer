@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Gem } from 'lucide-vue-next'
 
-useHead({ title: 'Assets - QLI Explorer' })
+useHead({ title: 'Assets - QLI Analytics' })
 
 const api = useApi()
 

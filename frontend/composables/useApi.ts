@@ -1070,13 +1070,20 @@ interface ComputorRevenueEntryDto {
   computorIndex: number
   address: string
   label: string | null
-  txScore: number
-  voteScore: number
-  miningScore: number
+  txScore: number             // V1: per-computor TX points sum (legacy)
+  voteScore: number           // metric only under V2
+  miningScore: number         // DOGE shares
+  slidingWindowTxScore: number // V2: sliding-window TX score (canonical)
+  oracleScore: number          // V2: oracle revenue points (= estimatedPoints)
   txFactor: number
   voteFactor: number
+  oracleFactor: number         // V2: 0..1024
   miningFactor: number
-  revenue: number
+  combinedMandatoryFactor: number // V2: M = (17·tx + 3·oracle)/20
+  revenueV1: number
+  revenueV2: number
+  revenueFormula: number       // 1 (V1 multiplicative) or 2 (V2 additive bonus)
+  revenue: number              // active revenue (V2 if epoch ≥ 209, else V1)
 }
 
 interface ComputorRevenueDto {
@@ -1085,7 +1092,9 @@ interface ComputorRevenueDto {
   issuanceRate: number
   txQuorumScore: number
   voteQuorumScore: number
+  oracleQuorumScore: number
   miningQuorumScore: number
+  activeFormula: number   // 1 or 2 — which formula is in use for this epoch
   totalComputorRevenue: number
   arbRevenue: number
   computors: ComputorRevenueEntryDto[]
@@ -1163,6 +1172,8 @@ interface OracleComputorEntryDto {
   commits: number
   reveals: number
   estimatedPoints: number
+  // V2 oracle revenue factor (0..1024). Mirrors qubic core ComputeRevFactor.
+  oracleFactor: number
   avgTickOffset: number
   participations: number
 }
@@ -1239,6 +1250,8 @@ interface OracleComputorProfileDto {
   commits: number
   reveals: number
   estimatedPoints: number
+  oracleFactor: number   // 0..1024 — see OracleComputorEntryDto
+  quorumScore: number    // rank-451 estimated_points across the epoch
   avgTickOffset: number
   participations: number
   rawEventsAvailable: boolean
@@ -1250,6 +1263,7 @@ interface PhaseInputTypeCountDto {
   inputType: number
   totalCount: number
   executedCount: number
+  toAddress: string
 }
 
 // Rich list

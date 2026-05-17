@@ -102,7 +102,7 @@ const heatmapStats = computed(() => {
 })
 
 // Leaderboard table sorting
-const leaderboardSort = ref<'points' | 'commits' | 'reveals' | 'avgOffset' | 'index'>('points')
+const leaderboardSort = ref<'points' | 'factor' | 'commits' | 'reveals' | 'avgOffset' | 'index'>('factor')
 const leaderboardAsc = ref(false)
 const sortedLeaderboard = computed(() => {
   if (!epochSummary.value?.computors) return []
@@ -111,6 +111,12 @@ const sortedLeaderboard = computed(() => {
     const dir = leaderboardAsc.value ? 1 : -1
     switch (leaderboardSort.value) {
       case 'points': return (a.estimatedPoints - b.estimatedPoints) * dir
+      case 'factor': {
+        const cmp = (a.oracleFactor - b.oracleFactor) * dir
+        if (cmp !== 0) return cmp
+        // Tie-break by points so the table is stable when many computors are at S=1024
+        return (a.estimatedPoints - b.estimatedPoints) * dir
+      }
       case 'commits': return (a.commits - b.commits) * dir
       case 'reveals': return (a.reveals - b.reveals) * dir
       case 'avgOffset': return (a.avgTickOffset - b.avgTickOffset) * dir
@@ -267,6 +273,11 @@ const computorHref = (idx: number) =>
             <thead>
               <tr>
                 <th class="cursor-pointer select-none" @click="setSort('index')">#{{ sortIndicator('index') }}</th>
+                <th
+                  class="cursor-pointer select-none text-right"
+                  @click="setSort('factor')"
+                  title="V2 oracle revenue factor (0..1024). 1024 = at-or-above the rank-451 quorum threshold; otherwise proportional. Mirrors qubic core."
+                >Factor{{ sortIndicator('factor') }}</th>
                 <th class="cursor-pointer select-none text-right" @click="setSort('points')">Est. Points{{ sortIndicator('points') }}</th>
                 <th class="cursor-pointer select-none text-right" @click="setSort('commits')">Commits{{ sortIndicator('commits') }}</th>
                 <th class="cursor-pointer select-none text-right" @click="setSort('reveals')">Reveals{{ sortIndicator('reveals') }}</th>
@@ -278,6 +289,12 @@ const computorHref = (idx: number) =>
             <tbody>
               <tr v-for="c in sortedLeaderboard.slice(0, 100)" :key="c.computorIndex">
                 <td>{{ c.computorIndex }}</td>
+                <td class="text-right font-mono">
+                  <span :class="c.oracleFactor === 1024 ? 'text-success font-bold' : c.oracleFactor === 0 ? 'text-foreground-muted' : 'text-foreground'">
+                    {{ c.oracleFactor.toLocaleString() }}
+                  </span>
+                  <span class="text-foreground-muted text-xs ml-1">/ 1024</span>
+                </td>
                 <td class="text-right font-bold">{{ c.estimatedPoints.toLocaleString() }}</td>
                 <td class="text-right">{{ c.commits.toLocaleString() }}</td>
                 <td class="text-right">{{ c.reveals.toLocaleString() }}</td>

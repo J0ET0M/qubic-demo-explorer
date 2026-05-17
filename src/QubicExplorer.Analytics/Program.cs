@@ -122,9 +122,18 @@ var app = builder.Build();
     logger.LogInformation("Schema initialization complete ({Count} statements)", statements.Count);
 }
 
-// Connect BobWebSocketClient at startup
+// Connect BobWebSocketClient at startup. Don't crash if every node is unavailable —
+// the periodic snapshot loop will catch up once Bob is reachable again.
 var bobClient = app.Services.GetRequiredService<BobWebSocketClient>();
-await bobClient.ConnectAsync();
+try
+{
+    await bobClient.ConnectAsync();
+}
+catch (Exception ex)
+{
+    var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+    startupLogger.LogWarning(ex, "Bob WebSocket connect failed at startup; continuing — will retry on demand");
+}
 
 // Initialize AddressLabelService at startup
 var addressLabelService = app.Services.GetRequiredService<AddressLabelService>();

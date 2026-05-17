@@ -19,21 +19,33 @@ watch(() => props.transactions, async (txs) => {
 const { formatVolume, truncateHash, formatDateTime } = useFormatting()
 const truncateHashShort = (hash: string) => hash.slice(0, 6) + '...'
 
+// Decode a contract index directly from the address bytes. Qubic contract
+// addresses have the canonical shape: <single non-A first char> + 55 A's + 4
+// checksum chars. Index 0 = burn address → treated as "no contract" so the
+// core-type fallback kicks in. Doesn't rely on the address-label bundle.
+const contractIndexFromAddress = (addr: string): number | null => {
+  if (!addr || addr.length !== 60) return null
+  for (let i = 1; i < 56; i++) {
+    if (addr.charCodeAt(i) !== 65) return null
+  }
+  const c = addr.charCodeAt(0)
+  if (c < 65 || c > 90) return null
+  const idx = c - 65
+  return idx > 0 ? idx : null
+}
+
 // Resolve a human-readable name for a transaction. Priority:
-//   1. Backend-provided inputTypeName (set for core txs to the burn address).
-//   2. inputType === 0 → "Transfer".
-//   3. toAddress maps to a known contract (via label cache) and inputType matches a known procedure.
+//   1. inputType === 0 → "Transfer".
+//   2. toAddress is a contract address → contract.procedure (resolved from address).
+//   3. Backend-provided inputTypeName (only set for core txs to the burn address).
 //   4. Fallback: "Type N".
 // Returns { label, title } so callers can render a short label with a longer tooltip.
 const txTypeInfo = (tx: TransactionDto): { label: string; title: string } => {
-  if (tx.inputTypeName) {
-    return { label: tx.inputTypeName, title: `Core: ${tx.inputTypeName} (type ${tx.inputType})` }
-  }
   if (tx.inputType === 0) {
     return { label: 'Transfer', title: 'Standard QU transfer' }
   }
-  const lbl = getLabel(tx.toAddress)
-  const idx = lbl?.contractIndex ?? null
+  const idx = contractIndexFromAddress(tx.toAddress)
+           ?? (getLabel(tx.toAddress)?.contractIndex ?? null)
   if (idx !== null && idx !== undefined) {
     const proc = getProcedureSchema(idx, tx.inputType)
     const contract = getContractSchema(idx)
@@ -49,6 +61,9 @@ const txTypeInfo = (tx: TransactionDto): { label: string; title: string } => {
         title: `${contract.name} unknown procedure ${tx.inputType}`
       }
     }
+  }
+  if (tx.inputTypeName) {
+    return { label: tx.inputTypeName, title: `Core: ${tx.inputTypeName} (type ${tx.inputType})` }
   }
   return { label: `Type ${tx.inputType}`, title: `Unknown input type ${tx.inputType}` }
 }

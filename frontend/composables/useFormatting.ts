@@ -195,9 +195,16 @@ export const useFormatting = () => {
 
   /**
    * Format epoch duration from start/end date strings (e.g. "6d 23h").
+   * Capped at the protocol max of 7d — anything larger means we got a bad
+   * timestamp on one end and shouldn't show e.g. "9000d 12h".
    */
   const formatEpochDuration = (startStr: string, endStr: string): string => {
-    const diffMs = new Date(endStr).getTime() - new Date(startStr).getTime()
+    const start = new Date(startStr).getTime()
+    const end = new Date(endStr).getTime()
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '—'
+
+    const MAX_MS = 7 * 24 * 60 * 60 * 1000
+    const diffMs = Math.min(end - start, MAX_MS)
     const days = Math.floor(diffMs / (1000 * 60 * 60 * 24))
     const hours = Math.ceil((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
     if (hours === 24) return `${days + 1}d 0h`

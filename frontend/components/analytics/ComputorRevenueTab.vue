@@ -272,6 +272,20 @@ const { truncateAddress } = useFormatting()
         </div>
       </div>
 
+      <div v-if="revenueData" class="text-xs text-foreground-muted mb-2 flex items-center gap-2">
+        <span class="px-1.5 py-0.5 rounded font-semibold"
+              :class="revenueData.activeFormula === 2 ? 'bg-success/15 text-success' : 'bg-info/15 text-info'">
+          Formula V{{ revenueData.activeFormula }}
+        </span>
+        <template v-if="revenueData.activeFormula === 2">
+          <span>· TX = sliding-window (1351-tick circular)</span>
+          <span>· M = (17·tx + 3·oracle) / 20</span>
+          <span>· revenue = IPC × M × (S² + B·E) / (S·(S+B)·S)</span>
+        </template>
+        <template v-else>
+          <span>· TX × Vote × Mining (legacy multiplicative)</span>
+        </template>
+      </div>
       <div class="table-wrapper">
         <table>
           <thead>
@@ -279,12 +293,30 @@ const { truncateAddress } = useFormatting()
               <th class="cursor-pointer select-none" @click="toggleSort('computorIndex')">#</th>
               <th>Address</th>
               <th>Label</th>
-              <th class="cursor-pointer select-none text-right" @click="toggleSort('txScore')">TX Score</th>
-              <th class="cursor-pointer select-none text-right" @click="toggleSort('voteScore')">Vote Score</th>
+              <th
+                class="cursor-pointer select-none text-right"
+                @click="toggleSort(revenueData?.activeFormula === 2 ? 'slidingWindowTxScore' : 'txScore')"
+                title="V2: 1351-tick sliding-window TX score (revenue.h). V1: per-computor TX points sum at tick % 676."
+              >TX Score</th>
+              <th
+                class="cursor-pointer select-none text-right"
+                @click="toggleSort('oracleScore')"
+                title="Oracle revenue points = count of queries where commit landed in-quorum. Used in V2."
+              >Oracle Score</th>
               <th class="cursor-pointer select-none text-right" @click="toggleSort('miningScore')">Mining Score</th>
               <th class="cursor-pointer select-none text-right" @click="toggleSort('txFactor')">TX %</th>
-              <th class="cursor-pointer select-none text-right" @click="toggleSort('voteFactor')">Vote %</th>
+              <th
+                class="cursor-pointer select-none text-right"
+                @click="toggleSort('oracleFactor')"
+                title="Oracle factor [0..1024]"
+              >Oracle %</th>
               <th class="cursor-pointer select-none text-right" @click="toggleSort('miningFactor')">Mining %</th>
+              <th
+                v-if="revenueData?.activeFormula === 2"
+                class="cursor-pointer select-none text-right"
+                @click="toggleSort('combinedMandatoryFactor')"
+                title="M = (17·tx + 3·oracle) / 20 (V2 only)"
+              >M</th>
               <th class="cursor-pointer select-none text-right" @click="toggleSort('revenue')">Revenue</th>
               <th class="text-right">%</th>
             </tr>
@@ -298,17 +330,22 @@ const { truncateAddress } = useFormatting()
                 </NuxtLink>
               </td>
               <td class="text-foreground-muted text-xs">{{ c.label || '-' }}</td>
-              <td class="text-right font-mono text-xs">{{ formatAmount(c.txScore) }}</td>
-              <td class="text-right font-mono text-xs">{{ formatAmount(c.voteScore) }}</td>
+              <td class="text-right font-mono text-xs">
+                {{ formatAmount(revenueData?.activeFormula === 2 ? c.slidingWindowTxScore : c.txScore) }}
+              </td>
+              <td class="text-right font-mono text-xs">{{ formatAmount(c.oracleScore) }}</td>
               <td class="text-right font-mono text-xs">{{ formatAmount(c.miningScore) }}</td>
               <td class="text-right font-mono text-xs" :class="factorClass(c.txFactor)">{{ factorPct(c.txFactor) }}%</td>
-              <td class="text-right font-mono text-xs" :class="factorClass(c.voteFactor)">{{ factorPct(c.voteFactor) }}%</td>
+              <td class="text-right font-mono text-xs" :class="factorClass(c.oracleFactor)">{{ factorPct(c.oracleFactor) }}%</td>
               <td class="text-right font-mono text-xs" :class="factorClass(c.miningFactor)">{{ factorPct(c.miningFactor) }}%</td>
+              <td v-if="revenueData?.activeFormula === 2" class="text-right font-mono text-xs" :class="factorClass(c.combinedMandatoryFactor)">
+                {{ factorPct(c.combinedMandatoryFactor) }}%
+              </td>
               <td class="text-right font-bold">{{ formatAmount(c.revenue) }}</td>
               <td class="text-right font-mono text-xs" :class="c.revenue > 0 ? 'text-success' : 'text-destructive'">{{ revenuePct(c.revenue) }}%</td>
             </tr>
             <tr v-if="paginatedComputors.length === 0">
-              <td colspan="11" class="text-center text-foreground-muted py-4">No matching computors</td>
+              <td :colspan="revenueData?.activeFormula === 2 ? 12 : 11" class="text-center text-foreground-muted py-4">No matching computors</td>
             </tr>
           </tbody>
         </table>

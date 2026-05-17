@@ -10,6 +10,23 @@ const emissionEpoch = computed(() => Number(route.params.epoch))
 const maxDepth = ref(10)
 const showAllNodes = ref(false)
 
+// Sankey per-column width (px). Persisted in localStorage so it sticks across
+// page reloads. Clamped to a sensible range.
+const sankeyColumnWidth = ref(293)
+// When a node is selected: highlight only (dim others) or hide unrelated entirely.
+const sankeyHideUnrelated = ref(false)
+if (import.meta.client) {
+  const saved = localStorage.getItem('sankey:columnWidth')
+  if (saved) {
+    const v = Number(saved)
+    if (Number.isFinite(v) && v >= 150 && v <= 600) sankeyColumnWidth.value = v
+  }
+  const savedHide = localStorage.getItem('sankey:hideUnrelated')
+  if (savedHide === '1') sankeyHideUnrelated.value = true
+  watch(sankeyColumnWidth, (v) => localStorage.setItem('sankey:columnWidth', String(v)))
+  watch(sankeyHideUnrelated, (v) => localStorage.setItem('sankey:hideUnrelated', v ? '1' : '0'))
+}
+
 // Sankey diagram filter state
 const sankeyFilteredNodeId = ref<string | null>(null)
 const sankeyFilteredNode = computed(() => {
@@ -229,6 +246,38 @@ const getNodeIcon = (type: string) => {
           </div>
         </div>
 
+        <!-- Sankey controls -->
+        <div class="flex flex-wrap items-center gap-3 mb-3 px-1">
+          <label class="text-xs text-foreground-muted" for="sankey-col-width">
+            Column width
+          </label>
+          <input
+            id="sankey-col-width"
+            v-model.number="sankeyColumnWidth"
+            type="range"
+            min="150"
+            max="600"
+            step="10"
+            class="w-48 accent-accent"
+          />
+          <span class="text-xs font-mono text-foreground tabular-nums">{{ sankeyColumnWidth }}px</span>
+          <button
+            type="button"
+            @click="sankeyColumnWidth = 293"
+            class="px-2 py-0.5 text-[10px] rounded bg-surface-elevated hover:bg-surface-hover text-foreground-muted"
+          >
+            Reset
+          </button>
+          <label class="inline-flex items-center gap-1.5 text-xs text-foreground-muted cursor-pointer ml-4">
+            <input
+              v-model="sankeyHideUnrelated"
+              type="checkbox"
+              class="accent-accent"
+            />
+            Hide unrelated when filtered
+          </label>
+        </div>
+
         <!-- Sankey Chart -->
         <div class="overflow-x-auto border border-border rounded-lg p-4 bg-surface">
           <ClientOnly>
@@ -238,6 +287,8 @@ const getNodeIcon = (type: string) => {
               :width="1200"
               :height="Math.max(500, flowData.nodes.length * 6)"
               :filtered-node-id="sankeyFilteredNodeId"
+              :min-column-width="sankeyColumnWidth"
+              :hide-unrelated="sankeyHideUnrelated"
               @node-filter="handleNodeFilter"
             />
             <template #fallback>

@@ -454,6 +454,9 @@ public static class ClickHouseSchema
             active_addresses UInt64 DEFAULT 0,
             transfer_count UInt64 DEFAULT 0,
             qu_transferred UInt128 DEFAULT 0,
+            start_time DateTime64(3) DEFAULT 0,
+            end_time DateTime64(3) DEFAULT 0,
+            asset_transfer_count UInt64 DEFAULT 0,
             updated_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(updated_at)
         ORDER BY epoch
@@ -467,6 +470,13 @@ public static class ClickHouseSchema
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS active_addresses UInt64 DEFAULT 0 AFTER total_volume",
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS transfer_count UInt64 DEFAULT 0 AFTER active_addresses",
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS qu_transferred UInt128 DEFAULT 0 AFTER transfer_count",
+        // Snapshot of the first/last good tick timestamps and asset transfer count.
+        // Storing them avoids JOINs against the heavy materialized views on the read path
+        // and shields the page from the "1999-11-30" sentinel timestamps that come from
+        // bad-data ticks (we filter timestamp > '2020-01-01' when computing).
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS start_time DateTime64(3) DEFAULT 0 AFTER qu_transferred",
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS end_time DateTime64(3) DEFAULT 0 AFTER start_time",
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS asset_transfer_count UInt64 DEFAULT 0 AFTER end_time",
 
         // Network stats history
         $"""
@@ -847,6 +857,9 @@ public static class ClickHouseSchema
             tx_quorum_score UInt64,
             vote_quorum_score UInt64,
             mining_quorum_score UInt64,
+            -- V2 additions: oracle quorum + active formula (1 = V1 multiplicative, 2 = V2 additive bonus)
+            oracle_quorum_score UInt64 DEFAULT 0,
+            active_formula UInt8 DEFAULT 1,
             total_computor_revenue Int64,
             arb_revenue Int64,
             computors String DEFAULT '[]',
@@ -854,6 +867,10 @@ public static class ClickHouseSchema
         ) ENGINE = ReplacingMergeTree(created_at)
         ORDER BY epoch
         """,
+        // Best-effort migration for existing deployments (DEFAULT only applies to NEW columns,
+        // but ALTER TABLE ADD COLUMN IF NOT EXISTS is a no-op when already present).
+        $"ALTER TABLE {DatabaseName}.computor_revenue ADD COLUMN IF NOT EXISTS oracle_quorum_score UInt64 DEFAULT 0",
+        $"ALTER TABLE {DatabaseName}.computor_revenue ADD COLUMN IF NOT EXISTS active_formula UInt8 DEFAULT 1",
 
         // Tick vote snapshots (accumulated votes per 676-tick window)
         $"""

@@ -132,9 +132,19 @@ var app = builder.Build();
     logger.LogInformation("Schema initialization complete ({Count} statements)", statements.Count);
 }
 
-// Connect BobWebSocketClient at startup
+// Connect BobWebSocketClient at startup. Don't crash the API if every node is
+// unavailable — the client retries on demand and the rest of the API (cached
+// reads, ClickHouse-backed endpoints) still works without an active Bob session.
 var bobClient = app.Services.GetRequiredService<BobWebSocketClient>();
-await bobClient.ConnectAsync();
+try
+{
+    await bobClient.ConnectAsync();
+}
+catch (Exception ex)
+{
+    var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+    startupLogger.LogWarning(ex, "Bob WebSocket connect failed at startup; continuing — will retry on demand");
+}
 
 // Initialize AddressLabelService at startup
 var addressLabelService = app.Services.GetRequiredService<AddressLabelService>();

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { GitCompare, Search } from 'lucide-vue-next'
 
-useHead({ title: 'Address Comparison - QLI Explorer' })
+useHead({ title: 'Address Comparison - QLI Analytics' })
 
 const api = useApi()
 const { getLabel, fetchLabels } = useAddressLabels()
