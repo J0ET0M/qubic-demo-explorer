@@ -50,13 +50,28 @@ public static class RevenueV2Calculator
     }
 
     /// <summary>
+    /// Compute V2 revenue using the gTxRevenuePoints table that corresponds to
+    /// <paramref name="epoch"/> (legacy 1025-entry for epoch &lt; 214,
+    /// extended 4097-entry from PR #881 for epoch ≥ 214).
+    /// </summary>
+    public static Result Compute(
+        long initialTick,
+        ushort[] perTickTxCount,
+        ulong[] oracleScore,
+        ulong[] dogeScore,
+        uint epoch)
+        => Compute(
+            initialTick, perTickTxCount, oracleScore, dogeScore,
+            QubicProtocolParams.GetTxRevenuePoints(epoch));
+
+    /// <summary>
     /// Compute V2 revenue from per-tick TX counts and per-computor input scores.
     /// </summary>
     /// <param name="initialTick">First tick of the epoch.</param>
     /// <param name="perTickTxCount">Indexed by (tick - initialTick). Length = totalTicks observed so far.</param>
     /// <param name="oracleScore">Per-computor oracle revenue points (676). Pass all-zero to fall back to "all full" oracle factor.</param>
     /// <param name="dogeScore">Per-computor DOGE share counts (676).</param>
-    /// <param name="txRevenuePoints">Lookup table from revenue.h (gTxRevenuePoints, length 1025).</param>
+    /// <param name="txRevenuePoints">Lookup table from revenue.h (gTxRevenuePoints, length 1025 or 4097).</param>
     public static Result Compute(
         long initialTick,
         ushort[] perTickTxCount,

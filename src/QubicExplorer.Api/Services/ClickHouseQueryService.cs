@@ -5665,11 +5665,11 @@ public class ClickHouseQueryService : IDisposable
         }
 
         // V2: sliding-window TX up to txTick, oracle scores from oracle_computor_summary, DOGE-only mining.
+        // gTxRevenuePoints is selected by epoch — legacy 1025-entry / extended 4097-entry (PR #881).
         var (perTickTxCount, initialTick) = await GetPerTickTxCountsForRevenueAsync(epoch, effectiveTxTick, ct);
         var oracleScores = await GetOracleScoresForRevenueAsync(epoch, ct);
         var v2 = RevenueV2Calculator.Compute(
-            (long)initialTick, perTickTxCount, oracleScores, miningScores,
-            QubicConstants.TxRevenuePoints.ToArray());
+            (long)initialTick, perTickTxCount, oracleScores, miningScores, epoch);
 
         var slidingTxQuorum = RevenueGetQuorumScore(v2.SlidingWindowTxScoreFull);
         var oracleQuorum = RevenueGetQuorumScore(oracleScores);
@@ -5819,6 +5819,8 @@ public class ClickHouseQueryService : IDisposable
     private async Task<TxScoreResult> CalculateTxScoresUpToTickAsync(uint epoch, ulong maxTick, CancellationToken ct)
     {
         var scores = new ulong[QubicConstants.NumberOfComputors];
+        var maxIdx = QubicProtocolParams.GetMaxTxPerTick(epoch);
+        var lut = QubicProtocolParams.GetTxRevenuePoints(epoch);
         int ticksProcessed = 0;
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
@@ -5834,8 +5836,8 @@ public class ClickHouseQueryService : IDisposable
             var tickNumber = reader.GetFieldValue<ulong>(0);
             var txCount = reader.GetFieldValue<uint>(1);
             var computorIdx = (int)(tickNumber % QubicConstants.NumberOfComputors);
-            var pointIdx = Math.Min(txCount, 1024);
-            scores[computorIdx] += QubicConstants.TxRevenuePoints[(int)pointIdx];
+            var pointIdx = Math.Min((int)txCount, maxIdx);
+            scores[computorIdx] += lut[pointIdx];
             ticksProcessed++;
         }
         return new TxScoreResult(scores, ticksProcessed);

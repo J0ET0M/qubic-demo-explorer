@@ -100,9 +100,10 @@ public class ComputorRevenueService : IDisposable
         var (perTickTxCount, initialTick) = await GetPerTickTxCountsAsync(epoch, ct);
         var oracleScores = await CalculateOracleScoresAsync(epoch, ct);
 
-        var txRevenuePoints = QubicConstants.TxRevenuePoints.ToArray();
+        // Picks the legacy (1025-entry) or extended (4097-entry, PR #881) gTxRevenuePoints
+        // table depending on the epoch. See QubicProtocolParams.NewTxLimitsFromEpoch.
         var v2 = RevenueV2Calculator.Compute(
-            (long)initialTick, perTickTxCount, oracleScores, miningScores, txRevenuePoints);
+            (long)initialTick, perTickTxCount, oracleScores, miningScores, epoch);
 
         // Quorum scores for the V2 inputs (sliding-window TX and oracle), reported at top level.
         ulong slidingTxQuorum = ComputeQuorumScore(v2.SlidingWindowTxScoreFull);
@@ -263,11 +264,15 @@ public class ComputorRevenueService : IDisposable
 
     /// <summary>
     /// Calculate TX scores from tick data. For each non-empty tick, the computor at
-    /// (tick_number % 676) gets gTxRevenuePoints[min(tx_count, 1024)] added to their score.
+    /// (tick_number % 676) gets gTxRevenuePoints[min(tx_count, MaxTxPerTick)] added to their score.
+    /// Cap and lookup table are epoch-aware: legacy 1024/1025 for epoch &lt; 214, extended
+    /// 4096/4097 from PR #879/#881 for epoch ≥ 214.
     /// </summary>
     private async Task<ulong[]> CalculateTxScoresAsync(uint epoch, CancellationToken ct)
     {
         var scores = new ulong[QubicConstants.NumberOfComputors];
+        var maxIdx = QubicProtocolParams.GetMaxTxPerTick(epoch);
+        var lut = QubicProtocolParams.GetTxRevenuePoints(epoch);
 
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $"SELECT tick_number, tx_count FROM ticks WHERE epoch = {epoch} AND is_empty = 0 AND tx_count > 0";
@@ -278,8 +283,8 @@ public class ComputorRevenueService : IDisposable
             var tickNumber = reader.GetFieldValue<ulong>(0);
             var txCount = reader.GetFieldValue<uint>(1);
             var computorIdx = (int)(tickNumber % QubicConstants.NumberOfComputors);
-            var pointIdx = Math.Min(txCount, 1024);
-            scores[computorIdx] += QubicConstants.TxRevenuePoints[(int)pointIdx];
+            var pointIdx = Math.Min((int)txCount, maxIdx);
+            scores[computorIdx] += lut[pointIdx];
         }
 
         return scores;
