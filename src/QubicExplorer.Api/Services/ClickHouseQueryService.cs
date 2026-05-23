@@ -7223,4 +7223,71 @@ public class ClickHouseQueryService : IDisposable
             return (ulong)Math.Max(0, Convert.ToInt64(r2));
         return 0;
     }
+
+    // =====================================================
+    // CONTRACT RESERVE HISTORY
+    // =====================================================
+
+    /// <summary>
+    /// Read the contract's reserve (QU balance) history for the last N days.
+    /// Snapshotted every ~10 min by ContractReserveSnapshotService in the analytics service.
+    /// Returns an empty samples list if the address isn't a known contract or has no data yet.
+    /// </summary>
+    public async Task<ContractReserveHistoryDto> GetContractReserveHistoryAsync(
+        string address, int days, CancellationToken ct = default)
+    {
+        var info = _labelService.GetAddressInfo(address);
+        var samples = new List<ContractReserveSampleDto>();
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT timestamp, balance
+                FROM contract_reserve_history
+                WHERE address = {addr:String}
+                  AND timestamp >= now() - INTERVAL {days:UInt32} DAY
+                ORDER BY timestamp ASC";
+            AddParam(cmd, "addr", address);
+            AddParam(cmd, "days", (uint)days);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                samples.Add(new ContractReserveSampleDto(
+                    reader.GetDateTime(0),
+                    ToBigDecimal(reader.GetValue(1))
+                ));
+            }
+        }
+
+        decimal current = samples.Count > 0 ? samples[^1].Balance : 0;
+        decimal burnRate = 0;
+        double? runway = null;
+        if (samples.Count >= 2)
+        {
+            var first = samples[0];
+            var last = samples[^1];
+            var windowDays = (last.Timestamp - first.Timestamp).TotalDays;
+            if (windowDays > 0)
+            {
+                // Positive burn = reserve falling. Caller treats negative as growth.
+                var delta = first.Balance - last.Balance;
+                burnRate = (decimal)(delta / (decimal)windowDays);
+                if (burnRate > 0 && current > 0)
+                    runway = (double)(current / burnRate);
+            }
+        }
+
+        return new ContractReserveHistoryDto(
+            Address: address,
+            ContractIndex: info?.ContractIndex,
+            Label: info?.Label,
+            DaysRequested: days,
+            SampleCount: samples.Count,
+            CurrentBalance: current,
+            BurnRatePerDay: burnRate,
+            EstimatedRunwayDays: runway,
+            Samples: samples
+        );
+    }
 }

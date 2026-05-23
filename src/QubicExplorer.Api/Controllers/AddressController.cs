@@ -219,6 +219,24 @@ public class AddressController : ControllerBase
     }
 
     /// <summary>
+    /// Reserve (= QU balance) history for a smart-contract address. Snapshotted
+    /// every ~10 min by the analytics service. Data older than 31 days is
+    /// dropped by the table TTL.
+    /// </summary>
+    [HttpGet("{address}/reserve-history")]
+    public async Task<IActionResult> GetReserveHistory(
+        string address,
+        [FromQuery] int days = 7,
+        CancellationToken ct = default)
+    {
+        if (days < 1) days = 1;
+        if (days > 31) days = 31;
+
+        var result = await _queryService.GetContractReserveHistoryAsync(address, days, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Batch fetch multiple addresses (for portfolio view)
     /// </summary>
     [HttpPost("batch")]

@@ -239,6 +239,10 @@ export const useApi = () => {
   const getAddressFlow = (address: string, limit = 10) =>
     fetchApi<AddressFlowDto>(`/api/address/${address}/flow?limit=${limit}`)
 
+  // Contract reserve (QU balance) history — populated by analytics snapshots.
+  const getContractReserveHistory = (address: string, days = 7) =>
+    fetchApi<ContractReserveHistoryDto>(`/api/address/${address}/reserve-history?days=${days}`)
+
   // Rich list
   const getRichList = (page = 1, limit = 50) =>
     fetchApi<RichListDto>(`/api/stats/rich-list?page=${page}&limit=${limit}`)
@@ -489,6 +493,7 @@ export const useApi = () => {
     getTopAddresses,
     getSmartContractUsage,
     getAddressFlow,
+    getContractReserveHistory,
     getActiveAddressTrends,
     getNewVsReturningAddresses,
     getExchangeFlows,
@@ -1581,6 +1586,24 @@ interface ComputorEmissionResponseDto {
   emission: number
 }
 
+interface ContractReserveSampleDto {
+  timestamp: string
+  balance: number
+}
+
+interface ContractReserveHistoryDto {
+  address: string
+  contractIndex: number | null
+  label: string | null
+  daysRequested: number
+  sampleCount: number
+  currentBalance: number
+  // QU per day; positive = reserve falling, negative = growing.
+  burnRatePerDay: number
+  estimatedRunwayDays: number | null
+  samples: ContractReserveSampleDto[]
+}
+
 export type {
   PaginatedResponse,
   TickDto,
@@ -1657,4 +1680,6 @@ export type {
   CcfProposalDto,
   CcfSubscriptionDto,
   CcfEpochSpendingDto,
+  ContractReserveSampleDto,
+  ContractReserveHistoryDto,
 }

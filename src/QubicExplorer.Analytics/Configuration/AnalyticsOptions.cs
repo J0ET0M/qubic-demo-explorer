@@ -23,4 +23,8 @@ public class AnalyticsOptions
     public bool EnableExecutionFees { get; set; } = true;
     public bool EnableOracleEvents { get; set; } = true;
     public bool EnableCustomFlowJobs { get; set; } = true;
+    public bool EnableContractReserveSnapshots { get; set; } = true;
+
+    /// <summary>Interval (minutes) between contract reserve snapshots.</summary>
+    public int ContractReserveSnapshotIntervalMinutes { get; set; } = 10;
 }

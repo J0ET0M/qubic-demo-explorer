@@ -1136,3 +1136,26 @@ public record OracleComputorProfileDto(
     long TotalQueries,
     List<OracleComputorQueryEntryDto> Queries
 );
+
+// ── Contract reserve history ──────────────────────────────────────────
+
+public record ContractReserveSampleDto(
+    DateTime Timestamp,
+    decimal Balance
+);
+
+public record ContractReserveHistoryDto(
+    string Address,
+    int? ContractIndex,
+    string? Label,
+    int DaysRequested,
+    int SampleCount,
+    decimal CurrentBalance,
+    // Burn rate over the requested window: (oldestSample - newestSample) / window
+    // Negative means reserve is growing. QU per day.
+    decimal BurnRatePerDay,
+    // Estimated runway in days if the burn rate stays constant. Null if reserve
+    // is growing or window has insufficient data.
+    double? EstimatedRunwayDays,
+    List<ContractReserveSampleDto> Samples
+);

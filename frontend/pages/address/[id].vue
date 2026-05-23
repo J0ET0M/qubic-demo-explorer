@@ -353,6 +353,12 @@ const clearTxFilters = () => {
       </template>
     </div>
 
+    <!-- Execution fee reserve (smart contracts only) -->
+    <ContractReserveCard
+      v-if="isSmartContract"
+      :address="address"
+    />
+
     <!-- Activity Card -->
     <div class="card">
       <div class="flex items-center justify-between flex-wrap gap-2">

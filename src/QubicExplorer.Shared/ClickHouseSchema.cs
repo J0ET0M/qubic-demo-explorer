@@ -54,10 +54,21 @@ public static class ClickHouseSchema
         ORDER BY (tick_number, hash)
         """,
 
-        // Transaction indexes
-        $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_from from_address TYPE bloom_filter GRANULARITY 4",
-        $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_to to_address TYPE bloom_filter GRANULARITY 4",
-        $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_hash hash TYPE bloom_filter GRANULARITY 4",
+        // Transaction indexes.
+        //
+        // idx_hash uses a tight bloom (0.1% FPR) and per-granule resolution so
+        // single-hash lookups (the tx detail page) hit ≪1 GiB of read I/O
+        // instead of multiple GiB. Existing deployments need a one-shot
+        // DROP INDEX + ADD INDEX + MATERIALIZE INDEX migration; the IF NOT
+        // EXISTS guard below keeps fresh installs idempotent.
+        //
+        // idx_input_type uses a set index (exhaustive — zero false positives)
+        // since input_type has < 20 distinct values; this fixes the V1 revenue
+        // path's "scan-the-whole-epoch for input_type = 1" query.
+        $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_from from_address TYPE bloom_filter(0.001) GRANULARITY 1",
+        $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_to to_address TYPE bloom_filter(0.001) GRANULARITY 1",
+        $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_hash hash TYPE bloom_filter(0.001) GRANULARITY 1",
+        $"ALTER TABLE {DatabaseName}.transactions ADD INDEX IF NOT EXISTS idx_input_type input_type TYPE set(0) GRANULARITY 4",
 
         // Projections: alternate sort order for fast address lookups (avoids scanning 30M+ rows)
         $"ALTER TABLE {DatabaseName}.transactions ADD PROJECTION IF NOT EXISTS proj_from_address (SELECT * ORDER BY from_address, tick_number)",
@@ -871,6 +882,27 @@ public static class ClickHouseSchema
         // but ALTER TABLE ADD COLUMN IF NOT EXISTS is a no-op when already present).
         $"ALTER TABLE {DatabaseName}.computor_revenue ADD COLUMN IF NOT EXISTS oracle_quorum_score UInt64 DEFAULT 0",
         $"ALTER TABLE {DatabaseName}.computor_revenue ADD COLUMN IF NOT EXISTS active_formula UInt8 DEFAULT 1",
+
+        // Contract reserve history. Snapshots the live QU balance of every known
+        // smart contract every ~10 minutes (configurable via the analytics service).
+        // The balance is what funds future execution-fee deductions, so the trend
+        // gives an indication of how fast a contract is burning its reserve.
+        // TTL drops rows older than ~31 days so the table stays small.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.contract_reserve_history (
+            timestamp DateTime64(3) CODEC(Delta, LZ4),
+            contract_index UInt16 CODEC(LZ4),
+            address String CODEC(LZ4HC),
+            -- Reserve is sint64 in qubic core (QUtil.QueryFeeReserve); UInt64 here
+            -- since negatives shouldn't occur. T64+LZ4 is much more compact than
+            -- UInt128, which would also disallow T64 entirely.
+            balance UInt64 CODEC(T64, LZ4),
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = MergeTree()
+        PARTITION BY toYYYYMM(timestamp)
+        ORDER BY (contract_index, timestamp)
+        TTL toDateTime(timestamp) + INTERVAL 31 DAY DELETE
+        """,
 
         // Tick vote snapshots (accumulated votes per 676-tick window)
         $"""

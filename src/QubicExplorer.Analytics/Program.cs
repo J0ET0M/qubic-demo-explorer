@@ -90,6 +90,7 @@ builder.Services.Configure<QubicExplorer.Analytics.Configuration.AnalyticsOption
 
 // Background services
 builder.Services.AddHostedService<AnalyticsSnapshotService>();
+builder.Services.AddHostedService<ContractReserveSnapshotService>();
 
 // Add controllers (for admin endpoints)
 builder.Services.AddControllers();
