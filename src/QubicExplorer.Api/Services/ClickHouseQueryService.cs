@@ -1131,14 +1131,22 @@ public class ClickHouseQueryService : IDisposable
                 if(em.is_complete = 1 AND em.end_tick > 0, em.end_tick, COALESCE(ts.last_tick, em.initial_tick)) as last_tick
             FROM epoch_meta AS em FINAL
             LEFT JOIN (
+                -- Count tick_number directly from `ticks` (deduped via uniqExact).
+                -- The epoch_tick_stats MV is append-only and over-counts when the
+                -- indexer re-inserts a tick (catch-up / retry / replay); its
+                -- stored state isn't corrected when ReplacingMergeTree later
+                -- collapses the rows. Scoped to the current epoch only — we
+                -- still use em.tick_count for completed epochs (populated by
+                -- ComputeAndStoreEpochStatsAsync, which also uses uniqExact).
                 SELECT
                     epoch,
-                    countMerge(tick_count_state) as tick_count,
-                    sumMerge(empty_tick_count_state) as empty_tick_count,
-                    minMerge(start_time_state) as start_time,
-                    maxMerge(end_time_state) as end_time,
-                    maxMerge(last_tick_state) as last_tick
-                FROM epoch_tick_stats
+                    uniqExact(tick_number) AS tick_count,
+                    uniqExactIf(tick_number, is_empty = 1) AS empty_tick_count,
+                    minIf(timestamp, timestamp > toDateTime('2020-01-01')) AS start_time,
+                    maxIf(timestamp, timestamp > toDateTime('2020-01-01')) AS end_time,
+                    max(tick_number) AS last_tick
+                FROM ticks
+                WHERE epoch >= (SELECT max(epoch) FROM ticks)
                 GROUP BY epoch
             ) ts ON em.epoch = ts.epoch
             LEFT JOIN (
@@ -1228,13 +1236,19 @@ public class ClickHouseQueryService : IDisposable
                 COALESCE(asset.asset_transfer_count, 0) as asset_transfer_count
             FROM epoch_meta AS em FINAL
             LEFT JOIN (
+                -- Count from ticks directly (uniqExact dedups on tick_number).
+                -- Filter by the epoch's actual tick range — the indexer can
+                -- mis-label ticks (we've seen tick_number=0 and tick_numbers
+                -- from other epochs sitting in this partition), which would
+                -- otherwise inflate the count above the protocol max.
                 SELECT
                     epoch,
-                    countMerge(tick_count_state) as tick_count,
-                    sumMerge(empty_tick_count_state) as empty_tick_count,
-                    maxMerge(last_tick_state) as last_tick
-                FROM epoch_tick_stats
+                    uniqExact(tick_number) as tick_count,
+                    uniqExactIf(tick_number, is_empty = 1) as empty_tick_count,
+                    max(tick_number) as last_tick
+                FROM ticks
                 WHERE epoch = {{epoch:UInt32}}
+                  AND tick_number BETWEEN {{minTick:UInt64}} AND {{maxTick:UInt64}}
                 GROUP BY epoch
             ) ts ON em.epoch = ts.epoch
             LEFT JOIN (
@@ -1276,6 +1290,11 @@ public class ClickHouseQueryService : IDisposable
             ) asset ON em.epoch = asset.epoch
             WHERE em.epoch = {{epoch:UInt32}}";
         AddParam(cmd, "epoch", epoch);
+        // Range to filter out mis-labeled tick rows. For an incomplete epoch
+        // (end_tick=0) use UInt64.MaxValue as upper bound — we still want all
+        // properly-labeled ticks counted, just not random ones from other epochs.
+        AddParam(cmd, "minTick", meta.InitialTick);
+        AddParam(cmd, "maxTick", meta.EndTick > 0 ? meta.EndTick : ulong.MaxValue);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -3615,11 +3634,15 @@ public class ClickHouseQueryService : IDisposable
                 COALESCE(asset.asset_count, 0) AS asset_transfer_count
             FROM (SELECT 1 as _join) d
             LEFT JOIN (
+                -- Direct count from ticks, scoped to the epoch's tick range so
+                -- mis-labeled rows from other epochs sitting in this partition
+                -- don't inflate the count (see live query for the same fix).
                 SELECT
-                    countMerge(tick_count_state) as tick_count,
-                    sumMerge(empty_tick_count_state) as empty_tick_count
-                FROM epoch_tick_stats
+                    uniqExact(tick_number) as tick_count,
+                    uniqExactIf(tick_number, is_empty = 1) as empty_tick_count
+                FROM ticks
                 WHERE epoch = {{epoch:UInt32}}
+                  AND tick_number BETWEEN {{minTick:UInt64}} AND {{maxTick:UInt64}}
             ) ts ON 1=1
             LEFT JOIN (
                 SELECT
@@ -3650,6 +3673,8 @@ public class ClickHouseQueryService : IDisposable
                 WHERE epoch = {{epoch:UInt32}} AND log_type != 0
             ) asset ON 1=1";
         AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "minTick", meta.InitialTick);
+        AddParam(cmd, "maxTick", meta.EndTick > 0 ? meta.EndTick : ulong.MaxValue);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))

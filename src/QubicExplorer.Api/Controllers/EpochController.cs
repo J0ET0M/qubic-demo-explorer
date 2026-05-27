@@ -313,12 +313,41 @@ public class EpochController : ControllerBase
     /// </summary>
     [HttpPost("backfill-stats")]
     [AdminApiKey]
-    public async Task<IActionResult> BackfillEpochStats(CancellationToken ct = default)
+    public async Task<IActionResult> BackfillEpochStats(
+        [FromQuery] bool force = false,
+        [FromQuery] uint? epoch = null,
+        CancellationToken ct = default)
     {
-        _logger.LogInformation("Backfill epoch stats triggered");
+        _logger.LogInformation("Backfill epoch stats triggered (force={Force}, epoch={Epoch})", force, epoch);
+
+        // Single-epoch mode: recompute just the requested epoch (used to repair
+        // one specific epoch after cleaning bad data). Bypasses the completeness
+        // and TickCount=0 filters — useful for re-running an already-populated
+        // current epoch after fixing its underlying ticks.
+        if (epoch.HasValue)
+        {
+            var meta = await _queryService.GetEpochMetaAsync(epoch.Value, ct);
+            if (meta == null)
+                return NotFound(new { error = $"No epoch_meta row for epoch {epoch}" });
+
+            await _queryService.ComputeAndStoreEpochStatsAsync(epoch.Value, ct);
+
+            return Ok(new
+            {
+                success = true,
+                message = $"Recomputed stats for epoch {epoch}",
+                backfilled = 1,
+                epochs = new[] { epoch.Value }
+            });
+        }
 
         var allMeta = await _queryService.GetAllEpochMetaAsync(500, ct);
-        var toBackfill = allMeta.Where(m => m.IsComplete && m.TickCount == 0).ToList();
+        // With force=true: recompute every completed epoch (use this to repair
+        // historical tick_count values that were captured via the over-counting
+        // MV before the uniqExact-from-ticks fix).
+        var toBackfill = force
+            ? allMeta.Where(m => m.IsComplete).ToList()
+            : allMeta.Where(m => m.IsComplete && m.TickCount == 0).ToList();
 
         if (toBackfill.Count == 0)
         {
