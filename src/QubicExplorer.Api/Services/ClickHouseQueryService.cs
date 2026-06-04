@@ -7030,10 +7030,128 @@ public class ClickHouseQueryService : IDisposable
             }
         }
 
+        // Decode the originating tick from the query_id (query_id = (tick << 31) | txIndex)
+        // and look up candidate originating txs — those are input_type=10 (OracleUserQuery)
+        // at that tick. Usually one candidate; the user can correlate by destination
+        // (subscriber contract) if there are multiple.
+        var queryTick = (ulong)(queryId >> 31);
+        var originatingTxs = new List<OracleQueryOriginatingTxDto>();
+        await using (var origCmd = _connection.CreateCommand())
+        {
+            origCmd.CommandText = @"
+                SELECT hash, tick_number, from_address, to_address, amount,
+                       input_data, timestamp, executed
+                FROM transactions
+                WHERE epoch = {epoch:UInt32}
+                  AND tick_number = {tick:UInt64}
+                  AND input_type = 10
+                ORDER BY hash";
+            AddParam(origCmd, "epoch", epoch);
+            AddParam(origCmd, "tick", queryTick);
+            await using var r = await origCmd.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct))
+            {
+                originatingTxs.Add(new OracleQueryOriginatingTxDto(
+                    r.GetString(0),
+                    r.GetFieldValue<ulong>(1),
+                    r.GetString(2),
+                    r.GetString(3),
+                    r.GetFieldValue<ulong>(4),
+                    r.GetString(5),
+                    r.GetDateTime(6),
+                    r.GetFieldValue<byte>(7) == 1
+                ));
+            }
+        }
+
+        // Distributions of reply_digest values among commits and reveals.
+        // Only meaningful when raw events are still available.
+        List<OracleQueryReplyDigestEntryDto>? commitDigests = null;
+        List<OracleQueryReplyDigestEntryDto>? revealDigests = null;
+        if (hasRaw)
+        {
+            async Task<List<OracleQueryReplyDigestEntryDto>> FetchDigests(int eventType)
+            {
+                var list = new List<OracleQueryReplyDigestEntryDto>();
+                await using var cmd = _connection.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT reply_digest, count() AS c
+                    FROM oracle_query_events
+                    WHERE epoch = {epoch:UInt32}
+                      AND query_id = {q:UInt64}
+                      AND event_type = {et:UInt8}
+                      AND reply_digest != ''
+                    GROUP BY reply_digest
+                    ORDER BY c DESC
+                    LIMIT 5";
+                AddParam(cmd, "epoch", epoch);
+                AddParam(cmd, "q", queryId);
+                AddParam(cmd, "et", (byte)eventType);
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                while (await r.ReadAsync(ct))
+                {
+                    list.Add(new OracleQueryReplyDigestEntryDto(
+                        r.GetString(0),
+                        Convert.ToInt64(r.GetValue(1))
+                    ));
+                }
+                return list;
+            }
+
+            commitDigests = await FetchDigests(0);
+            revealDigests = await FetchDigests(1);
+            if (commitDigests.Count == 0) commitDigests = null;
+            if (revealDigests.Count == 0) revealDigests = null;
+        }
+
+        // Revealed answers — JOIN reveal events to the transactions table to get
+        // the actual payload. Each reveal tx's input_data is queryId(8 bytes) +
+        // answer(N bytes), all hex-encoded — so we strip the first 16 hex chars
+        // to isolate just the answer. Groups identical payloads to expose
+        // consensus and any disagreement.
+        List<OracleQueryRevealedAnswerDto>? revealedAnswers = null;
+        if (hasRaw)
+        {
+            var answers = new List<OracleQueryRevealedAnswerDto>();
+            await using var cmd = _connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT
+                    lower(substring(t.input_data, 17)) AS answer_hex,
+                    count() AS c
+                FROM oracle_query_events e
+                INNER JOIN (
+                    SELECT hash, input_data
+                    FROM transactions
+                    WHERE epoch = {epoch:UInt32}
+                      AND input_type = 7
+                ) t ON t.hash = e.tx_hash
+                WHERE e.epoch = {epoch:UInt32}
+                  AND e.query_id = {q:UInt64}
+                  AND e.event_type = 1
+                  AND length(t.input_data) > 16
+                GROUP BY answer_hex
+                ORDER BY c DESC
+                LIMIT 5";
+            AddParam(cmd, "epoch", epoch);
+            AddParam(cmd, "q", queryId);
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct))
+            {
+                var hex = r.GetString(0);
+                answers.Add(new OracleQueryRevealedAnswerDto(
+                    AnswerHex: hex,
+                    LengthBytes: hex.Length / 2,
+                    ComputorCount: Convert.ToInt64(r.GetValue(1))
+                ));
+            }
+            if (answers.Count > 0) revealedAnswers = answers;
+        }
+
         return new OracleQueryDetailDto(
             epoch, queryId, firstCommit, lastCommit, cutoff,
             totalCommits, totalReveals, commitsInQuorum,
-            hasRaw, tickHistogram, computors);
+            hasRaw, tickHistogram, computors,
+            originatingTxs, commitDigests, revealDigests, revealedAnswers);
     }
 
     public async Task<OracleComputorProfileDto?> GetOracleComputorProfileAsync(

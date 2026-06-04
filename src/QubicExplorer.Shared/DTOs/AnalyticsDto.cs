@@ -1097,6 +1097,31 @@ public record OracleQueryTickHistogramDto(
     long CumulativeCount
 );
 
+public record OracleQueryOriginatingTxDto(
+    string Hash,
+    ulong TickNumber,
+    string FromAddress,
+    string ToAddress,
+    ulong Amount,
+    string InputData,        // hex; the actual query payload
+    DateTime Timestamp,
+    bool Executed
+);
+
+public record OracleQueryReplyDigestEntryDto(
+    string Digest,
+    long Count
+);
+
+// The actual revealed answer (cleartext) — the reveal tx's input_data after the
+// 8-byte queryId prefix. Grouped by hex payload across all reveals so we can see
+// the consensus answer and any disagreement.
+public record OracleQueryRevealedAnswerDto(
+    string AnswerHex,
+    int LengthBytes,
+    long ComputorCount
+);
+
 public record OracleQueryDetailDto(
     uint Epoch,
     [property: JsonNumberHandling(JsonNumberHandling.WriteAsString)] ulong QueryId,
@@ -1108,7 +1133,19 @@ public record OracleQueryDetailDto(
     long CommitsInQuorum,
     bool RawEventsAvailable,    // false if events have been pruned for this epoch
     List<OracleQueryTickHistogramDto> TickHistogram,
-    List<OracleQueryComputorEntryDto> Computors
+    List<OracleQueryComputorEntryDto> Computors,
+    // Candidates for the originating query tx (input_type=10 at the encoded tick).
+    // Multiple candidates if more than one oracle query was published in the same tick.
+    List<OracleQueryOriginatingTxDto> OriginatingTxCandidates,
+    // Distribution of reply_digest values across commits (top 5). The dominant one
+    // is the network's consensus commitment hash. Null if no commit data.
+    List<OracleQueryReplyDigestEntryDto>? CommitDigestDistribution,
+    // Distribution of stored reply_digest values for reveals (kept for compat —
+    // currently always empty because the ingestion service doesn't extract it).
+    List<OracleQueryReplyDigestEntryDto>? RevealDigestDistribution,
+    // The actual revealed answers (top 5). Empty if reveal txs aren't in the
+    // transactions table (e.g., already pruned).
+    List<OracleQueryRevealedAnswerDto>? RevealedAnswers
 );
 
 public record OracleComputorQueryEntryDto(

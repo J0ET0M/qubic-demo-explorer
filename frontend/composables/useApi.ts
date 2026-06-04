@@ -1226,6 +1226,28 @@ interface OracleQueryTickHistogramDto {
   cumulativeCount: number
 }
 
+interface OracleQueryOriginatingTxDto {
+  hash: string
+  tickNumber: number
+  fromAddress: string
+  toAddress: string
+  amount: number
+  inputData: string
+  timestamp: string
+  executed: boolean
+}
+
+interface OracleQueryReplyDigestEntryDto {
+  digest: string
+  count: number
+}
+
+interface OracleQueryRevealedAnswerDto {
+  answerHex: string
+  lengthBytes: number
+  computorCount: number
+}
+
 interface OracleQueryDetailDto {
   epoch: number
   queryId: string
@@ -1238,6 +1260,10 @@ interface OracleQueryDetailDto {
   rawEventsAvailable: boolean
   tickHistogram: OracleQueryTickHistogramDto[]
   computors: OracleQueryComputorEntryDto[]
+  originatingTxCandidates: OracleQueryOriginatingTxDto[]
+  commitDigestDistribution: OracleQueryReplyDigestEntryDto[] | null
+  revealDigestDistribution: OracleQueryReplyDigestEntryDto[] | null
+  revealedAnswers: OracleQueryRevealedAnswerDto[] | null
 }
 
 interface OracleComputorQueryEntryDto {

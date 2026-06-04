@@ -118,6 +118,117 @@ const computorHref = (idx: number) =>
     </div>
 
     <template v-else-if="queryDetail">
+      <!-- Query metadata: originating tx + reply consensus -->
+      <div class="card">
+        <h2 class="section-title mb-3 text-base">Query metadata</h2>
+
+        <!-- Originating query transactions (input_type = 10 at the tick encoded in query_id) -->
+        <div v-if="queryDetail.originatingTxCandidates.length === 0" class="text-xs text-foreground-muted italic mb-4">
+          No originating transaction found at tick {{ Math.floor(Number(queryDetail.queryId) / 2 ** 31).toLocaleString() }}
+          (raw transactions may have been pruned).
+        </div>
+        <div v-else class="space-y-3 mb-4">
+          <div
+            v-for="tx in queryDetail.originatingTxCandidates"
+            :key="tx.hash"
+            class="rounded p-3 bg-surface-elevated border border-border"
+          >
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <NuxtLink :to="`/tx/${tx.hash}`" class="text-accent hover:underline font-mono text-xs">
+                {{ tx.hash.slice(0, 12) }}…{{ tx.hash.slice(-6) }}
+              </NuxtLink>
+              <span :class="['badge text-xs', tx.executed ? 'badge-success' : 'badge-error']">
+                {{ tx.executed ? 'Executed' : 'Failed' }}
+              </span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              <div>
+                <span class="text-foreground-muted">From:</span>
+                <NuxtLink :to="`/address/${tx.fromAddress}`" class="font-mono text-accent hover:underline ml-1">
+                  {{ tx.fromAddress.slice(0, 8) }}…{{ tx.fromAddress.slice(-4) }}
+                </NuxtLink>
+              </div>
+              <div>
+                <span class="text-foreground-muted">To (subscriber):</span>
+                <NuxtLink :to="`/address/${tx.toAddress}`" class="font-mono text-accent hover:underline ml-1">
+                  {{ tx.toAddress.slice(0, 8) }}…{{ tx.toAddress.slice(-4) }}
+                </NuxtLink>
+              </div>
+              <div>
+                <span class="text-foreground-muted">Query fee:</span>
+                <span class="font-mono ml-1">{{ tx.amount.toLocaleString() }} QU</span>
+              </div>
+              <div>
+                <span class="text-foreground-muted">Tick / Time:</span>
+                <NuxtLink :to="`/ticks/${tx.tickNumber}`" class="font-mono text-accent hover:underline ml-1">
+                  {{ tx.tickNumber.toLocaleString() }}
+                </NuxtLink>
+                <span class="text-foreground-muted ml-1">
+                  ({{ new Date(tx.timestamp).toLocaleString() }})
+                </span>
+              </div>
+            </div>
+            <details v-if="tx.inputData" class="mt-2">
+              <summary class="text-xs text-foreground-muted cursor-pointer select-none hover:text-foreground">
+                Query payload (input_data, {{ tx.inputData.length / 2 }} bytes)
+              </summary>
+              <div class="font-mono text-[10px] break-all bg-background rounded p-2 mt-1 max-h-32 overflow-y-auto">
+                {{ tx.inputData }}
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <!-- The actual answer — revealed payload (without queryId prefix) -->
+        <div v-if="queryDetail.revealedAnswers" class="mb-4">
+          <h3 class="text-xs font-semibold text-foreground-muted mb-2">
+            Revealed answer (top {{ queryDetail.revealedAnswers.length }})
+            <span class="text-foreground-muted/60 font-normal">— the cleartext data the oracle returned</span>
+          </h3>
+          <div class="space-y-1">
+            <div
+              v-for="(a, i) in queryDetail.revealedAnswers"
+              :key="a.answerHex"
+              class="rounded p-2 bg-surface-elevated text-xs"
+            >
+              <div class="flex items-center justify-between gap-2 mb-1">
+                <span class="text-foreground-muted text-[10px]">
+                  {{ a.lengthBytes }} bytes
+                </span>
+                <span :class="i === 0 ? 'text-success font-bold' : 'text-foreground-muted'">
+                  {{ a.computorCount }} computor{{ a.computorCount === 1 ? '' : 's' }} reported this
+                </span>
+              </div>
+              <div class="font-mono text-[10px] break-all bg-background rounded p-1.5 max-h-32 overflow-y-auto">
+                {{ a.answerHex }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Commit digest distribution (consensus commitment hash) -->
+        <div v-if="queryDetail.commitDigestDistribution">
+          <h3 class="text-xs font-semibold text-foreground-muted mb-2">
+            Commit reply digests (top 5)
+            <span class="text-foreground-muted/60 font-normal">— consensus commitment hash</span>
+          </h3>
+          <div class="space-y-1">
+            <div
+              v-for="(d, i) in queryDetail.commitDigestDistribution"
+              :key="d.digest"
+              class="rounded p-2 bg-surface-elevated text-xs flex items-center justify-between gap-2"
+            >
+              <span class="font-mono text-[10px] truncate" :title="d.digest">
+                {{ d.digest.slice(0, 16) }}…{{ d.digest.slice(-6) }}
+              </span>
+              <span :class="i === 0 ? 'text-success font-bold' : 'text-foreground-muted'">
+                {{ d.count }} commits
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
           <div class="rounded p-2 bg-surface-elevated">

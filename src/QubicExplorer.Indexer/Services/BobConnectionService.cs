@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Qubic.Bob;
 using Qubic.Bob.Models;
@@ -17,6 +18,7 @@ public class BobConnectionService : IDisposable
     private readonly ILogger<BobConnectionService> _logger;
     private readonly BobOptions _bobOptions;
     private readonly IndexerOptions _indexerOptions;
+    private readonly IHostApplicationLifetime _hostLifetime;
     private readonly Channel<TickStreamData> _tickChannel;
     private BobWebSocketClient? _bobClient;
     private bool _disposed;
@@ -27,11 +29,13 @@ public class BobConnectionService : IDisposable
     public BobConnectionService(
         ILogger<BobConnectionService> logger,
         IOptions<BobOptions> bobOptions,
-        IOptions<IndexerOptions> indexerOptions)
+        IOptions<IndexerOptions> indexerOptions,
+        IHostApplicationLifetime hostLifetime)
     {
         _logger = logger;
         _bobOptions = bobOptions.Value;
         _indexerOptions = indexerOptions.Value;
+        _hostLifetime = hostLifetime;
         _tickChannel = Channel.CreateBounded<TickStreamData>(new BoundedChannelOptions(10000)
         {
             FullMode = BoundedChannelFullMode.Wait
@@ -146,6 +150,13 @@ public class BobConnectionService : IDisposable
 
         int consecutiveFailures = 0;
         const int maxFailuresBeforeHardReset = 3;
+        // After this many consecutive hard-resets fail too, give up and exit
+        // the process. Docker compose's restart policy then brings us back —
+        // empirically that's the only thing that recovers some socket/state
+        // wedges (e.g. SocketsHttpHandler pool in a bad state). 5 × 5s sleep
+        // = at least 25s of fruitless retries before we bail.
+        const int maxHardResetsBeforeExit = 5;
+        var consecutiveHardResetFailures = 0;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -243,17 +254,24 @@ public class BobConnectionService : IDisposable
                     "Bob client stuck after {Count} failures, hard-resetting and rotating to {Next}",
                     consecutiveFailures, nextUrl);
                 try { _bobClient?.Dispose(); } catch { }
+                // Give the OS a moment to reclaim sockets — disposing a
+                // WebSocket-backed HttpClient is asynchronous in practice and
+                // a brand-new instance can otherwise inherit the bad pool.
+                await Task.Delay(2000, cancellationToken);
                 options = BuildOptions(rotatedNodes);
                 _bobClient = new BobWebSocketClient(options);
                 consecutiveFailures = 0;
 
                 try
                 {
-                    using var connectTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    // 30s — must be enough to probe every configured node (TLS +
+                    // WebSocket upgrade) on a cold start. 10s wasn't.
+                    using var connectTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                     using var linkedConnectCts = CancellationTokenSource.CreateLinkedTokenSource(
                         cancellationToken, connectTimeoutCts.Token);
                     await _bobClient.ConnectAsync(linkedConnectCts.Token);
                     _logger.LogInformation("Bob client reconnected after hard-reset: {Node}", _bobClient.ActiveNodeUrl);
+                    consecutiveHardResetFailures = 0;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -261,7 +279,22 @@ public class BobConnectionService : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Hard-reset connect to {Url} failed, retrying in 5s", nextUrl);
+                    consecutiveHardResetFailures++;
+                    _logger.LogError(ex,
+                        "Hard-reset connect to {Url} failed ({Count}/{Max}), retrying in 5s",
+                        nextUrl, consecutiveHardResetFailures, maxHardResetsBeforeExit);
+
+                    if (consecutiveHardResetFailures >= maxHardResetsBeforeExit)
+                    {
+                        _logger.LogCritical(
+                            "Bob client failed to recover after {Count} hard-resets; exiting process so the orchestrator can restart us",
+                            consecutiveHardResetFailures);
+                        _hostLifetime.StopApplication();
+                        // Throw so we leave this loop immediately rather than
+                        // continue racing with the host shutdown.
+                        throw;
+                    }
+
                     await Task.Delay(5000, cancellationToken);
                 }
             }

@@ -109,7 +109,10 @@ public class TicksController : ControllerBase
         CancellationToken ct = default)
     {
         if (page < 1) page = 1;
-        if (limit < 1 || limit > 100) limit = 20;
+        // Clamp instead of resetting to default — sending limit=500 should give
+        // you 500 (capped at the page-size ceiling), not silently drop to 20.
+        if (limit < 1) limit = 20;
+        if (limit > 1000) limit = 1000;
 
         var availability = await _queryService.GetTickAvailabilityAsync(tickNumber, ct);
         if (!availability.Exists)
