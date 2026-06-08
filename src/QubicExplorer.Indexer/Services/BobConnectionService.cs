@@ -24,6 +24,10 @@ public class BobConnectionService : IDisposable
     private bool _disposed;
     private long _lastProcessedTick;
     private CancellationTokenSource? _disconnectCts;
+    // Set by MonitorTipsAsync when it detects a fresher node; consumed and
+    // cleared by the hard-reset path to make that node the next connection target.
+    private volatile string? _preferredNodeUrl;
+    private static readonly HttpClient _tipProbeHttp = new() { Timeout = TimeSpan.FromSeconds(5) };
     public ChannelReader<TickStreamData> TickReader => _tickChannel.Reader;
 
     public BobConnectionService(
@@ -148,6 +152,10 @@ public class BobConnectionService : IDisposable
             }
         }
 
+        // Start the tip monitor — runs alongside the main subscription loop and
+        // signals us to rotate if a fresher node is found among the configured pool.
+        _ = Task.Run(() => MonitorTipsAsync(allNodes, cancellationToken), cancellationToken);
+
         int consecutiveFailures = 0;
         const int maxFailuresBeforeHardReset = 3;
         // After this many consecutive hard-resets fail too, give up and exit
@@ -243,16 +251,32 @@ public class BobConnectionService : IDisposable
                 await Task.Delay(5000, cancellationToken);
             }
 
-            // Hard-reset: if reconnection keeps failing, the client is stuck.
-            // Dispose it, rotate to the next node, and create a fresh one.
-            if (consecutiveFailures >= maxFailuresBeforeHardReset)
+            // Hard-reset: if reconnection keeps failing OR the tip monitor flagged
+            // a fresher node, dispose the client and connect via the preferred /
+            // next-in-rotation node.
+            var preferred = Interlocked.Exchange(ref _preferredNodeUrl, null);
+            if (consecutiveFailures >= maxFailuresBeforeHardReset || preferred != null)
             {
-                rotation++;
-                rotatedNodes = RotatedNodes();
-                var nextUrl = rotatedNodes[0];
-                _logger.LogWarning(
-                    "Bob client stuck after {Count} failures, hard-resetting and rotating to {Next}",
-                    consecutiveFailures, nextUrl);
+                string nextUrl;
+                if (preferred != null)
+                {
+                    // Put the preferred (fresher) node first, keep the rest as the fallback chain.
+                    rotatedNodes = new[] { preferred }
+                        .Concat(allNodes.Where(n => !string.Equals(n, preferred, StringComparison.OrdinalIgnoreCase)))
+                        .ToArray();
+                    nextUrl = preferred;
+                    _logger.LogInformation(
+                        "Bob client rotating to fresher tip-monitored node: {Next}", nextUrl);
+                }
+                else
+                {
+                    rotation++;
+                    rotatedNodes = RotatedNodes();
+                    nextUrl = rotatedNodes[0];
+                    _logger.LogWarning(
+                        "Bob client stuck after {Count} failures, hard-resetting and rotating to {Next}",
+                        consecutiveFailures, nextUrl);
+                }
                 try { _bobClient?.Dispose(); } catch { }
                 // Give the OS a moment to reclaim sockets — disposing a
                 // WebSocket-backed HttpClient is asynchronous in practice and
@@ -392,6 +416,98 @@ public class BobConnectionService : IDisposable
                 Body = log.Body
             }).ToList()
         };
+    }
+
+    /// <summary>
+    /// Periodically polls every configured Bob node for its current tick. If
+    /// another node is ahead of the one we're connected to by more than
+    /// <see cref="BobOptions.TipMonitorLagThreshold"/> ticks, sets
+    /// <see cref="_preferredNodeUrl"/> and cancels the current subscription so
+    /// the main loop's hard-reset path rotates to it.
+    /// </summary>
+    private async Task MonitorTipsAsync(string[] allNodes, CancellationToken cancellationToken)
+    {
+        if (!_bobOptions.EnableTipMonitor) return;
+        if (allNodes.Length < 2) return; // nothing to switch to
+
+        var interval = TimeSpan.FromSeconds(Math.Max(10, _bobOptions.TipMonitorIntervalSeconds));
+        var lagThreshold = Math.Max(10, _bobOptions.TipMonitorLagThreshold);
+        _logger.LogInformation(
+            "Bob tip monitor running every {Interval}s, switch threshold {Threshold} ticks",
+            interval.TotalSeconds, lagThreshold);
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try { await Task.Delay(interval, cancellationToken); }
+            catch (OperationCanceledException) { return; }
+
+            var activeNode = _bobClient?.ActiveNodeUrl;
+            if (string.IsNullOrEmpty(activeNode)) continue;
+
+            // Probe all nodes in parallel. Failures are silent — they just don't
+            // contribute a candidate this round.
+            var tips = await Task.WhenAll(allNodes.Select(async node =>
+            {
+                try
+                {
+                    var t = await ProbeNodeTickAsync(node, cancellationToken);
+                    return (node, tick: (uint?)t);
+                }
+                catch { return (node, tick: (uint?)null); }
+            }));
+
+            var valid = tips.Where(x => x.tick.HasValue)
+                .Select(x => (x.node, tick: x.tick!.Value))
+                .ToList();
+            if (valid.Count == 0) continue;
+
+            var bestNode = valid.OrderByDescending(x => x.tick).First();
+            var activeTip = valid.FirstOrDefault(x =>
+                string.Equals(x.node, activeNode, StringComparison.OrdinalIgnoreCase));
+
+            if (activeTip.node == null) continue; // active not in pool (rotated mid-flight)
+
+            var lag = (long)bestNode.tick - activeTip.tick;
+            if (lag > lagThreshold && !string.Equals(bestNode.node, activeNode, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation(
+                    "Tip monitor: active {Active}@{ActiveTick} is {Lag} ticks behind {Best}@{BestTick}; rotating",
+                    activeNode, activeTip.tick, lag, bestNode.node, bestNode.tick);
+                _preferredNodeUrl = bestNode.node;
+                // Break out of the current subscription so the main loop hits
+                // the hard-reset path immediately rather than waiting for the
+                // normal failure threshold.
+                try { _disconnectCts?.Cancel(); } catch { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// JSON-RPC HTTP probe of a single node for its current tick number.
+    /// Converts ws:// → http:// (and wss:// → https://) for the probe URL.
+    /// </summary>
+    private static async Task<uint> ProbeNodeTickAsync(string nodeUrl, CancellationToken ct)
+    {
+        var httpUrl =
+            nodeUrl.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) ? "http://" + nodeUrl[5..]
+            : nodeUrl.StartsWith("wss://", StringComparison.OrdinalIgnoreCase) ? "https://" + nodeUrl[6..]
+            : nodeUrl;
+
+        using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        probeCts.CancelAfter(TimeSpan.FromSeconds(5));
+
+        var body = "{\"jsonrpc\":\"2.0\",\"method\":\"qubic_getTickNumber\",\"id\":1,\"params\":[]}";
+        using var req = new HttpRequestMessage(HttpMethod.Post, httpUrl);
+        req.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+        using var resp = await _tipProbeHttp.SendAsync(req, probeCts.Token);
+        resp.EnsureSuccessStatusCode();
+
+        var json = await resp.Content.ReadAsStringAsync(probeCts.Token);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var result = doc.RootElement.GetProperty("result");
+        return result.ValueKind == System.Text.Json.JsonValueKind.Number
+            ? result.GetUInt32()
+            : uint.Parse(result.GetString() ?? "0");
     }
 
     public void Dispose()

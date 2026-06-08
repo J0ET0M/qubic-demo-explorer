@@ -51,6 +51,24 @@ public class BobOptions
     /// Bumped from 10s default — TLS + WebSocket upgrade through some proxies can take longer.
     /// </summary>
     public int ConnectTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Periodically probe all configured Bob nodes for their current tick. If
+    /// another node is significantly ahead of the one we're connected to, switch.
+    /// Useful when the active node falls behind without explicitly disconnecting.
+    /// </summary>
+    public bool EnableTipMonitor { get; set; } = true;
+
+    /// <summary>Interval (seconds) between tip-height probes across all nodes.</summary>
+    public int TipMonitorIntervalSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Switch to a fresher Bob node when its tick is at least this many ticks
+    /// ahead of our active node's tick. Below this we ignore the gap (avoids
+    /// thrashing during normal sync jitter — Bob nodes are within ~10 ticks of
+    /// each other in steady state).
+    /// </summary>
+    public int TipMonitorLagThreshold { get; set; } = 200;
 }
 
 public class AddressLabelOptions
