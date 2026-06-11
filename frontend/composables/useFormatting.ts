@@ -178,11 +178,16 @@ export const useFormatting = () => {
   }
 
   /**
-   * Format an epoch number as "MMM YYYY" (e.g. "Feb 2026").
+   * Format an epoch number as "D. MMM YYYY" (e.g. "1. Dec 2025"). Day uses a
+   * trailing dot (European convention) but month stays English-abbreviated so
+   * the format is stable across user locales.
    */
   const formatEpochDate = (epoch: number): string => {
     const d = epochToDate(epoch)
-    return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' })
+    const day = d.getUTCDate()
+    const month = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
+    const year = d.getUTCFullYear()
+    return `${day}. ${month} ${year}`
   }
 
   /**

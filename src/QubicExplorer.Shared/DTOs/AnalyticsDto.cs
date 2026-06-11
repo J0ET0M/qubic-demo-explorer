@@ -1196,3 +1196,52 @@ public record ContractReserveHistoryDto(
     double? EstimatedRunwayDays,
     List<ContractReserveSampleDto> Samples
 );
+
+// ── Tax report ────────────────────────────────────────────────────────
+
+public record TaxReportTransferDto(
+    DateTime Timestamp,
+    ulong TickNumber,
+    uint Epoch,
+    string? TxHash,
+    string Direction,              // "in" or "out"
+    string Counterparty,
+    string? CounterpartyLabel,     // address-bundle label if known
+    long Amount,                   // QU
+    long RunningBalance,           // QU at this point in time
+    byte LogType,
+    string LogTypeName
+);
+
+public record TaxReportMonthDto(
+    int Month,                     // 1..12
+    string MonthName,              // "January", ...
+    long OpeningBalance,
+    long ClosingBalance,
+    long TotalIn,
+    long TotalOut,
+    int InboundCount,
+    int OutboundCount,
+    int NetCount,
+    long NetChange                 // ClosingBalance - OpeningBalance (== TotalIn - TotalOut)
+);
+
+public record TaxReportDto(
+    string Address,
+    string? AddressLabel,
+    int Year,
+    DateTime PeriodStart,
+    DateTime PeriodEnd,
+    long OpeningBalance,           // balance at PeriodStart
+    long ClosingBalance,           // balance at PeriodEnd
+    long TotalIn,                  // sum of inbound QU during the year
+    long TotalOut,                 // sum of outbound QU during the year
+    int InboundCount,
+    int OutboundCount,
+    int TotalCount,
+    long NetChange,                // ClosingBalance - OpeningBalance
+    bool Truncated,                // true if we hit the per-year transfer cap
+    int MaxTransfers,              // the cap that was applied
+    List<TaxReportMonthDto> Months,
+    List<TaxReportTransferDto> Transfers
+);

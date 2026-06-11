@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Wallet, Copy, Check, ArrowDownLeft, ArrowUpRight, Gift, GitBranch, Filter, X, QrCode, Clock, Download, Star, Network, BookOpen } from 'lucide-vue-next'
+import { Wallet, Copy, Check, ArrowDownLeft, ArrowUpRight, Gift, GitBranch, Filter, X, QrCode, Clock, Download, Star, Network, BookOpen, FileSpreadsheet } from 'lucide-vue-next'
 
 const api = useApi()
 const route = useRoute()
@@ -7,7 +7,7 @@ const router = useRouter()
 const { getLabel, fetchLabels } = useAddressLabels()
 const { isInPortfolio, addAddress: addToPortfolio, removeAddress: removeFromPortfolio } = usePortfolio()
 const { show: showToast } = useToast()
-const { formatVolume, formatDate, formatAmount, copyToClipboard: doCopy } = useFormatting()
+const { formatVolume, formatDate, formatAmount, formatEpochDate, copyToClipboard: doCopy } = useFormatting()
 
 const address = route.params.id as string
 
@@ -46,6 +46,16 @@ const copied = ref(false)
 const showTxFilters = ref(false)
 const minAmountInput = ref(minAmount.value?.toString() || '')
 
+// Ledger epoch — declared here so updateUrl/watch (just below) can reference
+// it without hitting a temporal dead zone. The async useAsyncData for ledger
+// data is wired up further down once api/route helpers are in scope.
+const initialLedgerEpoch = (() => {
+  const v = Number(route.query.epoch)
+  return Number.isFinite(v) && v > 0 ? v : undefined
+})()
+const ledgerEpoch = ref<number | undefined>(initialLedgerEpoch)
+const ledgerEpochInput = ref<string>(initialLedgerEpoch?.toString() ?? '')
+
 // Sync state to URL
 const updateUrl = () => {
   const query: Record<string, string | number> = {}
@@ -56,10 +66,11 @@ const updateUrl = () => {
   if (minAmount.value !== undefined) query.minAmount = minAmount.value
   if (transferType.value !== undefined) query.type = transferType.value
   if (txExecuted.value !== undefined) query.executed = String(txExecuted.value)
+  if (ledgerEpoch.value !== undefined) query.epoch = ledgerEpoch.value
   router.push({ query })
 }
 
-watch([activeTab, page, transferFromAddress, transferToAddress, minAmount, transferType, txExecuted], updateUrl)
+watch([activeTab, page, transferFromAddress, transferToAddress, minAmount, transferType, txExecuted, ledgerEpoch], updateUrl)
 
 // Fetch label for this address
 onMounted(() => fetchLabels([address]))
@@ -159,8 +170,7 @@ const { data: graphData, pending: graphLoading, execute: fetchGraph } = await us
   { immediate: activeTab.value === 'graph' }
 )
 
-// Ledger data
-const ledgerEpoch = ref<number | undefined>(undefined)
+// Ledger data — ledgerEpoch is hoisted above so updateUrl/watch can reference it.
 
 const { data: ledgerData, pending: ledgerLoading, execute: fetchLedger } = await useAsyncData(
   () => `address-ledger-${address}-${ledgerEpoch.value}`,
@@ -236,10 +246,20 @@ const clearTxFilters = () => {
   <div class="space-y-6">
     <!-- Address Overview Card -->
     <div class="card">
-      <h2 class="section-title mb-4">
-        <Wallet class="h-5 w-5 text-accent" />
-        Address Overview
-      </h2>
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h2 class="section-title mb-0">
+          <Wallet class="h-5 w-5 text-accent" />
+          Address Overview
+        </h2>
+        <NuxtLink
+          :to="`/tax/${address}`"
+          class="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-surface-elevated hover:bg-surface-hover text-foreground"
+          title="Per-year tax report: monthly balances, transfers, CSV export"
+        >
+          <FileSpreadsheet class="h-3.5 w-3.5" />
+          Tax report
+        </NuxtLink>
+      </div>
 
       <div v-if="addressLoading" class="loading">Loading...</div>
 
@@ -661,26 +681,53 @@ const clearTxFilters = () => {
 
       <!-- Ledger tab -->
       <template v-if="activeTab === 'ledger'">
-        <div class="flex items-center gap-3 mb-4">
+        <div class="flex items-center gap-3 mb-4 flex-wrap">
           <span class="text-xs text-foreground-muted">Epoch:</span>
           <template v-if="ledgerData">
             <button
               v-if="ledgerData.epoch > 1"
               class="px-2.5 py-1 text-xs rounded-md font-medium bg-surface-elevated text-foreground-muted hover:text-foreground"
-              @click="ledgerEpoch = ledgerData.epoch - 1"
+              :title="formatEpochDate(ledgerData.epoch - 1)"
+              @click="ledgerEpoch = ledgerData.epoch - 1; ledgerEpochInput = String(ledgerData.epoch - 1)"
             >
               &larr; {{ ledgerData.epoch - 1 }}
             </button>
-            <span class="px-2.5 py-1 text-xs rounded-md font-semibold bg-accent text-white">
+            <span class="px-2.5 py-1 text-xs rounded-md font-semibold bg-accent text-white inline-flex items-center gap-1.5">
               {{ ledgerData.epoch }}
+              <span class="text-white/80 font-normal">· {{ formatEpochDate(ledgerData.epoch) }}</span>
             </span>
             <button
               class="px-2.5 py-1 text-xs rounded-md font-medium bg-surface-elevated text-foreground-muted hover:text-foreground"
-              @click="ledgerEpoch = ledgerData.epoch + 1"
+              :title="formatEpochDate(ledgerData.epoch + 1)"
+              @click="ledgerEpoch = ledgerData.epoch + 1; ledgerEpochInput = String(ledgerData.epoch + 1)"
             >
               {{ ledgerData.epoch + 1 }} &rarr;
             </button>
           </template>
+          <!-- Jump-to-epoch: type a number, press Enter (or click Go) -->
+          <form class="inline-flex items-center gap-1 ml-2" @submit.prevent="
+            (() => {
+              const v = Number(ledgerEpochInput)
+              if (Number.isFinite(v) && v > 0) ledgerEpoch = v
+            })()
+          ">
+            <input
+              v-model="ledgerEpochInput"
+              type="number"
+              min="1"
+              placeholder="Jump to epoch"
+              class="w-28 px-2 py-1 text-xs rounded-md bg-surface-elevated border border-border focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+            <button
+              type="submit"
+              class="px-2 py-1 text-xs rounded-md font-medium bg-accent text-white hover:bg-accent/90"
+            >
+              Go
+            </button>
+          </form>
+          <span v-if="ledgerEpochInput && Number(ledgerEpochInput) > 0" class="text-[10px] text-foreground-muted">
+            {{ formatEpochDate(Number(ledgerEpochInput)) }}
+          </span>
         </div>
 
         <div v-if="ledgerLoading" class="loading">Loading ledger...</div>

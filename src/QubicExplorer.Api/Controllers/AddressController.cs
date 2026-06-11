@@ -237,6 +237,78 @@ public class AddressController : ControllerBase
     }
 
     /// <summary>
+    /// Per-year tax report for a single address: monthly opening/closing balances,
+    /// full transfer list with running balance, totals. Useful for tax filing.
+    /// </summary>
+    [HttpGet("{address}/tax-report")]
+    public async Task<IActionResult> GetTaxReport(
+        string address,
+        [FromQuery] int year,
+        [FromQuery] int maxTransfers = 20000,
+        CancellationToken ct = default)
+    {
+        if (year < 2020 || year > DateTime.UtcNow.Year + 1)
+            return BadRequest(new { error = "year must be between 2020 and next year" });
+        if (maxTransfers < 100) maxTransfers = 100;
+        if (maxTransfers > 100000) maxTransfers = 100000;
+
+        var result = await _queryService.GetAddressTaxReportAsync(address, year, maxTransfers, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Same data as /tax-report but emitted as a CSV file. Ready to upload to
+    /// most tax software or open in Excel.
+    /// </summary>
+    [HttpGet("{address}/tax-report.csv")]
+    public async Task<IActionResult> GetTaxReportCsv(
+        string address,
+        [FromQuery] int year,
+        CancellationToken ct = default)
+    {
+        if (year < 2020 || year > DateTime.UtcNow.Year + 1)
+            return BadRequest(new { error = "year must be between 2020 and next year" });
+
+        var report = await _queryService.GetAddressTaxReportAsync(address, year, 100000, ct);
+
+        var sb = new System.Text.StringBuilder();
+        // Header summary as commented rows (CSV-friendly)
+        sb.AppendLine($"# Tax report — {address}");
+        if (!string.IsNullOrEmpty(report.AddressLabel)) sb.AppendLine($"# Label: {report.AddressLabel}");
+        sb.AppendLine($"# Year: {report.Year}");
+        sb.AppendLine($"# Opening balance (QU): {report.OpeningBalance}");
+        sb.AppendLine($"# Closing balance (QU): {report.ClosingBalance}");
+        sb.AppendLine($"# Total in (QU): {report.TotalIn}   ({report.InboundCount} transfers)");
+        sb.AppendLine($"# Total out (QU): {report.TotalOut}  ({report.OutboundCount} transfers)");
+        sb.AppendLine($"# Net change (QU): {report.NetChange}");
+        if (report.Truncated) sb.AppendLine($"# WARNING: transfer list truncated at {report.MaxTransfers} rows");
+        sb.AppendLine();
+        sb.AppendLine("timestamp_utc,tick,epoch,direction,amount_qu,counterparty,counterparty_label,running_balance_qu,tx_hash,log_type");
+        foreach (var t in report.Transfers)
+        {
+            // CSV-escape: double-quote anything containing a comma or quote;
+            // double internal quotes. Labels can contain commas.
+            string esc(string? s) => s == null ? "" :
+                (s.Contains(',') || s.Contains('"') || s.Contains('\n'))
+                    ? "\"" + s.Replace("\"", "\"\"") + "\""
+                    : s;
+            sb.Append(t.Timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")).Append(',');
+            sb.Append(t.TickNumber).Append(',');
+            sb.Append(t.Epoch).Append(',');
+            sb.Append(t.Direction).Append(',');
+            sb.Append(t.Amount).Append(',');
+            sb.Append(esc(t.Counterparty)).Append(',');
+            sb.Append(esc(t.CounterpartyLabel)).Append(',');
+            sb.Append(t.RunningBalance).Append(',');
+            sb.Append(esc(t.TxHash)).Append(',');
+            sb.AppendLine(t.LogTypeName);
+        }
+
+        var filename = $"tax-report-{address[..6]}-{year}.csv";
+        return File(System.Text.Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", filename);
+    }
+
+    /// <summary>
     /// Batch fetch multiple addresses (for portfolio view)
     /// </summary>
     [HttpPost("batch")]

@@ -6069,24 +6069,56 @@ public class ClickHouseQueryService : IDisposable
     public async Task<AddressLedgerDto> GetAddressLedgerAsync(
         string address, uint epoch, CancellationToken ct = default)
     {
-        // 1. Get opening balance from balance_snapshots for the PREVIOUS epoch
-        //    (the snapshot at end of epoch N-1 is the opening balance for epoch N)
+        // 1. Get opening balance from balance_snapshots.
+        //    Spectrum convention: snapshot[epoch=N] is the authoritative ledger
+        //    at the START of epoch N (= end of epoch N-1). So we want the latest
+        //    snapshot for this address whose epoch is at-or-before N. Using
+        //    `epoch <= N` (instead of `= N`) gracefully handles the case where
+        //    the spectrum import for this exact epoch didn't include this
+        //    address (the file only contains non-zero accounts).
         long openingBalance = 0;
-        if (epoch > 1)
+        uint anchorLedgerEpoch = 0;
+        await using (var balCmd = _connection.CreateCommand())
         {
-            await using var balCmd = _connection.CreateCommand();
             balCmd.CommandText = @"
-                SELECT balance
+                SELECT epoch, balance
                 FROM balance_snapshots
                 WHERE address = {address:String}
-                  AND epoch = {prevEpoch:UInt32}
+                  AND epoch <= {epoch:UInt32}
+                ORDER BY epoch DESC
                 LIMIT 1";
             AddParam(balCmd, "address", address);
-            AddParam(balCmd, "prevEpoch", epoch - 1);
+            AddParam(balCmd, "epoch", epoch);
 
-            var balResult = await balCmd.ExecuteScalarAsync(ct);
-            if (balResult != null && balResult != DBNull.Value)
-                openingBalance = Convert.ToInt64(balResult);
+            await using var r = await balCmd.ExecuteReaderAsync(ct);
+            if (await r.ReadAsync(ct))
+            {
+                anchorLedgerEpoch = r.GetFieldValue<uint>(0);
+                openingBalance = Convert.ToInt64(r.GetValue(1));
+            }
+        }
+
+        // If the anchor snapshot is from an earlier epoch (no snapshot for the
+        // exact epoch), top up with all QU transfers in the intermediate epochs
+        // [anchorLedgerEpoch, epoch-1] so the running balance starts correctly.
+        if (anchorLedgerEpoch > 0 && anchorLedgerEpoch < epoch)
+        {
+            await using var gapCmd = _connection.CreateCommand();
+            gapCmd.CommandText = @"
+                SELECT
+                    sumIf(amount, dest_address = {address:String}) -
+                    sumIf(amount, source_address = {address:String}) AS net
+                FROM logs
+                WHERE log_type = 0
+                  AND epoch >= {anchor:UInt32}
+                  AND epoch < {epoch:UInt32}
+                  AND (source_address = {address:String} OR dest_address = {address:String})";
+            AddParam(gapCmd, "address", address);
+            AddParam(gapCmd, "anchor", anchorLedgerEpoch);
+            AddParam(gapCmd, "epoch", epoch);
+            var r = await gapCmd.ExecuteScalarAsync(ct);
+            if (r != null && r != DBNull.Value)
+                openingBalance += Convert.ToInt64(r);
         }
 
         // 2. Get all QU transfers (log_type = 0) involving this address in this epoch,
@@ -7431,6 +7463,267 @@ public class ClickHouseQueryService : IDisposable
             BurnRatePerDay: burnRate,
             EstimatedRunwayDays: runway,
             Samples: samples
+        );
+    }
+
+    // =====================================================
+    // TAX REPORT
+    // =====================================================
+
+    /// <summary>
+    /// Builds a per-year tax report for a single address:
+    ///   - opening balance at start of year (Jan 1 UTC)
+    ///   - every QU transfer (log_type = 0) in/out during the year
+    ///   - monthly buckets (Jan..Dec) with opening/closing balance and totals
+    /// Transfers are capped at <paramref name="maxTransfers"/> rows per year
+    /// (truncation flag set in the returned DTO when hit).
+    /// </summary>
+    public async Task<TaxReportDto> GetAddressTaxReportAsync(
+        string address, int year, int maxTransfers = 20000, CancellationToken ct = default)
+    {
+        var periodStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var periodEnd = new DateTime(year, 12, 31, 23, 59, 59, 999, DateTimeKind.Utc);
+
+        // 0. Determine the epoch range for the year using the deterministic
+        //    calendar (Wed 12 UTC + 7-day cadence). No dependency on
+        //    epoch_meta.start_time or tick timestamps — both can be missing or
+        //    wrong, and the symptom was empty months in the report. Each epoch
+        //    is bucketed by its midpoint's month (a boundary epoch with most
+        //    of its days in Jan goes into Jan, even if it started Dec 31).
+        var (firstEpochInYear, lastEpochInYear) = EpochCalendar.EpochsForYear(year);
+        var epochToMonth = new Dictionary<uint, int>();
+        for (var ep = firstEpochInYear; ep <= lastEpochInYear; ep++)
+            epochToMonth[ep] = EpochCalendar.GetEpochMidpoint(ep).Month;
+
+        // 1. Opening balance at periodStart.
+        //
+        // Spectrum/balance_snapshots convention: a snapshot indexed at epoch N
+        // is the authoritative ledger at the START of epoch N (= end of epoch
+        // N-1), with tick_number = initialTick(N). So spectrum.215 = end-of-EP214.
+        //
+        // Strategy:
+        //   anchorEpoch  = latest epoch N where start_time(N) <= periodStart and
+        //                  a snapshot exists for this address.
+        //   openingBalance = snapshot[anchorEpoch].balance
+        //                  + sum of transfer deltas WHERE epoch >= anchorEpoch
+        //                    AND timestamp < periodStart.
+        //
+        // Falls back to summing all logs from genesis when no snapshot exists
+        // for the address.
+        long openingBalance = 0;
+        uint anchorEpoch = 0;
+        bool usedSnapshot = false;
+
+        await using (var anchorCmd = _connection.CreateCommand())
+        {
+            // Find the LATEST snapshot for this address whose epoch is at-or-before
+            // the period boundary. Using `epoch <= ...` (not `= ...`) means we
+            // gracefully use the most recent snapshot we have even if the one for
+            // the year-start epoch wasn't imported or didn't include this address
+            // (spectrum files only contain accounts with non-zero balance, so newly-
+            // funded addresses may not have a row for every epoch).
+            anchorCmd.CommandText = @"
+                SELECT epoch, balance
+                FROM balance_snapshots
+                WHERE address = {address:String}
+                  AND epoch <= COALESCE((
+                    SELECT max(epoch) FROM epoch_meta FINAL
+                    WHERE start_time > toDateTime64('2020-01-01 00:00:00', 3)
+                      AND start_time <= {start:DateTime64(3)}
+                  ), 0)
+                ORDER BY epoch DESC
+                LIMIT 1";
+            AddParam(anchorCmd, "address", address);
+            AddParam(anchorCmd, "start", periodStart);
+            await using var r = await anchorCmd.ExecuteReaderAsync(ct);
+            if (await r.ReadAsync(ct))
+            {
+                anchorEpoch = r.GetFieldValue<uint>(0);
+                openingBalance = Convert.ToInt64(r.GetValue(1));
+                usedSnapshot = true;
+            }
+        }
+
+        if (usedSnapshot)
+        {
+            // Snapshot[anchorEpoch] = state at initialTick(anchorEpoch). Add any
+            // transfer in epoch range [anchorEpoch .. firstEpochInYear - 1].
+            // Filter by epoch (deterministic) — no timestamp dependency.
+            await using var deltaCmd = _connection.CreateCommand();
+            deltaCmd.CommandText = @"
+                SELECT
+                    sumIf(amount, dest_address = {address:String}) -
+                    sumIf(amount, source_address = {address:String}) AS net
+                FROM logs
+                WHERE log_type = 0
+                  AND epoch >= {anchorEpoch:UInt32}
+                  AND epoch < {firstEpoch:UInt32}
+                  AND (source_address = {address:String} OR dest_address = {address:String})";
+            AddParam(deltaCmd, "address", address);
+            AddParam(deltaCmd, "anchorEpoch", anchorEpoch);
+            AddParam(deltaCmd, "firstEpoch", firstEpochInYear);
+            var r = await deltaCmd.ExecuteScalarAsync(ct);
+            if (r != null && r != DBNull.Value)
+                openingBalance += Convert.ToInt64(r);
+        }
+        else
+        {
+            // Fallback: sum-from-genesis of every transfer involving this address.
+            await using var openCmd = _connection.CreateCommand();
+            openCmd.CommandText = @"
+                SELECT
+                    sumIf(amount, dest_address = {address:String}) -
+                    sumIf(amount, source_address = {address:String}) AS net
+                FROM logs
+                WHERE log_type = 0
+                  AND epoch < {firstEpoch:UInt32}
+                  AND (source_address = {address:String} OR dest_address = {address:String})";
+            AddParam(openCmd, "address", address);
+            AddParam(openCmd, "firstEpoch", firstEpochInYear);
+            var r = await openCmd.ExecuteScalarAsync(ct);
+            if (r != null && r != DBNull.Value)
+                openingBalance = Convert.ToInt64(r);
+        }
+
+        // 2. Pull every transfer for epochs that fall in the year.
+        var transfers = new List<TaxReportTransferDto>(capacity: 1024);
+        long inboundTotal = 0, outboundTotal = 0;
+        int inboundCount = 0, outboundCount = 0;
+        long running = openingBalance;
+        bool truncated = false;
+
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT epoch, tick_number, timestamp, tx_hash, log_type,
+                       source_address, dest_address, amount
+                FROM logs
+                WHERE log_type = 0
+                  AND epoch BETWEEN {firstEpoch:UInt32} AND {lastEpoch:UInt32}
+                  AND (source_address = {address:String} OR dest_address = {address:String})
+                ORDER BY tick_number ASC, log_id ASC
+                LIMIT {lim:UInt32}";
+            AddParam(cmd, "address", address);
+            AddParam(cmd, "firstEpoch", firstEpochInYear);
+            AddParam(cmd, "lastEpoch", lastEpochInYear);
+            AddParam(cmd, "lim", (uint)(maxTransfers + 1)); // +1 to detect truncation
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                if (transfers.Count >= maxTransfers) { truncated = true; break; }
+
+                var epoch = Convert.ToUInt32(reader["epoch"]);
+                var tick = Convert.ToUInt64(reader["tick_number"]);
+                var ts = Convert.ToDateTime(reader["timestamp"]);
+                var txHash = reader["tx_hash"]?.ToString();
+                var logType = Convert.ToByte(reader["log_type"]);
+                var src = reader["source_address"]?.ToString() ?? "";
+                var dst = reader["dest_address"]?.ToString() ?? "";
+                var amount = Convert.ToInt64(reader["amount"]);
+
+                string direction;
+                string counterparty;
+                if (dst == address)
+                {
+                    direction = "in";
+                    counterparty = src;
+                    running += amount;
+                    inboundTotal += amount;
+                    inboundCount++;
+                }
+                else
+                {
+                    direction = "out";
+                    counterparty = dst;
+                    running -= amount;
+                    outboundTotal += amount;
+                    outboundCount++;
+                }
+
+                var cpLabel = _labelService.GetAddressInfo(counterparty)?.Label;
+
+                transfers.Add(new TaxReportTransferDto(
+                    Timestamp: ts,
+                    TickNumber: tick,
+                    Epoch: epoch,
+                    TxHash: txHash,
+                    Direction: direction,
+                    Counterparty: counterparty,
+                    CounterpartyLabel: cpLabel,
+                    Amount: amount,
+                    RunningBalance: running,
+                    LogType: logType,
+                    LogTypeName: LogTypes.GetName(logType)
+                ));
+            }
+        }
+
+        var closingBalance = running;
+
+        // 3. Bucket per month using the deterministic epoch-midpoint mapping.
+        //    Every transfer's epoch maps to exactly one month; no dependency on
+        //    log.timestamp (which can be sentinel/garbage in older rows).
+        var monthBuckets = new List<TaxReportMonthDto>(12);
+        int MonthFor(TaxReportTransferDto t) =>
+            epochToMonth.TryGetValue(t.Epoch, out var m)
+                ? m
+                : EpochCalendar.GetEpochMidpoint(t.Epoch).Month;
+        var byMonth = transfers
+            .GroupBy(MonthFor)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        long monthOpening = openingBalance;
+        for (int m = 1; m <= 12; m++)
+        {
+            long mIn = 0, mOut = 0;
+            int mInCount = 0, mOutCount = 0;
+            if (byMonth.TryGetValue(m, out var monthList))
+            {
+                foreach (var t in monthList)
+                {
+                    if (t.Direction == "in") { mIn += t.Amount; mInCount++; }
+                    else { mOut += t.Amount; mOutCount++; }
+                }
+            }
+
+            var monthClosing = monthOpening + mIn - mOut;
+            monthBuckets.Add(new TaxReportMonthDto(
+                Month: m,
+                MonthName: new DateTime(year, m, 1).ToString("MMMM",
+                    System.Globalization.CultureInfo.InvariantCulture),
+                OpeningBalance: monthOpening,
+                ClosingBalance: monthClosing,
+                TotalIn: mIn,
+                TotalOut: mOut,
+                InboundCount: mInCount,
+                OutboundCount: mOutCount,
+                NetCount: mInCount + mOutCount,
+                NetChange: monthClosing - monthOpening
+            ));
+            monthOpening = monthClosing;
+        }
+
+        var addrInfo = _labelService.GetAddressInfo(address);
+
+        return new TaxReportDto(
+            Address: address,
+            AddressLabel: addrInfo?.Label,
+            Year: year,
+            PeriodStart: periodStart,
+            PeriodEnd: periodEnd,
+            OpeningBalance: openingBalance,
+            ClosingBalance: closingBalance,
+            TotalIn: inboundTotal,
+            TotalOut: outboundTotal,
+            InboundCount: inboundCount,
+            OutboundCount: outboundCount,
+            TotalCount: transfers.Count,
+            NetChange: closingBalance - openingBalance,
+            Truncated: truncated,
+            MaxTransfers: maxTransfers,
+            Months: monthBuckets,
+            Transfers: transfers
         );
     }
 }

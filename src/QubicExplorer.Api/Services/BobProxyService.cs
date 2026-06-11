@@ -156,9 +156,13 @@ public class BobProxyService
         {
             var response = await _bobClient.GetComputorsAsync(epoch, ct);
 
+            // Sanitize: Bob occasionally returns identities with trailing
+            // garbage bytes. Identities are always exactly 60 A–Z chars.
             var result = new ComputorsResult
             {
                 Computors = response.Computors
+                    .Select(SanitizeQubicIdentity)
+                    .ToList()
             };
 
             // Cache computor lists longer since they don't change once epoch is complete
@@ -374,6 +378,24 @@ public class BobProxyService
             _logger.LogWarning(ex, "Failed to query CCF GetProposalFee");
             return 0;
         }
+    }
+
+    /// <summary>
+    /// Strips garbage from a Qubic identity. A valid identity is exactly 60
+    /// uppercase A–Z chars; we keep only those and cap at 60. Handles cases
+    /// like "DHXIVG...JVGE�v" (trailing replacement char + ASCII byte)
+    /// that the upstream API sometimes produces.
+    /// </summary>
+    public static string SanitizeQubicIdentity(string raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return raw ?? string.Empty;
+        var sb = new System.Text.StringBuilder(60);
+        foreach (var c in raw)
+        {
+            if (c >= 'A' && c <= 'Z') sb.Append(c);
+            if (sb.Length == 60) break;
+        }
+        return sb.ToString();
     }
 
     // Public result types — kept for compatibility with existing consumers

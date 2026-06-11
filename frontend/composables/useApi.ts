@@ -243,6 +243,15 @@ export const useApi = () => {
   const getContractReserveHistory = (address: string, days = 7) =>
     fetchApi<ContractReserveHistoryDto>(`/api/address/${address}/reserve-history?days=${days}`)
 
+  // Tax report for an address (per year): monthly buckets + full transfer list
+  const getAddressTaxReport = (address: string, year: number, maxTransfers = 20000) =>
+    fetchApi<TaxReportDto>(`/api/address/${address}/tax-report?year=${year}&maxTransfers=${maxTransfers}`)
+
+  const downloadAddressTaxReportCsv = (address: string, year: number) => {
+    const baseUrl = useRuntimeConfig().public.apiBase || ''
+    window.open(`${baseUrl}/api/address/${address}/tax-report.csv?year=${year}`, '_blank')
+  }
+
   // Rich list
   const getRichList = (page = 1, limit = 50) =>
     fetchApi<RichListDto>(`/api/stats/rich-list?page=${page}&limit=${limit}`)
@@ -494,6 +503,8 @@ export const useApi = () => {
     getSmartContractUsage,
     getAddressFlow,
     getContractReserveHistory,
+    getAddressTaxReport,
+    downloadAddressTaxReportCsv,
     getActiveAddressTrends,
     getNewVsReturningAddresses,
     getExchangeFlows,
@@ -1630,6 +1641,53 @@ interface ContractReserveHistoryDto {
   samples: ContractReserveSampleDto[]
 }
 
+interface TaxReportTransferDto {
+  timestamp: string
+  tickNumber: number
+  epoch: number
+  txHash: string | null
+  direction: 'in' | 'out'
+  counterparty: string
+  counterpartyLabel: string | null
+  amount: number
+  runningBalance: number
+  logType: number
+  logTypeName: string
+}
+
+interface TaxReportMonthDto {
+  month: number
+  monthName: string
+  openingBalance: number
+  closingBalance: number
+  totalIn: number
+  totalOut: number
+  inboundCount: number
+  outboundCount: number
+  netCount: number
+  netChange: number
+}
+
+interface TaxReportDto {
+  address: string
+  addressLabel: string | null
+  year: number
+  periodStart: string
+  periodEnd: string
+  openingBalance: number
+  closingBalance: number
+  totalIn: number
+  totalOut: number
+  inboundCount: number
+  outboundCount: number
+  totalCount: number
+  netChange: number
+  truncated: boolean
+  maxTransfers: number
+  months: TaxReportMonthDto[]
+  transfers: TaxReportTransferDto[]
+}
+
 export type {
   PaginatedResponse,
   TickDto,
@@ -1708,4 +1766,7 @@ export type {
   CcfEpochSpendingDto,
   ContractReserveSampleDto,
   ContractReserveHistoryDto,
+  TaxReportTransferDto,
+  TaxReportMonthDto,
+  TaxReportDto,
 }
