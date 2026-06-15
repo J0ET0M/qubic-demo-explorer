@@ -183,6 +183,49 @@ public class ClickHouseQueryService : IDisposable
 
     public record TickAvailability(bool Exists, ulong LatestTick, ulong? NextAvailable);
 
+    public record IndexerFrontier(
+        ulong HeadTick,
+        ulong SafeTick,
+        uint HeadEpoch,
+        ulong HeadTransactionTick,
+        ulong HeadLogTick,
+        ulong CrossCheckLastTick);
+
+    /// <summary>
+    /// Frontier across the core indexed tables plus the cross-check watermark.
+    /// <para><c>headTick</c> is the highest tick the ticks table knows about.</para>
+    /// <para><c>safeTick</c> is the last tick the TickCrossCheckService has
+    /// verified against Bob's RPC — every tick at or below it has been
+    /// rule-checked and refetched if needed. Clients should bound classification
+    /// queries by safeTick to avoid reading rows that may still be incomplete
+    /// or have the wrong <c>is_empty</c> flag.</para>
+    /// </summary>
+    public async Task<IndexerFrontier> GetIndexerFrontierAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                (SELECT max(tick_number) FROM ticks)        AS head_tick,
+                (SELECT max(tick_number) FROM transactions) AS head_tx_tick,
+                (SELECT max(tick_number) FROM logs)         AS head_log_tick,
+                (SELECT max(epoch)       FROM ticks)        AS head_epoch,
+                (SELECT toUInt64OrZero(value) FROM indexer_state FINAL
+                 WHERE key = 'crosscheck_last_tick')        AS crosscheck_tick";
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return new IndexerFrontier(0, 0, 0, 0, 0, 0);
+
+        var headTick      = reader.IsDBNull(0) ? 0UL : reader.GetFieldValue<ulong>(0);
+        var headTxTick    = reader.IsDBNull(1) ? 0UL : reader.GetFieldValue<ulong>(1);
+        var headLogTick   = reader.IsDBNull(2) ? 0UL : reader.GetFieldValue<ulong>(2);
+        var headEpoch     = reader.IsDBNull(3) ? 0u  : reader.GetFieldValue<uint>(3);
+        var crossCheckTick= reader.IsDBNull(4) ? 0UL : reader.GetFieldValue<ulong>(4);
+        // safeTick = the watermark up to which cross-check has run. Cap it at
+        // headTick so an over-eager state row can never exceed actual data.
+        var safeTick      = Math.Min(crossCheckTick, headTick);
+        return new IndexerFrontier(headTick, safeTick, headEpoch, headTxTick, headLogTick, crossCheckTick);
+    }
+
     public async Task<TickAvailability> GetTickAvailabilityAsync(ulong tickNumber, CancellationToken ct = default)
     {
         await using var cmd = _connection.CreateCommand();

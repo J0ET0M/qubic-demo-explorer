@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClickHouse.Client.ADO;
 using Microsoft.Extensions.Options;
 using Qubic.Bob;
@@ -113,41 +114,68 @@ public class TickCrossCheckService : BackgroundService
         var startTick = crossCheckTick + 1;
         var checkedCount = 0;
         var refetchedCount = 0;
+        const int batchSize = 1000;
 
         BobWebSocketClient? bobClient = null;
 
         try
         {
-            for (var tick = startTick; tick <= maxTick; tick++)
+            for (var batchStart = startTick; batchStart <= maxTick; batchStart += batchSize)
             {
-                var state = await GetTickStateAsync(connection, tick, ct);
-                var needsRefetch = EvaluateRules(tick, state);
+                var batchEnd = Math.Min(batchStart + batchSize - 1, maxTick);
 
-                if (needsRefetch)
+                // One ClickHouse round-trip for the whole batch instead of 4
+                // sub-queries per tick. For ticks not in the dictionary (no row
+                // in the ticks table at all) we synthesise a "missing" state so
+                // EvaluateRules can flag them for refetch.
+                var states = await GetTickStatesBatchAsync(connection, batchStart, batchEnd, ct);
+                var batchRefetched = new List<ulong>();
+
+                for (var tick = batchStart; tick <= batchEnd; tick++)
                 {
-                    bobClient ??= await ConnectBobAsync(ct);
+                    var state = states.TryGetValue(tick, out var s)
+                        ? s
+                        : new TickState(false, true, 0, 0, 0);
 
-                    var success = await RefetchTickAsync(bobClient, tick, ct);
-                    if (success)
-                        refetchedCount++;
-                    else
-                        _logger.LogWarning("Failed to refetch tick {Tick}, skipping", tick);
+                    if (EvaluateRules(tick, state))
+                    {
+                        bobClient ??= await ConnectBobAsync(ct);
+                        var success = await RefetchTickAsync(bobClient, tick, ct);
+                        if (success)
+                        {
+                            refetchedCount++;
+                            batchRefetched.Add(tick);
+                        }
+                        else
+                            _logger.LogWarning("Failed to refetch tick {Tick}, skipping", tick);
+                    }
+
+                    checkedCount++;
                 }
 
-                checkedCount++;
+                // Checkpoint at the end of every batch.
+                if (refetchedCount > 0)
+                    await _clickHouseWriter.FlushBatchesAsync(ct);
+                await SaveStateAsync(connection, batchEnd, ct);
 
-                if (checkedCount % 1000 == 0)
+                if (batchRefetched.Count > 0)
                 {
-                    if (refetchedCount > 0)
-                        await _clickHouseWriter.FlushBatchesAsync(ct);
-
-                    await SaveStateAsync(connection, tick, ct);
+                    // Log refetched ticks in compact ranges (e.g. "100-103,107,200-202")
+                    // so a batch with many sequential refetches stays readable.
+                    _logger.LogInformation(
+                        "Cross-check progress: tick {Tick}, checked {Checked}, refetched {Refetched} (this batch: {BatchCount} → {BatchTicks})",
+                        batchEnd, checkedCount, refetchedCount,
+                        batchRefetched.Count, FormatTickRanges(batchRefetched));
+                }
+                else
+                {
                     _logger.LogInformation(
                         "Cross-check progress: tick {Tick}, checked {Checked}, refetched {Refetched}",
-                        tick, checkedCount, refetchedCount);
+                        batchEnd, checkedCount, refetchedCount);
                 }
 
-                if (checkedCount % 5000 == 0)
+                // Re-read indexer head every ~5 batches so we keep chasing.
+                if (checkedCount % (batchSize * 5) == 0)
                 {
                     indexerTick = await GetIndexerTickAsync(connection, ct);
                     maxTick = (indexerTick ?? maxTick) - 1;
@@ -175,30 +203,57 @@ public class TickCrossCheckService : BackgroundService
 
     // ── Tick state query ─────────────────────────────────────────────────
 
-    private async Task<TickState> GetTickStateAsync(
-        ClickHouseConnection connection, ulong tickNumber, CancellationToken ct)
+    /// <summary>
+    /// Loads state for every tick in [startTick, endTick] in a single query.
+    /// Returns a dictionary keyed by tick_number. Ticks missing from the ticks
+    /// table are absent from the dictionary; the caller treats them as
+    /// non-existent (needs refetch).
+    /// </summary>
+    private async Task<Dictionary<ulong, TickState>> GetTickStatesBatchAsync(
+        ClickHouseConnection connection, ulong startTick, ulong endTick, CancellationToken ct)
     {
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = $@"
             SELECT
+                t.tick_number,
                 t.is_empty,
-                (SELECT count() FROM transactions WHERE tick_number = {tickNumber}) as tx_count,
-                (SELECT count() FROM logs WHERE tick_number = {tickNumber}) as log_count,
-                (SELECT countIf(executed = 1) FROM transactions WHERE tick_number = {tickNumber}) as executed_count
-            FROM ticks t FINAL
-            WHERE t.tick_number = {tickNumber}";
+                coalesce(tx.cnt, 0)      AS tx_count,
+                coalesce(tx.exec_cnt, 0) AS executed_count,
+                coalesce(lg.cnt, 0)      AS log_count
+            FROM (
+                SELECT tick_number, is_empty
+                FROM ticks FINAL
+                WHERE tick_number BETWEEN {startTick} AND {endTick}
+            ) t
+            LEFT JOIN (
+                SELECT tick_number,
+                       count()             AS cnt,
+                       countIf(executed=1) AS exec_cnt
+                FROM transactions
+                WHERE tick_number BETWEEN {startTick} AND {endTick}
+                GROUP BY tick_number
+            ) tx ON tx.tick_number = t.tick_number
+            LEFT JOIN (
+                SELECT tick_number, count() AS cnt
+                FROM logs
+                WHERE tick_number BETWEEN {startTick} AND {endTick}
+                GROUP BY tick_number
+            ) lg ON lg.tick_number = t.tick_number";
 
+        var result = new Dictionary<ulong, TickState>((int)(endTick - startTick + 1));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-            return new TickState(false, true, 0, 0, 0);
-
-        return new TickState(
-            Exists: true,
-            IsEmpty: reader.GetFieldValue<byte>(0) == 1,
-            TxCount: Convert.ToInt64(reader.GetValue(1)),
-            LogCount: Convert.ToInt64(reader.GetValue(2)),
-            ExecutedTxCount: Convert.ToInt64(reader.GetValue(3))
-        );
+        while (await reader.ReadAsync(ct))
+        {
+            var tickNumber = reader.GetFieldValue<ulong>(0);
+            result[tickNumber] = new TickState(
+                Exists: true,
+                IsEmpty: reader.GetFieldValue<byte>(1) == 1,
+                TxCount: Convert.ToInt64(reader.GetValue(2)),
+                ExecutedTxCount: Convert.ToInt64(reader.GetValue(3)),
+                LogCount: Convert.ToInt64(reader.GetValue(4))
+            );
+        }
+        return result;
     }
 
     // ── Rules ────────────────────────────────────────────────────────────
@@ -271,8 +326,12 @@ public class TickCrossCheckService : BackgroundService
     {
         try
         {
-            // 1. Get tick metadata
-            var tickResp = await bob.GetTickByNumberAsync((uint)tickNumber, ct);
+            // 1. Get tick metadata. The package's BobTickResponse doesn't yet
+            // expose hasNoTickData/isSkipped, but the raw RPC returns them —
+            // so we call qubic_getTickByNumber directly through CallAsync and
+            // bind to a local DTO that includes those fields.
+            var tickResp = await bob.CallAsync<TickByNumberResponse>(
+                "qubic_getTickByNumber", new object[] { (uint)tickNumber }, ct);
             if (tickResp == null)
             {
                 _logger.LogWarning("Tick {Tick}: Bob returned no data for GetTickByNumber", tickNumber);
@@ -361,13 +420,16 @@ public class TickCrossCheckService : BackgroundService
                 });
             }
 
-            // 7. Build TickStreamData and write
+            // 7. Build TickStreamData and write. Use Bob's authoritative flags
+            // for HasNoTickData / IsSkipped so an empty / skipped tick is
+            // correctly stored as is_empty in ClickHouse (the writer ORs the
+            // two flags).
             var tickData = new TickStreamData
             {
                 Epoch = epoch,
                 Tick = tickNumber,
-                HasNoTickData = false,
-                IsSkipped = false,
+                HasNoTickData = tickResp.HasNoTickData,
+                IsSkipped = tickResp.IsSkipped,
                 IsCatchUp = false,
                 Timestamp = timestamp.ToString("O"),
                 TxCountTotal = (uint)bobTransactions.Count,
@@ -454,5 +516,55 @@ public class TickCrossCheckService : BackgroundService
         return null;
     }
 
+    /// <summary>
+    /// Collapse a sorted list of ticks into a compact "a,b-c,d" range string.
+    /// Caps at <paramref name="maxRanges"/> ranges to keep the log line readable
+    /// when a single batch happens to refetch hundreds of contiguous ticks.
+    /// </summary>
+    internal static string FormatTickRanges(IReadOnlyList<ulong> ticks, int maxRanges = 20)
+    {
+        if (ticks.Count == 0) return string.Empty;
+
+        var sb = new System.Text.StringBuilder();
+        ulong rangeStart = ticks[0];
+        ulong prev = ticks[0];
+        var ranges = 0;
+
+        void Emit(ulong start, ulong end)
+        {
+            if (ranges > 0) sb.Append(',');
+            sb.Append(start == end ? start.ToString() : $"{start}-{end}");
+            ranges++;
+        }
+
+        for (var i = 1; i < ticks.Count; i++)
+        {
+            if (ticks[i] == prev + 1) { prev = ticks[i]; continue; }
+            Emit(rangeStart, prev);
+            if (ranges >= maxRanges)
+            {
+                sb.Append($",… (+{ticks.Count - i} more)");
+                return sb.ToString();
+            }
+            rangeStart = prev = ticks[i];
+        }
+        Emit(rangeStart, prev);
+        return sb.ToString();
+    }
+
     internal record TickState(bool Exists, bool IsEmpty, long TxCount, long LogCount, long ExecutedTxCount);
+
+    /// <summary>
+    /// Local mirror of qubic_getTickByNumber's response with the additional
+    /// hasNoTickData / isSkipped fields the Qubic.Bob 1.4.1 package doesn't
+    /// expose yet. Remove once we upgrade the package.
+    /// </summary>
+    private sealed class TickByNumberResponse
+    {
+        [JsonPropertyName("tickNumber")]  public uint TickNumber { get; set; }
+        [JsonPropertyName("epoch")]       public int Epoch { get; set; }
+        [JsonPropertyName("timestamp")]   public long Timestamp { get; set; }
+        [JsonPropertyName("hasNoTickData")] public bool HasNoTickData { get; set; }
+        [JsonPropertyName("isSkipped")]   public bool IsSkipped { get; set; }
+    }
 }
