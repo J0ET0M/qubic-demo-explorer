@@ -84,6 +84,11 @@ builder.Services.AddSingleton<OracleEventService>();
 // OracleAggregateService - builds long-term oracle aggregates for completed epochs
 builder.Services.AddSingleton<OracleAggregateService>();
 
+// OracleKpVerificationService - K12-verifies every commit's knowledge proof
+// against the eventually-revealed reply, flagging "digest copied without
+// knowing reply" cheating attempts.
+builder.Services.AddSingleton<OracleKpVerificationService>();
+
 // Analytics feature toggles
 builder.Services.Configure<QubicExplorer.Analytics.Configuration.AnalyticsOptions>(
     builder.Configuration.GetSection(QubicExplorer.Analytics.Configuration.AnalyticsOptions.SectionName));

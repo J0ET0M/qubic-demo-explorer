@@ -31,6 +31,7 @@ public class ComputorRevenueService : IDisposable
 
     private const ulong ScalingThreshold = (ulong)QubicConstants.RevenueScalingThreshold;
     private const uint V2FromEpoch = RevenueV2Calculator.DefaultV2FromEpoch;
+    private const uint MultiDimFromEpoch = MultiDimRevenueCalculator.DefaultMultiDimFromEpoch;
 
     public ComputorRevenueService(
         IOptions<ClickHouseOptions> options,
@@ -110,13 +111,29 @@ public class ComputorRevenueService : IDisposable
         ulong oracleQuorum = ComputeQuorumScore(oracleScores);
         // For V2, mining is the same DOGE counter as V1 → reuse miningQuorumV1.
 
+        // Multi-dimension revenue (qubic v1.296.0) — the active/paid formula from epoch 218.
+        // Computed alongside V1/V2 so the divergence stays visible. Uses the SAME oracle + DOGE
+        // inputs as V2; only the TX dimension is new (asymmetric-L2 over per-tick observations).
+        var useMultiDim = epoch >= MultiDimFromEpoch;
+        MultiDimRevenueCalculator.Result? md = null;
+        ulong multiDimTxQuorum = 0;
+        if (useMultiDim)
+        {
+            var dimMap = new RevenueDimensionMap(addresses);
+            var obsByTick = await GetPerTickObservationsAsync(epoch, initialTick, perTickTxCount.Length, dimMap, ct);
+            md = MultiDimRevenueCalculator.Compute((long)initialTick, obsByTick, oracleScores, miningScores, epoch);
+            multiDimTxQuorum = ComputeQuorumScore(md.TxScore);
+        }
+
+        int activeFormula = useMultiDim ? 3 : useV2 ? 2 : 1;
+
         // Build result entries
         var entries = new ComputorRevenueEntryDto[QubicConstants.NumberOfComputors];
         long totalRevenue = 0;
         for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
         {
             var address = addresses[i];
-            long active = useV2 ? v2.Revenue[i] : revenuesV1[i];
+            long active = useMultiDim ? md!.Revenue[i] : useV2 ? v2.Revenue[i] : revenuesV1[i];
             totalRevenue += active;
 
             entries[i] = new ComputorRevenueEntryDto(
@@ -135,28 +152,75 @@ public class ComputorRevenueService : IDisposable
                 CombinedMandatoryFactor: v2.CombinedMandatoryFactor[i],
                 RevenueV1: revenuesV1[i],
                 RevenueV2: v2.Revenue[i],
-                RevenueFormula: useV2 ? 2 : 1,
-                Revenue: active
+                RevenueFormula: activeFormula,
+                Revenue: active,
+                MultiDimTxScore: md?.TxScore[i] ?? 0,
+                MultiDimTxFactor: md?.TxFactor[i] ?? 0,
+                MultiDimDogeRootScaled: md?.DogeRootScaled[i] ?? 0,
+                RevenueMultiDim: md?.Revenue[i] ?? 0
             );
         }
 
         _logger.LogInformation(
-            "Revenue computed for epoch {Epoch}: useV2={UseV2}, totalRev={Total} (V1 sum={V1Sum}, V2 sum={V2Sum})",
-            epoch, useV2, totalRevenue, revenuesV1.Sum(), v2.Revenue.Sum());
+            "Revenue computed for epoch {Epoch}: formula={Formula}, totalRev={Total} (V1 sum={V1Sum}, V2 sum={V2Sum}, multiDim sum={MdSum})",
+            epoch, activeFormula, totalRevenue, revenuesV1.Sum(), v2.Revenue.Sum(), md?.Revenue.Sum() ?? 0);
 
         return new ComputorRevenueDto(
             Epoch: epoch,
             ComputorCount: QubicConstants.NumberOfComputors,
             IssuanceRate: QubicConstants.IssuanceRate,
-            TxQuorumScore: useV2 ? slidingTxQuorum : txQuorum,
+            TxQuorumScore: useMultiDim ? multiDimTxQuorum : useV2 ? slidingTxQuorum : txQuorum,
             VoteQuorumScore: voteQuorum,
             OracleQuorumScore: oracleQuorum,
             MiningQuorumScore: miningQuorumV1,
-            ActiveFormula: useV2 ? 2 : 1,
+            ActiveFormula: activeFormula,
             TotalComputorRevenue: totalRevenue,
             ArbRevenue: QubicConstants.IssuanceRate - totalRevenue,
             Computors: entries
         );
+    }
+
+    /// <summary>
+    /// Build sparse per-tick observation vectors for multi-dimension revenue. One streaming query,
+    /// grouped server-side by (tick, from, to) — every (from, to) pair maps to exactly one dimension,
+    /// so grouping is exact and collapses up to NUMBER_OF_TRANSACTIONS_PER_TICK rows/tick into a few.
+    /// Returns a list indexed by (tick - initialTick); gap/empty ticks get an empty dictionary.
+    /// No `executed` filter — core categorizes every transaction INCLUDED in the tick, regardless of
+    /// execution success (matches ticks.tx_count).
+    /// </summary>
+    private async Task<List<Dictionary<int, ushort>>> GetPerTickObservationsAsync(
+        uint epoch, ulong initialTick, int totalTicks, RevenueDimensionMap dimMap, CancellationToken ct)
+    {
+        var obs = new List<Dictionary<int, ushort>>(totalTicks);
+        for (int i = 0; i < totalTicks; i++) obs.Add(new Dictionary<int, ushort>());
+        if (totalTicks <= 0) return obs;
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $@"
+            SELECT tick_number, from_address, to_address, count() AS cnt
+            FROM transactions
+            WHERE epoch = {epoch}
+            GROUP BY tick_number, from_address, to_address
+            ORDER BY tick_number";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var tick = reader.GetFieldValue<ulong>(0);
+            int idx = (int)(tick - initialTick);
+            if (idx < 0 || idx >= totalTicks) continue;
+
+            var from = reader.GetString(1);
+            var to = reader.GetString(2);
+            ulong cnt = Convert.ToUInt64(reader.GetValue(3));
+
+            int dim = dimMap.DimFor(from, to);
+            var dict = obs[idx];
+            ulong cur = dict.TryGetValue(dim, out var prev) ? prev : 0UL;
+            dict[dim] = (ushort)Math.Min(cur + cnt, ushort.MaxValue);
+        }
+
+        return obs;
     }
 
     /// <summary>

@@ -5744,7 +5744,23 @@ public class ClickHouseQueryService : IDisposable
 
         var useV2 = epoch >= RevenueV2Calculator.DefaultV2FromEpoch;
 
-        // Build entries (active = V2 if useV2, else V1)
+        // Multi-dimension revenue (qubic v1.296.0) — active/paid formula from epoch 218.
+        // Honours the txTick cutoff via the observation builder. Same oracle + DOGE inputs as V2.
+        var useMultiDim = epoch >= MultiDimRevenueCalculator.DefaultMultiDimFromEpoch;
+        MultiDimRevenueCalculator.Result? md = null;
+        ulong multiDimTxQuorum = 0;
+        if (useMultiDim)
+        {
+            var dimMap = new RevenueDimensionMap(addresses);
+            var obsByTick = await GetPerTickObservationsForRevenueAsync(
+                epoch, initialTick, perTickTxCount.Length, effectiveTxTick, dimMap, ct);
+            md = MultiDimRevenueCalculator.Compute((long)initialTick, obsByTick, oracleScores, miningScores, epoch);
+            multiDimTxQuorum = RevenueGetQuorumScore(md.TxScore);
+        }
+
+        int activeFormula = useMultiDim ? 3 : useV2 ? 2 : 1;
+
+        // Build entries (active = multi-dim ≥218, else V2 ≥209, else V1)
         var entries = new ComputorRevenueEntryDto[QubicConstants.NumberOfComputors];
         long totalRevenue = 0;
         long minRevenue = long.MaxValue, maxRevenue = long.MinValue;
@@ -5752,7 +5768,7 @@ public class ClickHouseQueryService : IDisposable
         for (int i = 0; i < QubicConstants.NumberOfComputors; i++)
         {
             var address = addresses[i];
-            long active = useV2 ? v2.Revenue[i] : revenuesV1[i];
+            long active = useMultiDim ? md!.Revenue[i] : useV2 ? v2.Revenue[i] : revenuesV1[i];
             totalRevenue += active;
             entries[i] = new ComputorRevenueEntryDto(
                 ComputorIndex: (ushort)i,
@@ -5770,8 +5786,12 @@ public class ClickHouseQueryService : IDisposable
                 CombinedMandatoryFactor: v2.CombinedMandatoryFactor[i],
                 RevenueV1: revenuesV1[i],
                 RevenueV2: v2.Revenue[i],
-                RevenueFormula: useV2 ? 2 : 1,
-                Revenue: active
+                RevenueFormula: activeFormula,
+                Revenue: active,
+                MultiDimTxScore: md?.TxScore[i] ?? 0,
+                MultiDimTxFactor: md?.TxFactor[i] ?? 0,
+                MultiDimDogeRootScaled: md?.DogeRootScaled[i] ?? 0,
+                RevenueMultiDim: md?.Revenue[i] ?? 0
             );
             if (active > 0)
             {
@@ -5810,11 +5830,11 @@ public class ClickHouseQueryService : IDisposable
             ComputorCount: QubicConstants.NumberOfComputors,
             IssuanceRate: QubicConstants.IssuanceRate,
             TickHeights: new RevenueTickHeightsDto(networkTick, effectiveTxTick, effectiveVoteTick, effectiveMiningTick),
-            TxQuorumScore: useV2 ? slidingTxQuorum : txQuorumV1,
+            TxQuorumScore: useMultiDim ? multiDimTxQuorum : useV2 ? slidingTxQuorum : txQuorumV1,
             VoteQuorumScore: voteQuorum,
             OracleQuorumScore: oracleQuorum,
             MiningQuorumScore: miningQuorumV1,
-            ActiveFormula: useV2 ? 2 : 1,
+            ActiveFormula: activeFormula,
             Overview: new RevenueOverviewDto(minRevenue, maxRevenue, avgRevenue, Math.Round(avgPercent, 2)),
             CalculationStats: calcStats,
             TotalComputorRevenue: totalRevenue,
@@ -5861,6 +5881,46 @@ public class ClickHouseQueryService : IDisposable
         }
 
         return (perTick, initialTick);
+    }
+
+    /// <summary>
+    /// Sparse per-tick observation vectors for multi-dimension revenue, capped at <paramref name="maxTick"/>
+    /// (honours the simulation txTick cutoff). One grouped streaming query; every (from, to) maps to exactly
+    /// one dimension. Returns a list indexed by (tick - initialTick) of length <paramref name="totalTicks"/>;
+    /// gap/empty ticks get an empty dictionary. No `executed` filter — matches core's inclusion semantics.
+    /// </summary>
+    private async Task<List<Dictionary<int, ushort>>> GetPerTickObservationsForRevenueAsync(
+        uint epoch, ulong initialTick, int totalTicks, ulong maxTick, RevenueDimensionMap dimMap, CancellationToken ct)
+    {
+        var obs = new List<Dictionary<int, ushort>>(totalTicks);
+        for (int i = 0; i < totalTicks; i++) obs.Add(new Dictionary<int, ushort>());
+        if (totalTicks <= 0) return obs;
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT tick_number, from_address, to_address, count() AS cnt FROM transactions " +
+                          "WHERE epoch = {epoch:UInt32} AND tick_number <= {maxTick:UInt64} " +
+                          "GROUP BY tick_number, from_address, to_address ORDER BY tick_number";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "maxTick", maxTick);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var tick = reader.GetFieldValue<ulong>(0);
+            int idx = (int)(tick - initialTick);
+            if (idx < 0 || idx >= totalTicks) continue;
+
+            var from = reader.GetString(1);
+            var to = reader.GetString(2);
+            ulong cnt = Convert.ToUInt64(reader.GetValue(3));
+
+            int dim = dimMap.DimFor(from, to);
+            var dict = obs[idx];
+            ulong cur = dict.TryGetValue(dim, out var prev) ? prev : 0UL;
+            dict[dim] = (ushort)Math.Min(cur + cnt, ushort.MaxValue);
+        }
+
+        return obs;
     }
 
     /// <summary>Per-computor oracle scores from the aggregate table. Returns zeros if not yet aggregated.</summary>
@@ -6677,6 +6737,142 @@ public class ClickHouseQueryService : IDisposable
         AddParam(cmd, "epoch", epoch);
         var result = await cmd.ExecuteScalarAsync(ct);
         return Convert.ToInt64(result) > 0;
+    }
+
+    /// <summary>
+    /// Per-computor forgery leaderboard across [epochFrom, epochTo]. A forgery
+    /// means the commit's reply_digest matched the eventual reveal but its
+    /// knowledge_proof can't be reproduced — i.e. the committor copied the
+    /// digest from a peer without knowing the reply. Definitive cheating
+    /// evidence (the protocol drops these so they earn nothing, but they
+    /// went on chain).
+    /// </summary>
+    public async Task<OracleForgeryLeaderboardDto> GetOracleForgeryLeaderboardAsync(
+        uint epochFrom, uint epochTo, CancellationToken ct = default)
+    {
+        if (epochTo < epochFrom) (epochFrom, epochTo) = (epochTo, epochFrom);
+
+        // Headline totals
+        long totalForgeries = 0, totalQueriesVerified = 0, totalQueriesWithForgeries = 0;
+        await using (var totalsCmd = _connection.CreateCommand())
+        {
+            totalsCmd.CommandText = $@"
+                SELECT
+                    sumIf(matching_digest_kp_forged, 1)                 AS total_forgeries,
+                    count()                                             AS queries_verified,
+                    countIf(matching_digest_kp_forged > 0)              AS queries_with_forgeries
+                FROM oracle_kp_verifications FINAL
+                WHERE epoch BETWEEN {{ef:UInt32}} AND {{et:UInt32}}";
+            AddParam(totalsCmd, "ef", epochFrom);
+            AddParam(totalsCmd, "et", epochTo);
+
+            await using var reader = await totalsCmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                totalForgeries = reader.IsDBNull(0) ? 0 : Convert.ToInt64(reader.GetValue(0));
+                totalQueriesVerified = reader.IsDBNull(1) ? 0 : Convert.ToInt64(reader.GetValue(1));
+                totalQueriesWithForgeries = reader.IsDBNull(2) ? 0 : Convert.ToInt64(reader.GetValue(2));
+            }
+        }
+
+        // Per-computor breakdown. Join against oracle_computor_summary to
+        // compute the forgery rate (forgeries / total commits attempted).
+        var rows = new List<OracleForgeryComputorEntryDto>();
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $@"
+                WITH forgeries AS (
+                    SELECT computor_index,
+                           count()                         AS forgery_count,
+                           uniqExact(query_id)             AS forgery_queries
+                    FROM oracle_kp_forgeries FINAL
+                    WHERE epoch BETWEEN {{ef:UInt32}} AND {{et:UInt32}}
+                    GROUP BY computor_index
+                ), commits AS (
+                    SELECT computor_index, sum(commit_count) AS total_commits
+                    FROM oracle_computor_summary FINAL
+                    WHERE epoch BETWEEN {{ef:UInt32}} AND {{et:UInt32}}
+                    GROUP BY computor_index
+                )
+                SELECT f.computor_index,
+                       f.forgery_count,
+                       f.forgery_queries,
+                       coalesce(c.total_commits, 0) AS total_commits
+                FROM forgeries f
+                LEFT JOIN commits c ON c.computor_index = f.computor_index
+                ORDER BY f.forgery_count DESC, f.computor_index ASC";
+            AddParam(cmd, "ef", epochFrom);
+            AddParam(cmd, "et", epochTo);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var idx = reader.GetFieldValue<ushort>(0);
+                var fcount = Convert.ToInt64(reader.GetValue(1));
+                var fqueries = Convert.ToInt64(reader.GetValue(2));
+                var total = Convert.ToInt64(reader.GetValue(3));
+                rows.Add(new OracleForgeryComputorEntryDto(
+                    ComputorIndex: idx,
+                    Address: null,        // computor address/label resolved at controller layer if available
+                    Label: null,
+                    ForgeryCount: fcount,
+                    ForgeryQueries: fqueries,
+                    TotalCommits: total,
+                    ForgeryRate: total > 0 ? (double)fcount / total : 0.0));
+            }
+        }
+
+        return new OracleForgeryLeaderboardDto(
+            EpochFrom: epochFrom,
+            EpochTo: epochTo,
+            TotalForgeries: totalForgeries,
+            TotalQueriesVerified: totalQueriesVerified,
+            TotalQueriesWithForgeries: totalQueriesWithForgeries,
+            Computors: rows);
+    }
+
+    /// <summary>
+    /// Per-forgery details — useful for drilling into a suspect computor.
+    /// </summary>
+    public async Task<List<OracleForgeryDetailDto>> GetOracleForgeryDetailsAsync(
+        uint epochFrom, uint epochTo, ushort? computorIndex, int limit, CancellationToken ct = default)
+    {
+        if (epochTo < epochFrom) (epochFrom, epochTo) = (epochTo, epochFrom);
+        if (limit < 1 || limit > 1000) limit = 200;
+
+        var results = new List<OracleForgeryDetailDto>();
+        await using var cmd = _connection.CreateCommand();
+        var compFilter = computorIndex.HasValue ? "AND computor_index = {ci:UInt16}" : "";
+        cmd.CommandText = $@"
+            SELECT epoch, query_id, computor_index,
+                   committed_digest, committed_kp, expected_kp,
+                   tick_number, detected_at
+            FROM oracle_kp_forgeries FINAL
+            WHERE epoch BETWEEN {{ef:UInt32}} AND {{et:UInt32}}
+              {compFilter}
+            ORDER BY epoch DESC, query_id DESC
+            LIMIT {{lim:UInt32}}";
+        AddParam(cmd, "ef", epochFrom);
+        AddParam(cmd, "et", epochTo);
+        if (computorIndex.HasValue) AddParam(cmd, "ci", computorIndex.Value);
+        AddParam(cmd, "lim", (uint)limit);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new OracleForgeryDetailDto(
+                Epoch: reader.GetFieldValue<uint>(0),
+                QueryId: reader.GetFieldValue<ulong>(1),
+                ComputorIndex: reader.GetFieldValue<ushort>(2),
+                Address: null,
+                Label: null,
+                CommittedDigest: reader.GetString(3),
+                CommittedKp: reader.GetString(4),
+                ExpectedKp: reader.GetString(5),
+                TickNumber: reader.GetFieldValue<ulong>(6),
+                DetectedAt: reader.GetDateTime(7)));
+        }
+        return results;
     }
 
     public async Task<OracleEpochSummaryDto> GetOracleEpochSummaryAsync(uint epoch, CancellationToken ct = default)

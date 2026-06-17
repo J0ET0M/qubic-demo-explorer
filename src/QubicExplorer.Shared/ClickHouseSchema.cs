@@ -1010,6 +1010,50 @@ public static class ClickHouseSchema
         PARTITION BY toYYYYMM(aggregated_at)
         ORDER BY (epoch, computor_index)
         """,
+
+        // Oracle KP verification — one row per (epoch, query_id) we've
+        // verified. Lets the verifier skip already-checked queries on restart,
+        // and gives a per-query "how many forgeries did we find" rollup.
+        //
+        // Background: every commit must include knowledge_proof = K12(reply || idx).
+        // Once the reveal lands, we can recompute the expected KP for each commit
+        // and detect "digest copied without knowing the reply" attempts.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.oracle_kp_verifications (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            query_id UInt64 CODEC(LZ4),
+            reply_data_size UInt16 CODEC(LZ4),
+            expected_digest String CODEC(LZ4HC),         -- K12(reply_data) hex
+            total_commits UInt32 CODEC(LZ4),
+            matching_digest_count UInt32 CODEC(LZ4),     -- commits whose committed digest equals expected_digest
+            matching_digest_kp_ok UInt32 CODEC(LZ4),     -- honest within matching_digest
+            matching_digest_kp_forged UInt32 CODEC(LZ4), -- forged within matching_digest (smoking gun)
+            verified_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(verified_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, query_id)
+        """,
+
+        // Oracle KP forgeries — one row per detected forgery. A forgery is a
+        // commit that (a) matched the eventual quorum digest, so it would have
+        // earned a revenue point, but (b) had a knowledge_proof that doesn't
+        // reproduce K12(reply || computor_index). That means the committer
+        // copied the digest from a peer without actually knowing the reply —
+        // the protocol drops it but it's evidence of a cheating attempt.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.oracle_kp_forgeries (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            query_id UInt64 CODEC(LZ4),
+            computor_index UInt16 CODEC(LZ4),
+            committed_digest String CODEC(LZ4HC),
+            committed_kp String CODEC(LZ4HC),
+            expected_kp String CODEC(LZ4HC),
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            detected_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(detected_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, query_id, computor_index)
+        """,
     ];
 
     /// <summary>

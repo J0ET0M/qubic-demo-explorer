@@ -583,6 +583,45 @@ public class StatsController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// Forgery leaderboard. A forgery is a commit that matched the eventual
+    /// reveal's digest but whose knowledge_proof can't be reproduced from the
+    /// revealed reply — i.e. the committor copied the digest from a peer
+    /// without knowing the actual reply data. The protocol drops these
+    /// (no revenue point) but they remain on-chain as evidence.
+    /// </summary>
+    [HttpGet("oracle/forgeries")]
+    public async Task<IActionResult> GetOracleForgeryLeaderboard(
+        [FromQuery] uint epochFrom,
+        [FromQuery] uint epochTo,
+        CancellationToken ct = default)
+    {
+        if (epochFrom == 0 || epochTo == 0)
+            return BadRequest("epochFrom and epochTo are required");
+
+        var result = await _cache.GetOrSetAsync(
+            $"stats:oracle:forgeries:{epochFrom}:{epochTo}",
+            TimeSpan.FromMinutes(2),
+            () => _queryService.GetOracleForgeryLeaderboardAsync(epochFrom, epochTo, ct));
+        return Ok(result);
+    }
+
+    [HttpGet("oracle/forgeries/details")]
+    public async Task<IActionResult> GetOracleForgeryDetails(
+        [FromQuery] uint epochFrom,
+        [FromQuery] uint epochTo,
+        [FromQuery] ushort? computorIndex = null,
+        [FromQuery] int limit = 200,
+        CancellationToken ct = default)
+    {
+        if (epochFrom == 0 || epochTo == 0)
+            return BadRequest("epochFrom and epochTo are required");
+
+        var result = await _queryService.GetOracleForgeryDetailsAsync(
+            epochFrom, epochTo, computorIndex, limit, ct);
+        return Ok(result);
+    }
+
     [HttpGet("oracle/{epoch:int}/queries")]
     public async Task<IActionResult> GetOracleQueryList(
         uint epoch,

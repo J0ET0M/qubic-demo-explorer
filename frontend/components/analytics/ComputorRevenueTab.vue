@@ -272,12 +272,17 @@ const { truncateAddress } = useFormatting()
         </div>
       </div>
 
-      <div v-if="revenueData" class="text-xs text-foreground-muted mb-2 flex items-center gap-2">
+      <div v-if="revenueData" class="text-xs text-foreground-muted mb-2 flex items-center gap-2 flex-wrap">
         <span class="px-1.5 py-0.5 rounded font-semibold"
-              :class="revenueData.activeFormula === 2 ? 'bg-success/15 text-success' : 'bg-info/15 text-info'">
-          Formula V{{ revenueData.activeFormula }}
+              :class="revenueData.activeFormula === 3 ? 'bg-accent/15 text-accent'
+                    : revenueData.activeFormula === 2 ? 'bg-success/15 text-success' : 'bg-info/15 text-info'">
+          {{ revenueData.activeFormula === 3 ? 'Multi-dimension' : 'Formula V' + revenueData.activeFormula }}
         </span>
-        <template v-if="revenueData.activeFormula === 2">
+        <template v-if="revenueData.activeFormula === 3">
+          <span>· TX = asymmetric-L2 over per-tick observation dims (1351-tick circular)</span>
+          <span>· revenue = IPC × txFactor × oracleFactor × √(dogeFactor·S) / S³</span>
+        </template>
+        <template v-else-if="revenueData.activeFormula === 2">
           <span>· TX = sliding-window (1351-tick circular)</span>
           <span>· M = (17·tx + 3·oracle) / 20</span>
           <span>· revenue = IPC × M × (S² + B·E) / (S·(S+B)·S)</span>
@@ -295,8 +300,8 @@ const { truncateAddress } = useFormatting()
               <th>Label</th>
               <th
                 class="cursor-pointer select-none text-right"
-                @click="toggleSort(revenueData?.activeFormula === 2 ? 'slidingWindowTxScore' : 'txScore')"
-                title="V2: 1351-tick sliding-window TX score (revenue.h). V1: per-computor TX points sum at tick % 676."
+                @click="toggleSort(revenueData?.activeFormula === 3 ? 'multiDimTxScore' : revenueData?.activeFormula === 2 ? 'slidingWindowTxScore' : 'txScore')"
+                title="Multi-dim: asymmetric-L2 TX score over per-tick observation dims (1351-tick window). V2: 1351-tick sliding-window TX score. V1: per-computor TX points sum at tick % 676."
               >TX Score</th>
               <th
                 class="cursor-pointer select-none text-right"
@@ -317,7 +322,19 @@ const { truncateAddress } = useFormatting()
                 @click="toggleSort('combinedMandatoryFactor')"
                 title="M = (17·tx + 3·oracle) / 20 (V2 only)"
               >M</th>
+              <th
+                v-if="revenueData?.activeFormula === 3"
+                class="cursor-pointer select-none text-right"
+                @click="toggleSort('multiDimDogeRootScaled')"
+                title="√DOGE term = ISqrt(dogeFactor·S), the multiplicative DOGE contribution (multi-dim)"
+              >√DOGE</th>
               <th class="cursor-pointer select-none text-right" @click="toggleSort('revenue')">Revenue</th>
+              <th
+                v-if="revenueData?.activeFormula === 3"
+                class="cursor-pointer select-none text-right"
+                @click="toggleSort('revenueV2')"
+                title="V2 revenue for the same epoch — shadow comparison vs the active multi-dim revenue"
+              >V2 (shadow)</th>
               <th class="text-right">%</th>
             </tr>
           </thead>
@@ -331,21 +348,25 @@ const { truncateAddress } = useFormatting()
               </td>
               <td class="text-foreground-muted text-xs">{{ c.label || '-' }}</td>
               <td class="text-right font-mono text-xs">
-                {{ formatAmount(revenueData?.activeFormula === 2 ? c.slidingWindowTxScore : c.txScore) }}
+                {{ formatAmount(revenueData?.activeFormula === 3 ? c.multiDimTxScore : revenueData?.activeFormula === 2 ? c.slidingWindowTxScore : c.txScore) }}
               </td>
               <td class="text-right font-mono text-xs">{{ formatAmount(c.oracleScore) }}</td>
               <td class="text-right font-mono text-xs">{{ formatAmount(c.miningScore) }}</td>
-              <td class="text-right font-mono text-xs" :class="factorClass(c.txFactor)">{{ factorPct(c.txFactor) }}%</td>
+              <td class="text-right font-mono text-xs" :class="factorClass(revenueData?.activeFormula === 3 ? c.multiDimTxFactor : c.txFactor)">{{ factorPct(revenueData?.activeFormula === 3 ? c.multiDimTxFactor : c.txFactor) }}%</td>
               <td class="text-right font-mono text-xs" :class="factorClass(c.oracleFactor)">{{ factorPct(c.oracleFactor) }}%</td>
               <td class="text-right font-mono text-xs" :class="factorClass(c.miningFactor)">{{ factorPct(c.miningFactor) }}%</td>
               <td v-if="revenueData?.activeFormula === 2" class="text-right font-mono text-xs" :class="factorClass(c.combinedMandatoryFactor)">
                 {{ factorPct(c.combinedMandatoryFactor) }}%
               </td>
+              <td v-if="revenueData?.activeFormula === 3" class="text-right font-mono text-xs" :class="factorClass(c.multiDimDogeRootScaled)">
+                {{ factorPct(c.multiDimDogeRootScaled) }}%
+              </td>
               <td class="text-right font-bold">{{ formatAmount(c.revenue) }}</td>
+              <td v-if="revenueData?.activeFormula === 3" class="text-right font-mono text-xs text-foreground-muted">{{ formatAmount(c.revenueV2) }}</td>
               <td class="text-right font-mono text-xs" :class="c.revenue > 0 ? 'text-success' : 'text-destructive'">{{ revenuePct(c.revenue) }}%</td>
             </tr>
             <tr v-if="paginatedComputors.length === 0">
-              <td :colspan="revenueData?.activeFormula === 2 ? 12 : 11" class="text-center text-foreground-muted py-4">No matching computors</td>
+              <td :colspan="revenueData?.activeFormula === 3 ? 13 : revenueData?.activeFormula === 2 ? 12 : 11" class="text-center text-foreground-muted py-4">No matching computors</td>
             </tr>
           </tbody>
         </table>

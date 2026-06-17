@@ -779,6 +779,7 @@ public class AnalyticsSnapshotService : BackgroundService
         {
             var eventService = scope.ServiceProvider.GetRequiredService<OracleEventService>();
             var aggregateService = scope.ServiceProvider.GetRequiredService<OracleAggregateService>();
+            var kpVerificationService = scope.ServiceProvider.GetRequiredService<OracleKpVerificationService>();
 
             // 1. Drain raw events
             var totalEvents = 0;
@@ -805,6 +806,25 @@ public class AnalyticsSnapshotService : BackgroundService
             }
             if (epochsAggregated > 0)
                 _logger.LogInformation("Oracle aggregates: built {Count} epoch(s)", epochsAggregated);
+
+            // 3. KP-verify any newly-revealed queries. Cheating commits (right
+            // digest, wrong knowledge proof) get persisted to oracle_kp_forgeries.
+            var totalKpVerified = 0;
+            var totalForgeries = 0;
+            var kpPasses = 0;
+            while (!ct.IsCancellationRequested)
+            {
+                var (verified, forgeries, hasMore) = await kpVerificationService.ProcessAsync(currentEpoch, ct);
+                totalKpVerified += verified;
+                totalForgeries += forgeries;
+                kpPasses++;
+                if (!hasMore) break;
+                await Task.Delay(200, ct);
+            }
+            if (totalKpVerified > 0)
+                _logger.LogInformation(
+                    "Oracle KP: verified {V} queries across {P} pass(es), found {F} forgery attempt(s)",
+                    totalKpVerified, kpPasses, totalForgeries);
         }
         catch (Exception ex)
         {

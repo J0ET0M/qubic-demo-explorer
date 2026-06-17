@@ -1098,8 +1098,13 @@ interface ComputorRevenueEntryDto {
   combinedMandatoryFactor: number // V2: M = (17·tx + 3·oracle)/20
   revenueV1: number
   revenueV2: number
-  revenueFormula: number       // 1 (V1 multiplicative) or 2 (V2 additive bonus)
-  revenue: number              // active revenue (V2 if epoch ≥ 209, else V1)
+  revenueFormula: number       // 1 (V1), 2 (V2), or 3 (multi-dim)
+  revenue: number              // active revenue (multi-dim ≥218, else V2 ≥209, else V1)
+  // Multi-dimension (qubic v1.296.0). 0 for pre-218 / pre-multi-dim records.
+  multiDimTxScore: number        // asymmetric-L2 TX score
+  multiDimTxFactor: number       // 0..1024
+  multiDimDogeRootScaled: number // 0..1024 = √(dogeFactor·S)
+  revenueMultiDim: number        // multi-dim revenue
 }
 
 interface ComputorRevenueDto {
@@ -1110,7 +1115,7 @@ interface ComputorRevenueDto {
   voteQuorumScore: number
   oracleQuorumScore: number
   miningQuorumScore: number
-  activeFormula: number   // 1 or 2 — which formula is in use for this epoch
+  activeFormula: number   // 1 (V1), 2 (V2), or 3 (multi-dim) — which formula is in use for this epoch
   totalComputorRevenue: number
   arbRevenue: number
   computors: ComputorRevenueEntryDto[]

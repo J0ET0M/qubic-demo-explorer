@@ -872,8 +872,14 @@ public record ComputorRevenueEntryDto(
     // Revenue values.
     long RevenueV1,    // legacy: tx × vote × mining
     long RevenueV2,    // V2 additive bonus formula
-    int RevenueFormula, // 1 or 2 — which formula contributed to Revenue
-    long Revenue       // active revenue (= V2 for epoch ≥ V2FromEpoch, else V1)
+    int RevenueFormula, // 1 (V1), 2 (V2), or 3 (multi-dim) — which formula contributed to Revenue
+    long Revenue,      // active revenue (multi-dim ≥218, else V2 ≥209, else V1)
+
+    // Multi-dimension inputs (qubic v1.296.0). Default 0 for pre-218 epochs / pre-multi-dim records.
+    ulong MultiDimTxScore = 0,        // accumulated asymmetric-L2 TX score
+    ulong MultiDimTxFactor = 0,       // [0..S]
+    ulong MultiDimDogeRootScaled = 0, // [0..S] = ISqrt(dogeFactor·S), the √DOGE term
+    long RevenueMultiDim = 0          // multi-dim revenue
 );
 
 public record ComputorRevenueDto(
@@ -884,7 +890,7 @@ public record ComputorRevenueDto(
     ulong VoteQuorumScore,
     ulong OracleQuorumScore,
     ulong MiningQuorumScore,
-    int ActiveFormula,                  // 1 (V1) or 2 (V2)
+    int ActiveFormula,                  // 1 (V1), 2 (V2), or 3 (multi-dim)
     long TotalComputorRevenue,
     long ArbRevenue,
     ComputorRevenueEntryDto[] Computors
@@ -1244,4 +1250,43 @@ public record TaxReportDto(
     int MaxTransfers,              // the cap that was applied
     List<TaxReportMonthDto> Months,
     List<TaxReportTransferDto> Transfers
+);
+
+// ─── Oracle KP forgery leaderboard ─────────────────────────────────────────
+// A "forgery" is a commit that matched the eventual reveal's digest but whose
+// knowledge_proof can't be reproduced from the revealed reply. The protocol
+// drops these silently (no revenue point), but it's direct evidence of an
+// attempted cheat — the committor copied the digest from a peer without
+// actually knowing the reply data.
+
+public record OracleForgeryComputorEntryDto(
+    ushort ComputorIndex,
+    string? Address,
+    string? Label,
+    long ForgeryCount,                  // total forgery attempts in the range
+    long ForgeryQueries,                // distinct queries forged on
+    long TotalCommits,                  // total commits across the range (from oracle_computor_summary)
+    double ForgeryRate                  // ForgeryCount / TotalCommits (0..1)
+);
+
+public record OracleForgeryLeaderboardDto(
+    uint EpochFrom,
+    uint EpochTo,
+    long TotalForgeries,
+    long TotalQueriesVerified,
+    long TotalQueriesWithForgeries,
+    List<OracleForgeryComputorEntryDto> Computors
+);
+
+public record OracleForgeryDetailDto(
+    uint Epoch,
+    ulong QueryId,
+    ushort ComputorIndex,
+    string? Address,
+    string? Label,
+    string CommittedDigest,
+    string CommittedKp,
+    string ExpectedKp,
+    ulong TickNumber,
+    DateTime DetectedAt
 );
