@@ -398,44 +398,56 @@ public class ClickHouseQueryService : IDisposable
 
         if (logRanges.Count > 0)
         {
-            // Build a single query with OR conditions for all log ranges
-            // Since all transactions in a tick-scoped query share the same tick, this is efficient
-            var tickGroups = logRanges.GroupBy(r => r.Tick);
-            foreach (var group in tickGroups)
+            // Single batched query across all ticks in the result set. For bulk
+            // queries (e.g. epoch-wide) this collapses what used to be O(distinct_ticks)
+            // sequential round-trips into a single one. We chunk the tick list
+            // to keep the IN(...) clause within ClickHouse's max query size.
+            const int TickChunkSize = 1000;
+            var allTicks = logRanges.Select(r => r.Tick).Distinct().ToList();
+            var logsByTick = new Dictionary<ulong, List<(uint LogId, LogDto Log)>>();
+
+            for (int i = 0; i < allTicks.Count; i += TickChunkSize)
             {
-                var tick = group.Key;
-                var minLogId = group.Min(r => r.LogIdFrom);
-                var maxLogId = group.Max(r => r.LogIdEnd);
+                var chunk = allTicks.Skip(i).Take(TickChunkSize).ToList();
+                var tickList = string.Join(",", chunk);
 
                 await using var logCmd = _connection.CreateCommand();
                 logCmd.CommandText = $@"
                     SELECT tick_number, log_id, log_type, tx_hash, source_address,
                            dest_address, amount, asset_name, timestamp
                     FROM logs
-                    WHERE tick_number = {{tick:UInt64}}
-                      AND log_id >= {{minLogId:Int32}}
-                      AND log_id < {{maxLogId:Int32}}
-                    ORDER BY log_id";
-                AddParam(logCmd, "tick", tick);
-                AddParam(logCmd, "minLogId", minLogId);
-                AddParam(logCmd, "maxLogId", maxLogId);
+                    WHERE tick_number IN ({tickList})
+                    ORDER BY tick_number, log_id";
 
-                var allLogs = new List<(uint LogId, LogDto Log)>();
                 await using var logReader = await logCmd.ExecuteReaderAsync(ct);
                 while (await logReader.ReadAsync(ct))
                 {
+                    var tick = logReader.GetFieldValue<ulong>(0);
                     var logId = logReader.GetFieldValue<uint>(1);
-                    allLogs.Add((logId, ReadLogDto(logReader)));
+                    var dto = ReadLogDto(logReader);
+                    if (!logsByTick.TryGetValue(tick, out var list))
+                    {
+                        list = new List<(uint, LogDto)>();
+                        logsByTick[tick] = list;
+                    }
+                    list.Add((logId, dto));
                 }
+            }
 
-                // Distribute logs to their transactions
-                foreach (var range in group)
+            // Distribute logs to their transactions (range filter happens in-memory).
+            foreach (var range in logRanges)
+            {
+                var key = (range.Tick, range.LogIdFrom, range.LogIdEnd);
+                if (logsByTick.TryGetValue(range.Tick, out var allLogs))
                 {
-                    var key = (range.Tick, range.LogIdFrom, range.LogIdEnd);
                     logsByKey[key] = allLogs
                         .Where(l => l.LogId >= range.LogIdFrom && l.LogId < range.LogIdEnd)
                         .Select(l => l.Log)
                         .ToList();
+                }
+                else
+                {
+                    logsByKey[key] = new List<LogDto>();
                 }
             }
         }
@@ -534,6 +546,8 @@ public class ClickHouseQueryService : IDisposable
         int page, int limit, string? address = null, string? direction = null,
         ulong? minAmount = null, bool? executed = null, int? inputType = null,
         string? toAddress = null, bool coreOnly = false, bool detailed = false,
+        uint? epoch = null, ulong? tickFrom = null, ulong? tickTo = null,
+        string? sort = null,
         CancellationToken ct = default)
     {
         var offset = (page - 1) * limit;
@@ -554,6 +568,16 @@ public class ClickHouseQueryService : IDisposable
                 prewhereClause = $"PREWHERE to_address = {{addr:String}}";
         }
 
+        // Epoch first — partition prune via PARTITION BY epoch. Tick range next —
+        // in-order scan via ORDER BY (tick_number, hash). Both put before
+        // anything that uses an index so ClickHouse can short-circuit.
+        if (epoch.HasValue)
+            conditions.Add($"epoch = {{epoch:UInt32}}");
+        if (tickFrom.HasValue)
+            conditions.Add($"tick_number >= {{tickFrom:UInt64}}");
+        if (tickTo.HasValue)
+            conditions.Add($"tick_number <= {{tickTo:UInt64}}");
+
         if (minAmount.HasValue)
             conditions.Add($"amount >= {{minAmt:UInt64}}");
 
@@ -572,9 +596,14 @@ public class ClickHouseQueryService : IDisposable
             ? "WHERE " + string.Join(" AND ", conditions)
             : "";
 
-        // For address-scoped queries, skip the expensive count() — fetch limit+1 to detect hasMore.
-        // For global queries (no address), count is cheap.
-        var skipCount = !string.IsNullOrEmpty(address);
+        // Skip the expensive count() when the result is already scoped — by
+        // address (existing path) or by epoch / tick range (bulk-sync path).
+        // For those we fetch limit+1 to detect hasMore. For unscoped global
+        // queries the count is cheap (and clients want it for paging UI).
+        var skipCount = !string.IsNullOrEmpty(address)
+                        || epoch.HasValue
+                        || tickFrom.HasValue
+                        || tickTo.HasValue;
         var fetchLimit = skipCount ? limit + 1 : limit;
 
         Task<long>? countTask = null;
@@ -582,6 +611,12 @@ public class ClickHouseQueryService : IDisposable
         if (countCmd != null)
         {
             countCmd.CommandText = $"SELECT count() FROM transactions {prewhereClause} {whereClause}";
+            if (epoch.HasValue)
+                AddParam(countCmd, "epoch", epoch.Value);
+            if (tickFrom.HasValue)
+                AddParam(countCmd, "tickFrom", tickFrom.Value);
+            if (tickTo.HasValue)
+                AddParam(countCmd, "tickTo", tickTo.Value);
             if (minAmount.HasValue)
                 AddParam(countCmd, "minAmt", minAmount.Value);
             if (executed.HasValue)
@@ -618,7 +653,7 @@ public class ClickHouseQueryService : IDisposable
                     FROM transactions PREWHERE to_address = {{addr:String}} {whereClause}
                 )
                 GROUP BY {groupByColumns}
-                ORDER BY tick_number DESC, hash
+                ORDER BY tick_number {(string.Equals(sort, "asc", StringComparison.OrdinalIgnoreCase) ? "ASC" : "DESC")}, hash
                 LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
         }
         else
@@ -628,11 +663,17 @@ public class ClickHouseQueryService : IDisposable
                 FROM transactions
                 {prewhereClause}
                 {whereClause}
-                ORDER BY tick_number DESC, hash
+                ORDER BY tick_number {(string.Equals(sort, "asc", StringComparison.OrdinalIgnoreCase) ? "ASC" : "DESC")}, hash
                 LIMIT {{lim:UInt32}} OFFSET {{off:UInt32}}";
         }
         if (!string.IsNullOrEmpty(address))
             AddParam(cmd, "addr", address);
+        if (epoch.HasValue)
+            AddParam(cmd, "epoch", epoch.Value);
+        if (tickFrom.HasValue)
+            AddParam(cmd, "tickFrom", tickFrom.Value);
+        if (tickTo.HasValue)
+            AddParam(cmd, "tickTo", tickTo.Value);
         if (minAmount.HasValue)
             AddParam(cmd, "minAmt", minAmount.Value);
         if (executed.HasValue)
