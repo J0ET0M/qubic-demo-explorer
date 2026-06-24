@@ -879,7 +879,11 @@ public record ComputorRevenueEntryDto(
     ulong MultiDimTxScore = 0,        // accumulated asymmetric-L2 TX score
     ulong MultiDimTxFactor = 0,       // [0..S]
     ulong MultiDimDogeRootScaled = 0, // [0..S] = ISqrt(dogeFactor·S), the √DOGE term
-    long RevenueMultiDim = 0          // multi-dim revenue
+    long RevenueMultiDim = 0,         // multi-dim revenue
+
+    // Owner label (e.g. "minerlab", "EPNH") sourced from fattydoge revenue
+    // tracker via computor_ownership join at query time. Null if unknown.
+    string? Owner = null
 );
 
 public record ComputorRevenueDto(
@@ -893,7 +897,9 @@ public record ComputorRevenueDto(
     int ActiveFormula,                  // 1 (V1), 2 (V2), or 3 (multi-dim)
     long TotalComputorRevenue,
     long ArbRevenue,
-    ComputorRevenueEntryDto[] Computors
+    ComputorRevenueEntryDto[] Computors,
+    ulong DataTick = 0,                  // highest indexed tick this snapshot was computed against
+    DateTime? ComputedAt = null          // when the snapshot was computed (= row created_at)
 );
 
 public record ComputorRevenueSimulationRequest(
@@ -1289,4 +1295,75 @@ public record OracleForgeryDetailDto(
     string ExpectedKp,
     ulong TickNumber,
     DateTime DetectedAt
+);
+
+// ─── Owner-based aggregations ──────────────────────────────────────────────
+// Computors are grouped by their `owner` label (e.g. "minerlab", "EPNH").
+// We surface owner-level revenue + DOGE participation so concentration and
+// per-operator performance are visible in one place.
+
+public record ComputorOwnerEntryDto(
+    string Owner,
+    int ComputorCount,
+    long TotalRevenue,
+    double AvgRevenue,
+    long MaxRevenue,
+    long MinRevenue,
+    // DOGE participation: mining factor is the scaled merged-mining contribution
+    // per computor. AvgDogeFactor in [0..1024]; non-zero means the owner's
+    // computors are submitting DOGE shares. RootScaled is the √DOGE term used
+    // by the multi-dim formula (also [0..1024], present from epoch 218+).
+    double AvgMiningFactor,
+    double AvgDogeRootScaled,
+    int ComputorsWithDogeMining,        // count with mining_factor > 0
+
+    // DOGE merged-mining points (custom-mining shares) summed across this
+    // owner's computors. For pre-V2 epochs this would be XMR points instead.
+    ulong DogePoints,
+    // Percentage share of total network DOGE points (0..100). Lets you compare
+    // owner participation: e.g. minerlab 40%, qli 60%.
+    double DogeParticipationPercent,
+
+    // Qubic mining — count of solution transactions (input_type=2) with
+    // to_address matching one of the owner's computors. This is the original
+    // puzzle-solution stream, distinct from DOGE merged-mining.
+    ulong QubicSolutions,
+    double QubicSolutionsPercent,
+
+    ushort[] ComputorIndices            // slot indices owned by this owner
+);
+
+public record ComputorRevenueByOwnerDto(
+    uint Epoch,
+    int OwnerCount,
+    int ComputorsWithOwner,
+    int ComputorsWithoutOwner,
+    long TotalAttributedRevenue,
+    // Sum of mining points across ALL 676 computors — the denominator for
+    // every owner's DogeParticipationPercent. Zero if no DOGE mining happened
+    // yet for the epoch (then all percentages are 0).
+    ulong TotalDogePoints,
+    // Sum of all input_type=2 transactions in the epoch — the denominator
+    // for every owner's QubicSolutionsPercent.
+    ulong TotalQubicSolutions,
+    ComputorOwnerEntryDto[] Owners
+);
+
+public record OwnerComputorDto(
+    ushort ComputorIndex,
+    string Address,
+    long Revenue,
+    ulong MiningFactor,
+    ulong MultiDimDogeRootScaled,
+    ulong DogePoints,                   // DOGE shares
+    ulong QubicSolutions                // input_type=2 solution txs to this address
+);
+
+public record OwnerDetailDto(
+    uint Epoch,
+    string Owner,
+    int ComputorCount,
+    long TotalRevenue,
+    double AvgRevenue,
+    OwnerComputorDto[] Computors
 );

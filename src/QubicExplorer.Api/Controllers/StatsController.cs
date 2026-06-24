@@ -531,6 +531,159 @@ public class StatsController : ControllerBase
     }
 
     /// <summary>
+    /// Filtered computor revenue — return only the requested entries by computor
+    /// index and/or address. Both filters can be supplied together; an entry is
+    /// returned if it matches EITHER list. Comma-separated, max 676 entries each.
+    /// Epoch path variant.
+    /// </summary>
+    /// <param name="epoch">Target epoch.</param>
+    /// <param name="indices">Comma-separated computor indices (0–675), e.g. <c>0,5,42</c>.</param>
+    /// <param name="addresses">Comma-separated 60-char Qubic addresses.</param>
+    /// <remarks>
+    /// Example:
+    /// <code>GET /api/stats/computor-revenue/217/select?indices=0,5,42</code>
+    /// <code>GET /api/stats/computor-revenue/217/select?addresses=ABCD…,EFGH…</code>
+    /// <code>GET /api/stats/computor-revenue/217/select?indices=0,5&amp;addresses=ABCD…</code>
+    /// <para>
+    /// Reuses the full-epoch cache, so this is essentially free on a cache hit.
+    /// Headline totals (TotalComputorRevenue, ArbRevenue, etc.) are unchanged from
+    /// the full DTO — they describe the epoch, not the filtered subset. Sum the
+    /// returned <c>computors[].revenue</c> values for a subset total.
+    /// </para>
+    /// </remarks>
+    [HttpGet("computor-revenue/{epoch:int}/select")]
+    public async Task<IActionResult> GetComputorRevenueSelectedByEpoch(
+        uint epoch,
+        [FromQuery] string? indices = null,
+        [FromQuery] string? addresses = null,
+        CancellationToken ct = default)
+    {
+        return await SelectComputorRevenueAsync(epoch, indices, addresses, ct);
+    }
+
+    /// <summary>
+    /// Filtered computor revenue for the current epoch — same shape as the
+    /// epoch-pinned variant.
+    /// </summary>
+    [HttpGet("computor-revenue/select")]
+    public async Task<IActionResult> GetComputorRevenueSelected(
+        [FromQuery] string? indices = null,
+        [FromQuery] string? addresses = null,
+        CancellationToken ct = default)
+    {
+        var epoch = await _queryService.GetCurrentEpochAsync(ct);
+        if (epoch == null) return NotFound("No epoch data available");
+        return await SelectComputorRevenueAsync(epoch.Value, indices, addresses, ct);
+    }
+
+    private async Task<IActionResult> SelectComputorRevenueAsync(
+        uint epoch, string? indices, string? addresses, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(indices) && string.IsNullOrWhiteSpace(addresses))
+            return BadRequest("At least one of 'indices' or 'addresses' is required.");
+
+        var wantedIndices = ParseIndices(indices);
+        var wantedAddresses = ParseAddresses(addresses);
+
+        var full = await _cache.GetOrSetAsync(
+            $"stats:computor-revenue:{epoch}",
+            AnalyticsCacheService.ComputorRevenueTtl,
+            () => _queryService.GetComputorRevenueAsync(epoch, ct));
+        if (full == null) return NotFound("No computor revenue data available for this epoch");
+
+        var filtered = full.Computors
+            .Where(c =>
+                (wantedIndices.Count > 0 && wantedIndices.Contains(c.ComputorIndex)) ||
+                (wantedAddresses.Count > 0 && wantedAddresses.Contains(c.Address)))
+            .ToArray();
+
+        return Ok(full with { Computors = filtered });
+    }
+
+    private static HashSet<ushort> ParseIndices(string? raw)
+    {
+        var set = new HashSet<ushort>();
+        if (string.IsNullOrWhiteSpace(raw)) return set;
+        foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (ushort.TryParse(part, out var v) && v < 676) set.Add(v);
+        }
+        return set;
+    }
+
+    private static HashSet<string> ParseAddresses(string? raw)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(raw)) return set;
+        foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            // Qubic addresses are exactly 60 uppercase A–Z; anything else is rejected.
+            if (part.Length == 60) set.Add(part);
+        }
+        return set;
+    }
+
+    /// <summary>
+    /// List of epochs that have a persisted owner summary — used by the
+    /// frontend selector so users can only pick epochs we have data for.
+    /// </summary>
+    [HttpGet("owners/epochs")]
+    public async Task<IActionResult> GetOwnerSummaryEpochs(CancellationToken ct = default)
+    {
+        var epochs = await _cache.GetOrSetAsync(
+            "stats:owners:epochs",
+            TimeSpan.FromMinutes(5),
+            () => _queryService.GetOwnerSummaryEpochsAsync(ct));
+        return Ok(epochs);
+    }
+
+    /// <summary>
+    /// Per-owner roll-up of computor revenue + DOGE participation for an epoch.
+    /// Groups all 676 computors by their owner label (from fattydoge snapshot)
+    /// and returns per-owner totals, averages, and DOGE-mining indicators.
+    /// </summary>
+    [HttpGet("computor-revenue/{epoch:int}/by-owner")]
+    public async Task<IActionResult> GetComputorRevenueByOwner(uint epoch, CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            $"stats:computor-revenue:{epoch}:by-owner",
+            AnalyticsCacheService.ComputorRevenueTtl,
+            () => _queryService.GetComputorRevenueByOwnerAsync(epoch, ct));
+        if (result == null) return NotFound("No computor revenue data available for this epoch");
+        return Ok(result);
+    }
+
+    /// <summary>By-owner roll-up for the current epoch.</summary>
+    [HttpGet("computor-revenue/by-owner")]
+    public async Task<IActionResult> GetComputorRevenueByOwnerCurrent(CancellationToken ct = default)
+    {
+        var epoch = await _queryService.GetCurrentEpochAsync(ct);
+        if (epoch == null) return NotFound("No epoch data available");
+        return await GetComputorRevenueByOwner(epoch.Value, ct);
+    }
+
+    /// <summary>
+    /// Owners overview for an epoch — alias for the by-owner endpoint. Returns
+    /// the same shape; provided so the URL path matches the "owned computors
+    /// per epoch and per owner" semantics.
+    /// </summary>
+    [HttpGet("owners/{epoch:int}")]
+    public Task<IActionResult> GetOwnersOverview(uint epoch, CancellationToken ct = default)
+        => GetComputorRevenueByOwner(epoch, ct);
+
+    /// <summary>Drill into one owner's computors for the epoch.</summary>
+    [HttpGet("owners/{epoch:int}/{owner}")]
+    public async Task<IActionResult> GetOwnerDetail(uint epoch, string owner, CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            $"stats:owners:{epoch}:{owner}",
+            AnalyticsCacheService.ComputorRevenueTtl,
+            () => _queryService.GetOwnerDetailAsync(epoch, owner, ct));
+        if (result == null) return NotFound($"Owner '{owner}' not found for epoch {epoch}");
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Simulate computor revenue with custom tick cutoffs per score category.
     /// Recalculates revenue on-the-fly using data up to the specified tick for each category.
     /// </summary>

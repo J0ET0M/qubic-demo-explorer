@@ -46,6 +46,18 @@ public class OracleEventService : IDisposable
     /// </summary>
     public async Task<(int Events, bool HasMore)> ProcessAsync(uint currentEpoch, CancellationToken ct)
     {
+        // The parser maps each tx's sender to a computor index; without the computor list
+        // for this epoch it would skip every row AND advance the tick watermark past them,
+        // permanently losing those events. Bob is flaky and the list is imported separately,
+        // so guard: if it isn't present yet, do nothing (and DON'T advance) — retry next cycle.
+        if (!await ComputorsPresentAsync(currentEpoch, ct))
+        {
+            _logger.LogDebug(
+                "Oracle events: computor list not yet imported for epoch {Epoch}; skipping with no watermark advance",
+                currentEpoch);
+            return (0, false);
+        }
+
         var lastProcessed = await GetStateAsync(ct);
         if (lastProcessed == null)
         {
@@ -226,6 +238,15 @@ public class OracleEventService : IDisposable
         var result = await cmd.ExecuteScalarAsync(ct);
         if (result == null || result == DBNull.Value) return null;
         return Convert.ToUInt64(result);
+    }
+
+    /// <summary>True once the computor list for the epoch has been imported into ClickHouse.</summary>
+    private async Task<bool> ComputorsPresentAsync(uint epoch, CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"SELECT count() FROM computors WHERE epoch = {epoch}";
+        var r = await cmd.ExecuteScalarAsync(ct);
+        return r != null && r != DBNull.Value && Convert.ToInt64(r) > 0;
     }
 
     private async Task<ulong?> GetStateAsync(CancellationToken ct)

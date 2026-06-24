@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Users, PieChart, Building2, Pickaxe, Flame, Cpu, TrendingUp, Network, Crown, Coins, Landmark, Monitor, Receipt, Database } from 'lucide-vue-next'
+import { BarChart3, Users, UserCog, PieChart, Building2, Pickaxe, Flame, Cpu, TrendingUp, Network, Crown, Coins, Landmark, Monitor, Receipt, Database } from 'lucide-vue-next'
 import OverviewTab from '~/components/analytics/OverviewTab.vue'
 
 useHead({ title: 'Analytics - QLI Analytics' })
@@ -17,6 +17,7 @@ const subPages = [
   { label: 'Flow Visualization', description: 'Sankey diagrams of miner emission flow paths', path: '/analytics/miner-flow', icon: Network },
   { label: 'CCF', description: 'Proposals, voting, transfers, and subscription tracking', path: '/analytics/ccf', icon: Landmark },
   { label: 'Computor Revenue', description: 'Per-computor TX, vote, and mining scores with revenue breakdown', path: '/analytics/computors', icon: Monitor },
+  { label: 'Owners', description: 'Computor operators ranked by total revenue and DOGE participation', path: '/analytics/owners', icon: UserCog },
   { label: 'Execution Fees', description: 'Per-contract execution fees voted by computors per phase', path: '/analytics/execution-fees', icon: Receipt },
   { label: 'Oracle Revenue', description: 'Per-computor oracle commit/reveal performance and quorum race', path: '/analytics/oracle-revenue', icon: Database },
 ]

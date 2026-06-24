@@ -39,6 +39,10 @@ public class AnalyticsCacheService
     // Cache durations - address summary
     public static readonly TimeSpan AddressSummaryTtl = TimeSpan.FromMinutes(5);
 
+    // Address graph is expensive (scans logs by source/dest, ~40 GiB per call)
+    // and changes slowly. Cache aggressively.
+    public static readonly TimeSpan AddressGraphTtl = TimeSpan.FromMinutes(30);
+
     // Cache durations - assets
     public static readonly TimeSpan AssetListTtl = TimeSpan.FromMinutes(10);
     public static readonly TimeSpan AssetDetailTtl = TimeSpan.FromMinutes(5);

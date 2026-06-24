@@ -22,8 +22,20 @@ public class AnalyticsOptions
     public bool EnableRewardDistributions { get; set; } = true;
     public bool EnableExecutionFees { get; set; } = true;
     public bool EnableOracleEvents { get; set; } = true;
+    /// <summary>
+    /// Run the per-commit K12 knowledge-proof verification step. The first two
+    /// oracle steps (event ingestion + aggregation) still run when this is off.
+    /// Turn off to remove the K12 CPU cost when forgery analytics aren't needed.
+    /// </summary>
+    public bool EnableOracleKpVerification { get; set; } = true;
     public bool EnableCustomFlowJobs { get; set; } = true;
     public bool EnableContractReserveSnapshots { get; set; } = true;
+    /// <summary>
+    /// Fetch per-computor ownership labels (e.g. "minerlab", "EPNH") from the
+    /// fattydoge revenue tracker and persist them into computor_ownership.
+    /// Powers the /by-owner and /owners/{epoch} endpoints.
+    /// </summary>
+    public bool EnableComputorOwnership { get; set; } = true;
 
     /// <summary>Interval (minutes) between contract reserve snapshots.</summary>
     public int ContractReserveSnapshotIntervalMinutes { get; set; } = 10;

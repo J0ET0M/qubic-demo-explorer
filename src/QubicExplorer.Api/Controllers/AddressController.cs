@@ -213,7 +213,7 @@ public class AddressController : ControllerBase
 
         var result = await _cache.GetOrSetAsync(
             $"address:graph:{address}:{hops}:{limit}",
-            AnalyticsCacheService.AddressSummaryTtl,
+            AnalyticsCacheService.AddressGraphTtl,
             () => _queryService.GetAddressGraphAsync(address, hops, limit, ct));
         return Ok(result);
     }

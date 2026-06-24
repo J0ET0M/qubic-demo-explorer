@@ -99,7 +99,26 @@ public class AnalyticsSnapshotService : BackgroundService
                         return PersistCcfTransfersAsync(queryService, bobProxy, currentEpoch.Value, stoppingToken);
                     });
 
-                    await RunStepAsync("Computor revenue", _options.EnableComputorRevenue,
+                    // The computor list is the prerequisite for revenue + execution-fee mapping.
+                    // Ensure it's present (persisted in ClickHouse; fetched resiliently from Bob
+                    // once) BEFORE running steps that need it — running them without the list just
+                    // produces empty output and log spam. Bob is flaky and out of our control, so
+                    // we gate rather than assume availability.
+                    bool computorsReady = false;
+                    if (_options.EnableComputorRevenue || _options.EnableExecutionFees)
+                    {
+                        await RunStepAsync("Computor import", true, async () =>
+                        {
+                            var flowService = scope.ServiceProvider.GetRequiredService<ComputorFlowService>();
+                            computorsReady = await flowService.EnsureComputorsImportedAsync(currentEpoch.Value, stoppingToken);
+                            if (!computorsReady)
+                                _logger.LogWarning(
+                                    "Computor list unavailable for epoch {Epoch}; skipping computor-dependent steps this pass",
+                                    currentEpoch.Value);
+                        });
+                    }
+
+                    await RunStepAsync("Computor revenue", _options.EnableComputorRevenue && computorsReady,
                         () => ComputeComputorRevenueAsync(scope, currentEpoch.Value, stoppingToken));
 
                     await RunStepAsync("Tick votes", _options.EnableTickVotes,
@@ -108,11 +127,24 @@ public class AnalyticsSnapshotService : BackgroundService
                     await RunStepAsync("Reward distributions", _options.EnableRewardDistributions,
                         () => PersistRewardDistributionsAsync(scope, currentEpoch.Value, stoppingToken));
 
-                    await RunStepAsync("Execution fee reports", _options.EnableExecutionFees,
+                    await RunStepAsync("Execution fee reports", _options.EnableExecutionFees && computorsReady,
                         () => PersistExecutionFeeReportsAsync(scope, currentEpoch.Value, stoppingToken));
 
-                    await RunStepAsync("Oracle events + aggregates", _options.EnableOracleEvents,
-                        () => PersistOracleEventsAsync(scope, currentEpoch.Value, stoppingToken));
+                    // Oracle events/aggregates/KP verification run in the dedicated
+                    // OracleProcessingService (decoupled so their backlog can't stall this pass).
+
+                    await RunStepAsync("Computor ownership", _options.EnableComputorOwnership, async () =>
+                    {
+                        var ownership = scope.ServiceProvider.GetRequiredService<ComputorOwnershipService>();
+                        await ownership.RefreshAsync(currentEpoch.Value, stoppingToken);
+
+                        // Snapshot the by-owner aggregations once both revenue and
+                        // ownership are present. Refresh a few recent epochs so an
+                        // epoch that gained ownership data after its initial close
+                        // still picks up a snapshot. Cheap — only 4 epochs × ~14 owners.
+                        var summary = scope.ServiceProvider.GetRequiredService<ComputorOwnerSummaryService>();
+                        await summary.RefreshRecentAsync(currentEpoch.Value, lookback: 4, stoppingToken);
+                    });
 
                     await RunStepAsync("Custom flow jobs", _options.EnableCustomFlowJobs, () =>
                     {
@@ -770,65 +802,6 @@ public class AnalyticsSnapshotService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error persisting execution fee reports");
-        }
-    }
-
-    private async Task PersistOracleEventsAsync(IServiceScope scope, uint currentEpoch, CancellationToken ct)
-    {
-        try
-        {
-            var eventService = scope.ServiceProvider.GetRequiredService<OracleEventService>();
-            var aggregateService = scope.ServiceProvider.GetRequiredService<OracleAggregateService>();
-            var kpVerificationService = scope.ServiceProvider.GetRequiredService<OracleKpVerificationService>();
-
-            // 1. Drain raw events
-            var totalEvents = 0;
-            var passes = 0;
-            while (!ct.IsCancellationRequested)
-            {
-                var (events, hasMore) = await eventService.ProcessAsync(currentEpoch, ct);
-                totalEvents += events;
-                passes++;
-                if (!hasMore) break;
-                await Task.Delay(500, ct);
-            }
-            if (totalEvents > 0)
-                _logger.LogInformation(
-                    "Oracle events: persisted {Events} events across {Passes} pass(es)",
-                    totalEvents, passes);
-
-            // 2. Build aggregates for any completed epoch we haven't aggregated yet
-            var epochsAggregated = 0;
-            while (!ct.IsCancellationRequested && await aggregateService.ProcessNextEpochAsync(currentEpoch, ct))
-            {
-                epochsAggregated++;
-                await Task.Delay(100, ct);
-            }
-            if (epochsAggregated > 0)
-                _logger.LogInformation("Oracle aggregates: built {Count} epoch(s)", epochsAggregated);
-
-            // 3. KP-verify any newly-revealed queries. Cheating commits (right
-            // digest, wrong knowledge proof) get persisted to oracle_kp_forgeries.
-            var totalKpVerified = 0;
-            var totalForgeries = 0;
-            var kpPasses = 0;
-            while (!ct.IsCancellationRequested)
-            {
-                var (verified, forgeries, hasMore) = await kpVerificationService.ProcessAsync(currentEpoch, ct);
-                totalKpVerified += verified;
-                totalForgeries += forgeries;
-                kpPasses++;
-                if (!hasMore) break;
-                await Task.Delay(200, ct);
-            }
-            if (totalKpVerified > 0)
-                _logger.LogInformation(
-                    "Oracle KP: verified {V} queries across {P} pass(es), found {F} forgery attempt(s)",
-                    totalKpVerified, kpPasses, totalForgeries);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error persisting oracle events / aggregates");
         }
     }
 }

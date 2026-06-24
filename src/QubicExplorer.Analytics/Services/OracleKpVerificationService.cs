@@ -50,11 +50,37 @@ public class OracleKpVerificationService : IDisposable
     /// Verify up to <see cref="MaxQueriesPerPass"/> not-yet-verified queries.
     /// Returns (verifiedCount, forgeriesFound, hasMore).
     /// </summary>
+    /// <remarks>
+    /// Uses a high-water mark from the verifications table itself (highest
+    /// (epoch, query_id) already verified) and scans events strictly above it.
+    /// Avoids the previous NOT IN subquery which forced a full-table scan of
+    /// oracle_kp_verifications FINAL on every pass — ~376 GiB read per call
+    /// once we'd verified a few epochs.
+    /// </remarks>
     public async Task<(int Verified, int Forgeries, bool HasMore)> ProcessAsync(uint upToEpoch, CancellationToken ct)
     {
-        // Find queries that have a reveal but haven't been KP-verified yet.
-        // The reveal event also gives us the reveal tx hash so we can fetch
-        // its input_data directly.
+        // 1. Look up the high-water mark — the highest (epoch, query_id) that's
+        //    already in oracle_kp_verifications. ORDER BY on the table is
+        //    (epoch, query_id), so this is a metadata-only lookup.
+        uint wmEpoch = 0;
+        ulong wmQueryId = 0;
+        await using (var hwmCmd = _connection.CreateCommand())
+        {
+            hwmCmd.CommandText = @"
+                SELECT epoch, query_id
+                FROM oracle_kp_verifications FINAL
+                ORDER BY epoch DESC, query_id DESC
+                LIMIT 1";
+            await using var hwmReader = await hwmCmd.ExecuteReaderAsync(ct);
+            if (await hwmReader.ReadAsync(ct))
+            {
+                wmEpoch    = hwmReader.GetFieldValue<uint>(0);
+                wmQueryId  = hwmReader.GetFieldValue<ulong>(1);
+            }
+        }
+
+        // 2. Fetch events strictly above the watermark. The OR form (instead of
+        //    tuple comparison) lets ClickHouse partition-prune on epoch.
         var pairs = new List<(uint Epoch, ulong QueryId, string TxHash)>();
         await using (var cmd = _connection.CreateCommand())
         {
@@ -63,13 +89,14 @@ public class OracleKpVerificationService : IDisposable
                 FROM oracle_query_events
                 WHERE event_type = {RevealEventType}
                   AND epoch <= {{upToEpoch:UInt32}}
-                  AND (epoch, query_id) NOT IN (
-                      SELECT epoch, query_id FROM oracle_kp_verifications FINAL
-                  )
+                  AND (epoch > {{wmEpoch:UInt32}}
+                       OR (epoch = {{wmEpoch:UInt32}} AND query_id > {{wmQueryId:UInt64}}))
                 GROUP BY epoch, query_id
                 ORDER BY epoch ASC, query_id ASC
                 LIMIT {MaxQueriesPerPass}";
             AddParam(cmd, "upToEpoch", upToEpoch);
+            AddParam(cmd, "wmEpoch", wmEpoch);
+            AddParam(cmd, "wmQueryId", wmQueryId);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))

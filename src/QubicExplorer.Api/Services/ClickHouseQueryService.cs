@@ -161,8 +161,10 @@ public class ClickHouseQueryService : IDisposable
                 t.tick_number,
                 t.epoch,
                 t.timestamp,
-                if(t.tx_count > 0, t.tx_count, (SELECT toUInt32(count()) FROM transactions WHERE tick_number = {{tick:UInt64}})) as tx_count,
-                if(t.log_count > 0, t.log_count, (SELECT toUInt32(count()) FROM logs WHERE tick_number = {{tick:UInt64}})) as log_count,
+                -- Fallback subqueries are scoped to t.epoch so they partition-prune
+                -- to a single partition instead of scanning all of transactions/logs.
+                if(t.tx_count > 0,  t.tx_count,  (SELECT toUInt32(count()) FROM transactions WHERE epoch = t.epoch AND tick_number = {{tick:UInt64}})) as tx_count,
+                if(t.log_count > 0, t.log_count, (SELECT toUInt32(count()) FROM logs         WHERE epoch = t.epoch AND tick_number = {{tick:UInt64}})) as log_count,
                 t.is_empty
             FROM ticks t
             WHERE t.tick_number = {{tick:UInt64}}";
@@ -5667,7 +5669,8 @@ public class ClickHouseQueryService : IDisposable
         cmd.CommandText = @"
             SELECT epoch, computor_count, issuance_rate,
                    tx_quorum_score, vote_quorum_score, oracle_quorum_score, mining_quorum_score,
-                   active_formula, total_computor_revenue, arb_revenue, computors
+                   active_formula, total_computor_revenue, arb_revenue, computors,
+                   data_tick, created_at
             FROM computor_revenue FINAL
             WHERE epoch = {epoch:UInt32}";
         AddParam(cmd, "epoch", epoch);
@@ -5676,23 +5679,337 @@ public class ClickHouseQueryService : IDisposable
         if (!await reader.ReadAsync(ct))
             return null;
 
-        var computorsJson = reader.GetString(10);
+        // Read all scalar columns + JSON BEFORE the reader is closed; the
+        // ownership enrichment opens a second reader on the same connection
+        // so the first one must be released first.
+        var dtoEpoch       = reader.GetFieldValue<uint>(0);
+        var dtoCount       = reader.GetFieldValue<ushort>(1);
+        var dtoIssuance    = reader.GetFieldValue<long>(2);
+        var dtoTxQuorum    = ToUInt64(reader.GetValue(3));
+        var dtoVoteQuorum  = ToUInt64(reader.GetValue(4));
+        var dtoOracleQuorum= ToUInt64(reader.GetValue(5));
+        var dtoMiningQuorum= ToUInt64(reader.GetValue(6));
+        var dtoActiveFormula = Convert.ToInt32(reader.GetValue(7));
+        var dtoTotalRevenue= reader.GetFieldValue<long>(8);
+        var dtoArbRevenue  = reader.GetFieldValue<long>(9);
+        var computorsJson  = reader.GetString(10);
+        var dtoDataTick    = ToUInt64(reader.GetValue(11));
+        var dtoComputedAt  = reader.GetFieldValue<DateTime>(12);
+        await reader.CloseAsync();
+
         var computors = JsonSerializer.Deserialize<ComputorRevenueEntryDto[]>(computorsJson,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
 
+        // Enrich with owner label from computor_ownership (fattydoge snapshot).
+        var ownerMap = await GetOwnershipMapAsync(epoch, ct);
+        if (ownerMap.Count > 0)
+        {
+            for (int i = 0; i < computors.Length; i++)
+            {
+                if (ownerMap.TryGetValue(computors[i].Address, out var owner))
+                    computors[i] = computors[i] with { Owner = owner };
+            }
+        }
+
         return new ComputorRevenueDto(
-            Epoch: reader.GetFieldValue<uint>(0),
-            ComputorCount: reader.GetFieldValue<ushort>(1),
-            IssuanceRate: reader.GetFieldValue<long>(2),
-            TxQuorumScore: ToUInt64(reader.GetValue(3)),
-            VoteQuorumScore: ToUInt64(reader.GetValue(4)),
-            OracleQuorumScore: ToUInt64(reader.GetValue(5)),
-            MiningQuorumScore: ToUInt64(reader.GetValue(6)),
-            ActiveFormula: Convert.ToInt32(reader.GetValue(7)),
-            TotalComputorRevenue: reader.GetFieldValue<long>(8),
-            ArbRevenue: reader.GetFieldValue<long>(9),
-            Computors: computors
+            Epoch: dtoEpoch,
+            ComputorCount: dtoCount,
+            IssuanceRate: dtoIssuance,
+            TxQuorumScore: dtoTxQuorum,
+            VoteQuorumScore: dtoVoteQuorum,
+            OracleQuorumScore: dtoOracleQuorum,
+            MiningQuorumScore: dtoMiningQuorum,
+            ActiveFormula: dtoActiveFormula,
+            TotalComputorRevenue: dtoTotalRevenue,
+            ArbRevenue: dtoArbRevenue,
+            Computors: computors,
+            DataTick: dtoDataTick,
+            ComputedAt: dtoComputedAt
         );
+    }
+
+    /// <summary>
+    /// Returns identity → owner for a given epoch, latest fetched_at wins.
+    /// Empty dictionary if the ownership table has no data for the epoch
+    /// (e.g. snapshot hasn't run yet).
+    /// </summary>
+    private async Task<Dictionary<string, string>> GetOwnershipMapAsync(uint epoch, CancellationToken ct)
+    {
+        var map = new Dictionary<string, string>(676, StringComparer.Ordinal);
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT identity, owner
+            FROM computor_ownership FINAL
+            WHERE epoch = {epoch:UInt32}";
+        AddParam(cmd, "epoch", epoch);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            map[reader.GetString(0)] = reader.GetString(1);
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Per-owner aggregation of revenue + DOGE participation for one epoch.
+    /// Buckets all 676 computors by their owner label (from fattydoge snapshot
+    /// in <c>computor_ownership</c>). Computors without an ownership row are
+    /// counted only in the headline totals, not as a synthetic "unknown" owner.
+    /// </summary>
+    /// <summary>
+    /// Epochs for which a persisted owner summary exists. Used by the
+    /// frontend selector so users can't pick an epoch with no data.
+    /// </summary>
+    public async Task<List<uint>> GetOwnerSummaryEpochsAsync(CancellationToken ct = default)
+    {
+        var epochs = new List<uint>();
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT DISTINCT epoch
+            FROM computor_owner_summary
+            ORDER BY epoch DESC
+            LIMIT 200";
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            epochs.Add(reader.GetFieldValue<uint>(0));
+        }
+        return epochs;
+    }
+
+    private const string UnknownOwnerLabel = "Unknown";
+
+    public async Task<ComputorRevenueByOwnerDto?> GetComputorRevenueByOwnerAsync(uint epoch, CancellationToken ct = default)
+    {
+        // Prefer the persisted snapshot — single partition read, no in-memory
+        // grouping, includes epoch-level totals denormalized onto every row.
+        var snapshot = await ReadOwnerSummarySnapshotAsync(epoch, ct);
+        if (snapshot != null) return snapshot;
+
+        var full = await GetComputorRevenueAsync(epoch, ct);
+        if (full == null) return null;
+
+        // Qubic solutions per address (input_type=2 to_address count).
+        var qubicSolutionsByAddress = await LoadQubicSolutionsByAddressAsync(epoch, ct);
+
+        // Network totals — denominators for the participation percentages.
+        ulong totalDogePoints = 0;
+        ulong totalQubicSolutions = 0;
+        foreach (var c in full.Computors)
+        {
+            totalDogePoints += c.MiningScore;
+            if (qubicSolutionsByAddress.TryGetValue(c.Address, out var s))
+                totalQubicSolutions += s;
+        }
+
+        var withOwner = 0;
+        var groups = new Dictionary<string, List<ComputorRevenueEntryDto>>(StringComparer.Ordinal);
+        foreach (var c in full.Computors)
+        {
+            var owner = !string.IsNullOrEmpty(c.Owner) ? c.Owner : UnknownOwnerLabel;
+            if (owner != UnknownOwnerLabel) withOwner++;
+            if (!groups.TryGetValue(owner, out var list))
+            {
+                list = new List<ComputorRevenueEntryDto>();
+                groups[owner] = list;
+            }
+            list.Add(c);
+        }
+
+        var entries = new List<ComputorOwnerEntryDto>(groups.Count);
+        long totalAttributed = 0;
+        foreach (var (owner, list) in groups)
+        {
+            var totalRev = list.Sum(c => c.Revenue);
+            totalAttributed += totalRev;
+
+            ulong ownerDoge = 0;
+            ulong ownerQubic = 0;
+            foreach (var c in list)
+            {
+                ownerDoge += c.MiningScore;
+                if (qubicSolutionsByAddress.TryGetValue(c.Address, out var s))
+                    ownerQubic += s;
+            }
+            var dogePct = totalDogePoints > 0 ? 100.0 * ownerDoge / totalDogePoints : 0.0;
+            var qubicPct = totalQubicSolutions > 0 ? 100.0 * ownerQubic / totalQubicSolutions : 0.0;
+
+            entries.Add(new ComputorOwnerEntryDto(
+                Owner: owner,
+                ComputorCount: list.Count,
+                TotalRevenue: totalRev,
+                AvgRevenue: list.Count > 0 ? (double)totalRev / list.Count : 0d,
+                MaxRevenue: list.Max(c => c.Revenue),
+                MinRevenue: list.Min(c => c.Revenue),
+                AvgMiningFactor: list.Average(c => (double)c.MiningFactor),
+                AvgDogeRootScaled: list.Average(c => (double)c.MultiDimDogeRootScaled),
+                ComputorsWithDogeMining: list.Count(c => c.MiningFactor > 0),
+                DogePoints: ownerDoge,
+                DogeParticipationPercent: dogePct,
+                QubicSolutions: ownerQubic,
+                QubicSolutionsPercent: qubicPct,
+                ComputorIndices: list.Select(c => c.ComputorIndex).OrderBy(i => i).ToArray()));
+        }
+
+        return new ComputorRevenueByOwnerDto(
+            Epoch: full.Epoch,
+            OwnerCount: entries.Count,
+            ComputorsWithOwner: withOwner,
+            ComputorsWithoutOwner: full.Computors.Length - withOwner,
+            TotalAttributedRevenue: totalAttributed,
+            TotalDogePoints: totalDogePoints,
+            TotalQubicSolutions: totalQubicSolutions,
+            Owners: (totalDogePoints > 0
+                        ? entries.OrderByDescending(e => e.DogePoints).ThenByDescending(e => e.QubicSolutions).ThenByDescending(e => e.TotalRevenue)
+                        : entries.OrderByDescending(e => e.QubicSolutions).ThenByDescending(e => e.TotalRevenue))
+                    .ToArray());
+    }
+
+    /// <summary>
+    /// Per-computor solution-transaction count for the epoch.
+    ///
+    /// Qubic solution txs are signed by the computor (their public key signs
+    /// the tx → <c>from_address</c>) and sent to the burn/zero address. Other
+    /// <c>input_type=2</c> traffic — e.g. into smart contracts — isn't a
+    /// solution, so we restrict to <c>to_address = BURN</c>.
+    /// </summary>
+    private async Task<Dictionary<string, ulong>> LoadQubicSolutionsByAddressAsync(uint epoch, CancellationToken ct)
+    {
+        var map = new Dictionary<string, ulong>(676, StringComparer.Ordinal);
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT from_address, count() AS cnt
+            FROM transactions
+            WHERE epoch = {epoch:UInt32}
+              AND input_type = 2
+              AND to_address = {burn:String}
+            GROUP BY from_address";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "burn", AddressLabelService.BurnAddress);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            map[reader.GetString(0)] = Convert.ToUInt64(reader.GetValue(1));
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Read a per-epoch owner summary from <c>computor_owner_summary</c>.
+    /// Returns null if the epoch hasn't been snapshotted yet — caller should
+    /// fall back to the on-the-fly computation path.
+    /// </summary>
+    private async Task<ComputorRevenueByOwnerDto?> ReadOwnerSummarySnapshotAsync(uint epoch, CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT owner, computor_count, total_revenue, avg_revenue,
+                   max_revenue, min_revenue, avg_mining_factor, avg_doge_root_scaled,
+                   computors_with_doge_mining, doge_points, doge_participation_percent,
+                   qubic_solutions, qubic_solutions_percent,
+                   computor_indices,
+                   total_doge_points, total_qubic_solutions,
+                   computors_with_owner, computors_without_owner,
+                   total_attributed_revenue
+            FROM computor_owner_summary FINAL
+            WHERE epoch = {epoch:UInt32}
+            ORDER BY doge_points DESC, qubic_solutions DESC, total_revenue DESC";
+        AddParam(cmd, "epoch", epoch);
+
+        var owners = new List<ComputorOwnerEntryDto>();
+        ulong totalDogePoints = 0;
+        ulong totalQubicSolutions = 0;
+        int withOwner = 0, withoutOwner = 0;
+        long totalAttributed = 0;
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            // Indices are read as a ushort array; ClickHouse client returns it as an array.
+            var raw = reader.GetValue(13);
+            var indices = raw switch
+            {
+                ushort[] arr => arr,
+                IEnumerable<object> objs => objs.Select(o => Convert.ToUInt16(o)).ToArray(),
+                _ => Array.Empty<ushort>()
+            };
+
+            owners.Add(new ComputorOwnerEntryDto(
+                Owner: reader.GetString(0),
+                ComputorCount: (int)reader.GetFieldValue<uint>(1),
+                TotalRevenue: reader.GetFieldValue<long>(2),
+                AvgRevenue: reader.GetFieldValue<double>(3),
+                MaxRevenue: reader.GetFieldValue<long>(4),
+                MinRevenue: reader.GetFieldValue<long>(5),
+                AvgMiningFactor: reader.GetFieldValue<double>(6),
+                AvgDogeRootScaled: reader.GetFieldValue<double>(7),
+                ComputorsWithDogeMining: (int)reader.GetFieldValue<uint>(8),
+                DogePoints: reader.GetFieldValue<ulong>(9),
+                DogeParticipationPercent: reader.GetFieldValue<double>(10),
+                QubicSolutions: reader.GetFieldValue<ulong>(11),
+                QubicSolutionsPercent: reader.GetFieldValue<double>(12),
+                ComputorIndices: indices));
+
+            // Denormalized epoch-level totals — same across every row, just grab once.
+            totalDogePoints = reader.GetFieldValue<ulong>(14);
+            totalQubicSolutions = reader.GetFieldValue<ulong>(15);
+            withOwner = (int)reader.GetFieldValue<uint>(16);
+            withoutOwner = (int)reader.GetFieldValue<uint>(17);
+            totalAttributed = reader.GetFieldValue<long>(18);
+        }
+
+        if (owners.Count == 0) return null;
+
+        return new ComputorRevenueByOwnerDto(
+            Epoch: epoch,
+            OwnerCount: owners.Count,
+            ComputorsWithOwner: withOwner,
+            ComputorsWithoutOwner: withoutOwner,
+            TotalAttributedRevenue: totalAttributed,
+            TotalDogePoints: totalDogePoints,
+            TotalQubicSolutions: totalQubicSolutions,
+            Owners: owners.ToArray());
+    }
+
+    /// <summary>
+    /// Drill into one owner: all their computors for the epoch, with revenue
+    /// and DOGE-mining indicators. Returns null if the owner has no entries.
+    /// </summary>
+    public async Task<OwnerDetailDto?> GetOwnerDetailAsync(uint epoch, string owner, CancellationToken ct = default)
+    {
+        var full = await GetComputorRevenueAsync(epoch, ct);
+        if (full == null) return null;
+
+        var qubicSolutionsByAddress = await LoadQubicSolutionsByAddressAsync(epoch, ct);
+
+        // "Unknown" matches every computor whose Owner is null/empty.
+        var isUnknown = string.Equals(owner, UnknownOwnerLabel, StringComparison.Ordinal);
+        var matching = full.Computors
+            .Where(c => isUnknown
+                ? string.IsNullOrEmpty(c.Owner)
+                : string.Equals(c.Owner, owner, StringComparison.Ordinal))
+            .Select(c => new OwnerComputorDto(
+                ComputorIndex: c.ComputorIndex,
+                Address: c.Address,
+                Revenue: c.Revenue,
+                MiningFactor: c.MiningFactor,
+                MultiDimDogeRootScaled: c.MultiDimDogeRootScaled,
+                DogePoints: c.MiningScore,
+                QubicSolutions: qubicSolutionsByAddress.TryGetValue(c.Address, out var s) ? s : 0UL))
+            .OrderBy(c => c.ComputorIndex)
+            .ToArray();
+
+        if (matching.Length == 0) return null;
+
+        var total = matching.Sum(c => c.Revenue);
+        return new OwnerDetailDto(
+            Epoch: full.Epoch,
+            Owner: owner,
+            ComputorCount: matching.Length,
+            TotalRevenue: total,
+            AvgRevenue: (double)total / matching.Length,
+            Computors: matching);
     }
 
     public async Task<List<ulong>> GetEmptyTickListAsync(uint epoch, CancellationToken ct = default)

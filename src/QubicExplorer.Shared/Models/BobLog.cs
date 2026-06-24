@@ -4,6 +4,39 @@ using System.Text.Json.Serialization;
 namespace QubicExplorer.Shared.Models;
 
 /// <summary>
+/// Converter for scalar fields (e.g. <c>timestamp</c>) that Bob may emit as
+/// either a JSON string or a JSON number. We persist them as strings, so the
+/// converter coerces numbers to their lexical string form.
+/// </summary>
+public class StringOrNumberToStringConverter : JsonConverter<string?>
+{
+    public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        return reader.TokenType switch
+        {
+            JsonTokenType.Null => null,
+            JsonTokenType.String => reader.GetString(),
+            // GetRawValueAsString isn't a thing — instead reconstruct from the
+            // sequence the reader saw. For numbers, GetInt64 / GetDouble would
+            // lose information; the cheapest correct path is GetDecimal().ToString
+            // for ints, and a Try chain for doubles.
+            JsonTokenType.Number =>
+                reader.TryGetInt64(out var i)        ? i.ToString(System.Globalization.CultureInfo.InvariantCulture) :
+                reader.TryGetDecimal(out var d)      ? d.ToString(System.Globalization.CultureInfo.InvariantCulture) :
+                reader.TryGetDouble(out var dbl)     ? dbl.ToString(System.Globalization.CultureInfo.InvariantCulture) :
+                null,
+            _ => null
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, string? value, JsonSerializerOptions options)
+    {
+        if (value is null) writer.WriteNullValue();
+        else writer.WriteStringValue(value);
+    }
+}
+
+/// <summary>
 /// Converter to handle amounts that may come as strings, numbers, or null from Bob API
 /// </summary>
 public class StringOrNumberToUInt64Converter : JsonConverter<ulong>
@@ -97,6 +130,7 @@ public class BobLog
     public int BodySize { get; set; }
 
     [JsonPropertyName("timestamp")]
+    [JsonConverter(typeof(StringOrNumberToStringConverter))]
     public string? Timestamp { get; set; }
 
     [JsonPropertyName("txHash")]

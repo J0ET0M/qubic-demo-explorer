@@ -874,6 +874,8 @@ public static class ClickHouseSchema
             total_computor_revenue Int64,
             arb_revenue Int64,
             computors String DEFAULT '[]',
+            -- Highest indexed tick the snapshot was computed against ("valid up to").
+            data_tick UInt64 DEFAULT 0,
             created_at DateTime64(3) DEFAULT now64(3)
         ) ENGINE = ReplacingMergeTree(created_at)
         ORDER BY epoch
@@ -882,6 +884,7 @@ public static class ClickHouseSchema
         // but ALTER TABLE ADD COLUMN IF NOT EXISTS is a no-op when already present).
         $"ALTER TABLE {DatabaseName}.computor_revenue ADD COLUMN IF NOT EXISTS oracle_quorum_score UInt64 DEFAULT 0",
         $"ALTER TABLE {DatabaseName}.computor_revenue ADD COLUMN IF NOT EXISTS active_formula UInt8 DEFAULT 1",
+        $"ALTER TABLE {DatabaseName}.computor_revenue ADD COLUMN IF NOT EXISTS data_tick UInt64 DEFAULT 0",
 
         // Contract reserve history. Snapshots the live QU balance of every known
         // smart contract every ~10 minutes (configurable via the analytics service).
@@ -1032,6 +1035,67 @@ public static class ClickHouseSchema
         ) ENGINE = ReplacingMergeTree(verified_at)
         PARTITION BY epoch
         ORDER BY (epoch, query_id)
+        """,
+
+        // Computor owner summary — one row per (epoch, owner). Snapshotted by
+        // ComputorOwnerSummaryService once both the per-computor revenue
+        // and the ownership mapping are present for the epoch. Keeps the
+        // /by-owner endpoint cheap and provides a historical record for
+        // owner-over-time analytics. Epoch-level totals are denormalized
+        // onto every row so a single SELECT serves the whole DTO.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.computor_owner_summary (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            owner String CODEC(LZ4HC),
+            computor_count UInt32 CODEC(LZ4),
+            total_revenue Int64 CODEC(LZ4),
+            avg_revenue Float64 CODEC(LZ4),
+            max_revenue Int64 CODEC(LZ4),
+            min_revenue Int64 CODEC(LZ4),
+            avg_mining_factor Float64 CODEC(LZ4),
+            avg_doge_root_scaled Float64 CODEC(LZ4),
+            computors_with_doge_mining UInt32 CODEC(LZ4),
+            doge_points UInt64 CODEC(LZ4),
+            doge_participation_percent Float64 CODEC(LZ4),
+            -- Qubic mining: number of solution transactions (input_type=2)
+            -- whose to_address matches one of the owner's computors. Tracks
+            -- the legacy puzzle-solution stream separately from DOGE shares.
+            qubic_solutions UInt64 CODEC(LZ4),
+            qubic_solutions_percent Float64 CODEC(LZ4),
+            computor_indices Array(UInt16) CODEC(LZ4),
+            -- Epoch-level totals (same for every row in this partition):
+            total_doge_points UInt64 CODEC(LZ4),
+            total_qubic_solutions UInt64 CODEC(LZ4),
+            computors_with_owner UInt32 CODEC(LZ4),
+            computors_without_owner UInt32 CODEC(LZ4),
+            total_attributed_revenue Int64 CODEC(LZ4),
+            snapshotted_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(snapshotted_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, owner)
+        """,
+
+        // Migration: qubic mining solution count + share were added after the
+        // initial computor_owner_summary release. Must come AFTER the CREATE
+        // TABLE statement above, otherwise the alter runs on a missing table.
+        $"ALTER TABLE {DatabaseName}.computor_owner_summary ADD COLUMN IF NOT EXISTS qubic_solutions UInt64 DEFAULT 0",
+        $"ALTER TABLE {DatabaseName}.computor_owner_summary ADD COLUMN IF NOT EXISTS qubic_solutions_percent Float64 DEFAULT 0",
+        $"ALTER TABLE {DatabaseName}.computor_owner_summary ADD COLUMN IF NOT EXISTS total_qubic_solutions UInt64 DEFAULT 0",
+
+        // Computor ownership — per-epoch mapping of computor identity → owner
+        // label (e.g. "minerlab", "EPNH", "WIMN"). Source: fattydoge revenue
+        // tracker. Polled periodically by ComputorOwnershipService; one row per
+        // (epoch, identity) gets refreshed on each fetch (ReplacingMergeTree
+        // keeps the newest by fetched_at).
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.computor_ownership (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            identity String CODEC(LZ4HC),
+            owner String CODEC(LZ4HC),
+            fetched_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(fetched_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, identity)
         """,
 
         // Oracle KP forgeries — one row per detected forgery. A forgery is a

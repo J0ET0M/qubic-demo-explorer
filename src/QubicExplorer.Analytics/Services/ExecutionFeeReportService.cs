@@ -51,6 +51,17 @@ public class ExecutionFeeReportService : IDisposable
     /// </summary>
     public async Task<(int Ticks, bool HasMore)> ProcessAsync(uint currentEpoch, CancellationToken ct)
     {
+        // Maps each report's computor; without the list this would skip every row AND advance
+        // the tick watermark past them, losing the reports. Guard against running without it
+        // (the snapshot pass also gates this, but stay self-protecting against any caller).
+        if (!await ComputorsPresentAsync(currentEpoch, ct))
+        {
+            _logger.LogDebug(
+                "Fee reports: computor list not yet imported for epoch {Epoch}; skipping with no watermark advance",
+                currentEpoch);
+            return (0, false);
+        }
+
         var lastProcessed = await GetStateAsync(ct) ?? 0UL;
         const int BulkBatchSize = 50_000;
         const int MaxRowsPerPass = 2_000_000; // hard ceiling so one pass can't run forever
@@ -243,6 +254,15 @@ public class ExecutionFeeReportService : IDisposable
             result[address] = index;
         }
         return result;
+    }
+
+    /// <summary>True once the computor list for the epoch has been imported into ClickHouse.</summary>
+    private async Task<bool> ComputorsPresentAsync(uint epoch, CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"SELECT count() FROM computors WHERE epoch = {epoch}";
+        var r = await cmd.ExecuteScalarAsync(ct);
+        return r != null && r != DBNull.Value && Convert.ToInt64(r) > 0;
     }
 
     private async Task<ulong?> GetStateAsync(CancellationToken ct)

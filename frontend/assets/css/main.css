@@ -141,6 +141,9 @@ body {
   font-family: var(--font-family-mono);
   color: var(--color-foreground);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  /* Tell the browser to render native popups (e.g. <select> dropdown) with
+     dark UA colors so option lists match the rest of the dark UI. */
+  color-scheme: dark;
 }
 
 .input::placeholder {

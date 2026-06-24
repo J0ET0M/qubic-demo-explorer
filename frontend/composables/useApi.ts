@@ -376,6 +376,20 @@ export const useApi = () => {
   const getComputorRevenue = (epoch?: number) =>
     fetchApi<ComputorRevenueDto>(epoch ? `/api/stats/computor-revenue/${epoch}` : '/api/stats/computor-revenue')
 
+  // Owner aggregations (computors grouped by operator label from fattydoge)
+  const getComputorRevenueByOwner = (epoch?: number) =>
+    fetchApi<ComputorRevenueByOwnerDto>(
+      epoch ? `/api/stats/computor-revenue/${epoch}/by-owner` : '/api/stats/computor-revenue/by-owner'
+    )
+
+  const getOwnerDetail = (epoch: number, owner: string) =>
+    fetchApi<OwnerDetailDto>(`/api/stats/owners/${epoch}/${encodeURIComponent(owner)}`)
+
+  // Epochs that have a persisted owner summary — drives the epoch selector
+  // on the owners pages so users can't pick epochs with no data.
+  const getOwnerEpochs = () =>
+    fetchApi<number[]>(`/api/stats/owners/epochs`)
+
   // Tick votes
   const getTickVotes = (epoch: number, computorIndex?: number) => {
     const params = computorIndex !== undefined ? `?computorIndex=${computorIndex}` : ''
@@ -520,6 +534,9 @@ export const useApi = () => {
     getQearnStats,
     getCcfStats,
     getComputorRevenue,
+    getComputorRevenueByOwner,
+    getOwnerDetail,
+    getOwnerEpochs,
     getTickVotes,
     getExecutionFeeSummary,
     getExecutionFeeContract,
@@ -1119,6 +1136,56 @@ interface ComputorRevenueDto {
   totalComputorRevenue: number
   arbRevenue: number
   computors: ComputorRevenueEntryDto[]
+  dataTick: number        // highest indexed tick this snapshot was computed against
+  computedAt: string      // ISO timestamp when the snapshot was computed
+}
+
+// Owner aggregations
+export interface ComputorOwnerEntryDto {
+  owner: string
+  computorCount: number
+  totalRevenue: number
+  avgRevenue: number
+  maxRevenue: number
+  minRevenue: number
+  avgMiningFactor: number          // 0..1024
+  avgDogeRootScaled: number        // 0..1024
+  computorsWithDogeMining: number  // count with miningFactor > 0
+  dogePoints: number               // DOGE merged-mining shares
+  dogeParticipationPercent: number // share of total network DOGE points (0..100)
+  qubicSolutions: number           // input_type=2 txs to this owner's computors
+  qubicSolutionsPercent: number    // share of total network qubic solutions
+  computorIndices: number[]
+}
+
+export interface ComputorRevenueByOwnerDto {
+  epoch: number
+  ownerCount: number
+  computorsWithOwner: number
+  computorsWithoutOwner: number
+  totalAttributedRevenue: number
+  totalDogePoints: number
+  totalQubicSolutions: number
+  owners: ComputorOwnerEntryDto[]
+}
+
+export interface OwnerComputorDto {
+  computorIndex: number
+  address: string
+  revenue: number
+  miningFactor: number
+  multiDimDogeRootScaled: number
+  dogePoints: number
+  qubicSolutions: number
+}
+
+export interface OwnerDetailDto {
+  epoch: number
+  owner: string
+  computorCount: number
+  totalRevenue: number
+  avgRevenue: number
+  computors: OwnerComputorDto[]
 }
 
 // Tick votes

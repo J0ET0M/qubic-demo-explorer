@@ -62,21 +62,20 @@ public class ComputorRevenueService : IDisposable
     {
         _logger.LogInformation("Calculating computor revenue for epoch {Epoch}", epoch);
 
-        // Get computor addresses for this epoch
-        var computorsResult = await _bobProxy.GetComputorsAsync(epoch, ct);
-        if (computorsResult?.Computors == null || computorsResult.Computors.Count != QubicConstants.NumberOfComputors)
+        // Get computor addresses for this epoch (ClickHouse-first; see GetComputorAddressesAsync).
+        var addresses = await GetComputorAddressesAsync(epoch, ct);
+        if (addresses == null || addresses.Count != QubicConstants.NumberOfComputors)
         {
             _logger.LogWarning("Could not get computor list for epoch {Epoch}", epoch);
             return null;
         }
 
-        var addresses = computorsResult.Computors;
         var useV2 = epoch >= V2FromEpoch;
 
         // V1 / shared score sources
         var txScoresV1 = await CalculateTxScoresAsync(epoch, ct);
-        var voteScores = await CalculateVoteScoresAsync(epoch, ct);
-        var miningScores = await CalculateMiningScoresAsync(epoch, ct);
+        var voteScores = await CalculateVoteScoresAsync(epoch, addresses, ct);
+        var miningScores = await CalculateMiningScoresAsync(epoch, addresses, ct);
 
         // V1 quorum + factors (kept for divergence monitoring; older epochs use this as "active").
         var txQuorum = GetQuorumScore(txScoresV1);
@@ -165,6 +164,12 @@ public class ComputorRevenueService : IDisposable
             "Revenue computed for epoch {Epoch}: formula={Formula}, totalRev={Total} (V1 sum={V1Sum}, V2 sum={V2Sum}, multiDim sum={MdSum})",
             epoch, activeFormula, totalRevenue, revenuesV1.Sum(), v2.Revenue.Sum(), md?.Revenue.Sum() ?? 0);
 
+        // Highest indexed tick this snapshot reflects = last tick of the per-tick window
+        // (perTickTxCount spans initialTick..maxTick). This is the "valid up to" tick.
+        ulong dataTick = perTickTxCount.Length > 0
+            ? initialTick + (ulong)perTickTxCount.Length - 1
+            : 0;
+
         return new ComputorRevenueDto(
             Epoch: epoch,
             ComputorCount: QubicConstants.NumberOfComputors,
@@ -176,8 +181,41 @@ public class ComputorRevenueService : IDisposable
             ActiveFormula: activeFormula,
             TotalComputorRevenue: totalRevenue,
             ArbRevenue: QubicConstants.IssuanceRate - totalRevenue,
-            Computors: entries
+            Computors: entries,
+            DataTick: dataTick
         );
+    }
+
+    /// <summary>
+    /// Computor addresses (index 0..675) for the epoch, sourced from the ClickHouse
+    /// <c>computors</c> table the indexer imports. Revenue no longer depends on a healthy
+    /// Bob WebSocket for this static, per-epoch list — a slow/unreachable node was timing
+    /// out GetComputors and (via the request abort) dropping the socket, starving the calc.
+    /// Falls back to Bob only if the table has not been imported for this epoch yet.
+    /// </summary>
+    private async Task<List<string>?> GetComputorAddressesAsync(uint epoch, CancellationToken ct)
+    {
+        var addresses = new List<string>(QubicConstants.NumberOfComputors);
+        await using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = $@"
+                SELECT address FROM computors
+                WHERE epoch = {epoch}
+                ORDER BY computor_index";
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                addresses.Add(reader.GetString(0));
+        }
+
+        if (addresses.Count == QubicConstants.NumberOfComputors)
+            return addresses;
+
+        // ClickHouse not yet populated for this epoch — fall back to Bob.
+        _logger.LogWarning(
+            "computors table has {Count} rows for epoch {Epoch} (expected {Expected}); falling back to Bob",
+            addresses.Count, epoch, QubicConstants.NumberOfComputors);
+        var bob = await _bobProxy.GetComputorsAsync(epoch, ct);
+        return bob?.Computors;
     }
 
     /// <summary>
@@ -270,25 +308,78 @@ public class ComputorRevenueService : IDisposable
     }
 
     /// <summary>
-    /// Per-computor oracle revenue points for the epoch (= our estimated_points).
-    /// Reads from the aggregate table if present, otherwise returns zeros (V2 will fall back to "all full").
+    /// Per-computor oracle revenue points for the epoch (= estimated_points).
+    /// For completed epochs this reads the precomputed aggregate (oracle_computor_summary). That
+    /// table is only built at epoch end, so for the IN-PROGRESS epoch it's empty — in which case
+    /// we compute a LIVE running estimate straight from oracle_query_events using the same
+    /// definition the aggregate uses (a computor scores for each query it committed to at/before
+    /// that query's 2/3-quorum cutoff tick, or any commit if the query never reached quorum). This
+    /// gives the oracle factor a real value DURING the epoch instead of the neutral "all-full"
+    /// valve. The estimate converges to the final aggregate as more reveals land.
     /// </summary>
     private async Task<ulong[]> CalculateOracleScoresAsync(uint epoch, CancellationToken ct)
     {
         var scores = new ulong[QubicConstants.NumberOfComputors];
 
-        await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = $@"
-            SELECT computor_index, estimated_points
-            FROM oracle_computor_summary FINAL
-            WHERE epoch = {epoch}";
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        // 1. Precomputed aggregate (present for completed epochs).
+        bool summaryHadRows = false;
+        await using (var cmd = _connection.CreateCommand())
         {
-            int idx = reader.GetFieldValue<ushort>(0);
-            long pts = Convert.ToInt64(reader.GetValue(1));
-            if (idx >= 0 && idx < scores.Length && pts > 0)
-                scores[idx] = (ulong)pts;
+            cmd.CommandText = $@"
+                SELECT computor_index, estimated_points
+                FROM oracle_computor_summary FINAL
+                WHERE epoch = {epoch}";
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                summaryHadRows = true;
+                int idx = reader.GetFieldValue<ushort>(0);
+                long pts = Convert.ToInt64(reader.GetValue(1));
+                if (idx >= 0 && idx < scores.Length && pts > 0)
+                    scores[idx] = (ulong)pts;
+            }
+        }
+
+        if (summaryHadRows)
+            return scores;
+
+        // 2. In-progress epoch (no aggregate yet) → live estimate from raw events.
+        const int Quorum = 451; // 676 * 2/3 + 1, matches OracleAggregateService
+        await using (var liveCmd = _connection.CreateCommand())
+        {
+            liveCmd.CommandText = $@"
+                WITH q AS (
+                    SELECT
+                        query_id,
+                        arraySort(groupArrayIf(tick_number, event_type = 0)) AS commit_ticks,
+                        countIf(event_type = 0) AS total_commits
+                    FROM oracle_query_events
+                    WHERE epoch = {epoch}
+                    GROUP BY query_id
+                ),
+                qc AS (
+                    SELECT
+                        query_id,
+                        if(total_commits >= {Quorum}, arrayElement(commit_ticks, {Quorum}), 0) AS quorum_cutoff_tick
+                    FROM q
+                )
+                SELECT
+                    e.computor_index AS computor_index,
+                    countIf(e.event_type = 0
+                            AND (qc.quorum_cutoff_tick = 0 OR e.tick_number <= qc.quorum_cutoff_tick)
+                    ) AS estimated_points
+                FROM oracle_query_events e
+                LEFT JOIN qc ON qc.query_id = e.query_id
+                WHERE e.epoch = {epoch}
+                GROUP BY e.computor_index";
+            await using var reader = await liveCmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                int idx = reader.GetFieldValue<ushort>(0);
+                long pts = Convert.ToInt64(reader.GetValue(1));
+                if (idx >= 0 && idx < scores.Length && pts > 0)
+                    scores[idx] = (ulong)pts;
+            }
         }
 
         return scores;
@@ -314,12 +405,12 @@ public class ComputorRevenueService : IDisposable
             INSERT INTO computor_revenue
             (epoch, computor_count, issuance_rate, tx_quorum_score, vote_quorum_score,
              oracle_quorum_score, mining_quorum_score, active_formula,
-             total_computor_revenue, arb_revenue, computors)
+             total_computor_revenue, arb_revenue, computors, data_tick)
             VALUES
             ({result.Epoch}, {result.ComputorCount}, {result.IssuanceRate},
              {result.TxQuorumScore}, {result.VoteQuorumScore},
              {result.OracleQuorumScore}, {result.MiningQuorumScore}, {result.ActiveFormula},
-             {result.TotalComputorRevenue}, {result.ArbRevenue}, '{escapedJson}')";
+             {result.TotalComputorRevenue}, {result.ArbRevenue}, '{escapedJson}', {result.DataTick})";
 
         await cmd.ExecuteNonQueryAsync(ct);
         _logger.LogInformation("Persisted computor revenue for epoch {Epoch} (formula V{Formula}, {Active} active computors)",
@@ -354,12 +445,12 @@ public class ComputorRevenueService : IDisposable
         return scores;
     }
 
-    private async Task<ulong[]> CalculateVoteScoresAsync(uint epoch, CancellationToken ct)
+    private async Task<ulong[]> CalculateVoteScoresAsync(uint epoch, IReadOnlyList<string> addresses, CancellationToken ct)
     {
-        return await CalculatePackedScoresAsync(epoch, CoreTransactionInputTypes.VoteCounter, ct);
+        return await CalculatePackedScoresAsync(epoch, CoreTransactionInputTypes.VoteCounter, addresses, ct);
     }
 
-    private async Task<ulong[]> CalculateMiningScoresAsync(uint epoch, CancellationToken ct)
+    private async Task<ulong[]> CalculateMiningScoresAsync(uint epoch, IReadOnlyList<string> addresses, CancellationToken ct)
     {
         // qubic core PR #844 removed XMR (input_type 8) and replaced it with DOGE (input_type 11).
         // V2 epochs read DOGE; older epochs keep reading the legacy XMR counter so historical V1
@@ -367,23 +458,20 @@ public class ComputorRevenueService : IDisposable
         var inputType = epoch >= V2FromEpoch
             ? RevenueV2Calculator.DogeSharesInputType
             : CoreTransactionInputTypes.CustomMiningShareCounter;
-        return await CalculatePackedScoresAsync(epoch, inputType, ct);
+        return await CalculatePackedScoresAsync(epoch, inputType, addresses, ct);
     }
 
     /// <summary>
     /// Generic method to calculate scores from packed 10-bit transaction data.
     /// Used for both vote counter (type 1) and custom mining shares (type 8).
     /// </summary>
-    private async Task<ulong[]> CalculatePackedScoresAsync(uint epoch, ushort inputType, CancellationToken ct)
+    private async Task<ulong[]> CalculatePackedScoresAsync(
+        uint epoch, ushort inputType, IReadOnlyList<string> addresses, CancellationToken ct)
     {
         // Build computor address → index lookup for validation
-        var computorsResult = await _bobProxy.GetComputorsAsync(epoch, ct);
         var computorIndexByAddress = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        if (computorsResult?.Computors != null)
-        {
-            for (int i = 0; i < computorsResult.Computors.Count; i++)
-                computorIndexByAddress[computorsResult.Computors[i]] = i;
-        }
+        for (int i = 0; i < addresses.Count; i++)
+            computorIndexByAddress[addresses[i]] = i;
 
         var isVoteCounter = inputType == CoreTransactionInputTypes.VoteCounter;
         var scores = new ulong[QubicConstants.NumberOfComputors];

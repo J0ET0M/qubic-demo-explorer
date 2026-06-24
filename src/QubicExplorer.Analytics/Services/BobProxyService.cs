@@ -126,28 +126,66 @@ public class BobProxyService
             return cachedResult;
         }
 
-        try
+        // Short-lived negative cache. The (single) Bob node drops/reconnects often, and
+        // several services ask for the computor list every pass. Once a fetch fails, skip
+        // further attempts for a little while instead of hammering a dropping socket and
+        // spamming identical errors. The list is static per epoch, so one good fetch is
+        // enough — callers persist it to ClickHouse and read from there thereafter.
+        var missKey = $"computors-miss:{epoch}";
+        if (_cache.TryGetValue(missKey, out bool _))
         {
-            var response = await _bobClient.GetComputorsAsync(epoch, ct);
-
-            // Sanitize: Bob occasionally returns identities with trailing
-            // garbage bytes (e.g. "AAAA...AAAA�v"). Qubic identities are
-            // always exactly 60 uppercase A–Z chars — anything else gets dropped.
-            var result = new ComputorsResult
-            {
-                Computors = response.Computors
-                    .Select(SanitizeQubicIdentity)
-                    .ToList()
-            };
-
-            _cache.Set(cacheKey, result, TimeSpan.FromHours(1));
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to get computors for epoch {Epoch}", epoch);
             return null;
         }
+
+        const int maxAttempts = 2;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                // Don't fire a request into a disconnected/reconnecting socket (that throws
+                // "WebSocket is not connected", and a mid-flight drop cancels the request).
+                // Wait for a Connected window first; the client reconnects on its own.
+                if (!await _bobClient.WaitForConnectionAsync(TimeSpan.FromSeconds(10), ct))
+                {
+                    _logger.LogWarning(
+                        "Bob not connected (attempt {Attempt}/{Max}); cannot get computors for epoch {Epoch}",
+                        attempt, maxAttempts, epoch);
+                    continue;
+                }
+
+                var response = await _bobClient.GetComputorsAsync(epoch, ct);
+
+                // Sanitize: Bob occasionally returns identities with trailing
+                // garbage bytes (e.g. "AAAA...AAAA�v"). Qubic identities are
+                // always exactly 60 uppercase A–Z chars — anything else gets dropped.
+                var result = new ComputorsResult
+                {
+                    Computors = response.Computors
+                        .Select(SanitizeQubicIdentity)
+                        .ToList()
+                };
+
+                _cache.Set(cacheKey, result, TimeSpan.FromHours(1));
+                return result;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    "Failed to get computors for epoch {Epoch} (attempt {Attempt}/{Max}): {Message}",
+                    epoch, attempt, maxAttempts, ex.Message);
+                if (attempt < maxAttempts)
+                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            }
+        }
+
+        // All attempts failed — back off so we don't retry every caller for a while.
+        _cache.Set(missKey, true, TimeSpan.FromSeconds(30));
+        return null;
     }
 
     public class EpochInfoResult

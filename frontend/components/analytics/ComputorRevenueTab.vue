@@ -65,6 +65,20 @@ const revenuePct = (revenue: number) => {
   return m > 0 ? ((revenue / m) * 100).toFixed(2) : '0.00'
 }
 
+// "Valid up to" status — how long ago the snapshot was computed
+const computedAgo = computed(() => {
+  const t = revenueData.value?.computedAt
+  if (!t) return ''
+  const ms = Date.now() - new Date(t).getTime()
+  if (ms < 0) return 'just now'
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  return `${h}h ${m % 60}m ago`
+})
+
 // Factor as percentage
 const factorPct = (factor: number) => ((factor / 1024) * 100).toFixed(1)
 
@@ -131,10 +145,18 @@ const { truncateAddress } = useFormatting()
   <div class="space-y-6">
     <!-- Overview -->
     <div class="card">
-      <h2 class="section-title mb-4">
-        <Monitor class="h-5 w-5 text-accent" />
-        Revenue Overview
-      </h2>
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+        <h2 class="section-title">
+          <Monitor class="h-5 w-5 text-accent" />
+          Revenue Overview
+        </h2>
+        <div v-if="revenueData && revenueData.dataTick > 0" class="text-xs text-foreground-muted"
+             :title="revenueData.computedAt ? new Date(revenueData.computedAt).toLocaleString() : ''">
+          Calculated up to tick
+          <span class="font-mono text-foreground">{{ formatAmount(revenueData.dataTick) }}</span>
+          <span v-if="computedAgo"> · {{ computedAgo }}</span>
+        </div>
+      </div>
 
       <div v-if="loading" class="loading">Loading...</div>
       <template v-else-if="revenueData">

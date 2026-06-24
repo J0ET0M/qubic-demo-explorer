@@ -89,6 +89,15 @@ builder.Services.AddSingleton<OracleAggregateService>();
 // knowing reply" cheating attempts.
 builder.Services.AddSingleton<OracleKpVerificationService>();
 
+// ComputorOwnershipService - pulls (identity → owner) mapping from
+// fattydoge and persists it per epoch for the owner aggregations.
+builder.Services.AddSingleton<ComputorOwnershipService>();
+
+// ComputorOwnerSummaryService - snapshots per-(epoch, owner) aggregations
+// once revenue + ownership are both present. Source of truth for the
+// /owners endpoints and the epoch selector.
+builder.Services.AddSingleton<ComputorOwnerSummaryService>();
+
 // Analytics feature toggles
 builder.Services.Configure<QubicExplorer.Analytics.Configuration.AnalyticsOptions>(
     builder.Configuration.GetSection(QubicExplorer.Analytics.Configuration.AnalyticsOptions.SectionName));
@@ -96,6 +105,10 @@ builder.Services.Configure<QubicExplorer.Analytics.Configuration.AnalyticsOption
 // Background services
 builder.Services.AddHostedService<AnalyticsSnapshotService>();
 builder.Services.AddHostedService<ContractReserveSnapshotService>();
+// Oracle event/aggregate/KP processing runs on its own loop, decoupled from the
+// analytics snapshot pass so its (potentially large) KP-verification backlog can
+// never starve computor revenue and the other snapshot steps.
+builder.Services.AddHostedService<OracleProcessingService>();
 
 // Add controllers (for admin endpoints)
 builder.Services.AddControllers();
