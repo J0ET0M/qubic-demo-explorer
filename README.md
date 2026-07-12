@@ -76,6 +76,30 @@ The explorer will be available at:
 - **API Docs (Swagger)**: http://localhost:5000/swagger (development only)
 - **ClickHouse**: http://localhost:8123 (development only)
 
+### NuGet package source
+
+By default every build restores packages from **nuget.org only**, so anyone
+cloning the repo can `docker compose build` without extra setup.
+
+Maintainers working against pre-release / not-yet-published `Qubic.*` packages
+can drop the `.nupkg` files into `src/local-packages/` and opt in to that
+source with an env var:
+
+```bash
+# One-off
+USE_LOCAL_PACKAGES=true docker compose build
+
+# Or persist in a .env file next to docker-compose.yml
+echo 'USE_LOCAL_PACKAGES=true' >> .env
+docker compose build
+```
+
+Under the hood the Dockerfiles ship two configs, `src/NuGet.config`
+(public) and `src/NuGet.local.config` (public + local). The build-arg
+`USE_LOCAL_PACKAGES=true` swaps `NuGet.local.config` in as the effective
+`NuGet.config`. When the arg is unset or `false`, the local one is deleted
+before restore — even a populated `local-packages/` folder is ignored.
+
 ### Development Setup
 
 #### Prerequisites

@@ -24,6 +24,12 @@ services:
     build:
       context: ./src
       dockerfile: QubicExplorer.Indexer/Dockerfile
+      args:
+        # Public NuGet only by default. Set USE_LOCAL_PACKAGES=true in your
+        # environment (or a .env file) to swap in ./src/local-packages/ as an
+        # extra source — needed only when building against pre-release Qubic.*
+        # packages that aren't published to nuget.org yet.
+        USE_LOCAL_PACKAGES: ${USE_LOCAL_PACKAGES:-false}
     container_name: qubic-indexer
     depends_on:
       clickhouse:
@@ -46,6 +52,8 @@ services:
     build:
       context: ./src
       dockerfile: QubicExplorer.Analytics/Dockerfile
+      args:
+        USE_LOCAL_PACKAGES: ${USE_LOCAL_PACKAGES:-false}
     container_name: qubic-analytics
     depends_on:
       clickhouse:
@@ -64,6 +72,8 @@ services:
     build:
       context: ./src
       dockerfile: QubicExplorer.Api/Dockerfile
+      args:
+        USE_LOCAL_PACKAGES: ${USE_LOCAL_PACKAGES:-false}
     container_name: qubic-api
     depends_on:
       clickhouse:

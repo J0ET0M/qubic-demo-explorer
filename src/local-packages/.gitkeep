@@ -1,0 +1,6 @@
+# Keeps the local-packages/ folder in git so external clones don't fail
+# on Dockerfile's `COPY local-packages/ ./local-packages/`.
+#
+# .nupkg files themselves are gitignored — the folder ships empty. Maintainers
+# who need to build against a pre-release package drop the .nupkg here and
+# pass `--build-arg USE_LOCAL_PACKAGES=true` to docker build.
