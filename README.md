@@ -85,15 +85,23 @@ the template and edit as needed:
 cp .env.example .env
 ```
 
-Currently supported keys:
+Supported keys:
 
-| Key | Default | Used by |
+| Key | Default | Purpose |
 |---|---|---|
-| `BOB_URL` | `https://bobnet.qubic.li` | indexer, analytics, api (all read the same URL) |
-| `USE_LOCAL_PACKAGES` | `false` | docker build (see next section) |
+| `BOB_URL` | `https://bobnet.qubic.li` | Bob HTTP endpoint shared by indexer, analytics, api |
+| `CLICKHOUSE_USER` | `default` | Applied both to the ClickHouse container and to every consumer |
+| `CLICKHOUSE_PASSWORD` | *(empty)* | Same |
+| `ADMIN_API_KEY` | *(empty)* | Required for `/api/admin/*`. Empty = admin routes return 503 |
+| `SEQ_URL` / `SEQ_API_KEY` | *(empty)* | Optional Seq structured logging |
+| `INDEXER_START_TICK` | `0` | Bootstrap tick on a fresh DB; ignored after first run |
+| `INDEXER_START_FROM_LATEST` | `false` | Alternative to `INDEXER_START_TICK` — start from live chain head |
+| `PRUNER_DRY_RUN` | `true` | Set to `false` to actually drop old data |
+| `USE_LOCAL_PACKAGES` | `false` | Docker build only — see next section |
 
-All three server services (indexer, analytics, api) reference `${BOB_URL}`
-in `docker-compose.yml`, so a single change flips every service.
+Both `docker-compose.yml` (build-from-source) and `docker-compose.prebuilt.yml`
+(prebuilt images) read from the same `.env`, so switching between the two
+doesn't require re-configuring anything.
 
 ### NuGet package source
 

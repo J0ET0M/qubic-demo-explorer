@@ -1,5 +1,5 @@
 ## Docker Compose for Qubic Explorer using pre-built container images.
-## Copy this file and adjust image tags / environment to your needs.
+## Copy .env.example → .env and adjust operator settings there.
 ##
 ##   docker compose -f docker-compose.prebuilt.yml up -d
 ##
@@ -17,8 +17,8 @@ services:
       - "9000:9000"
     environment:
       - CLICKHOUSE_DB=qubic
-      - CLICKHOUSE_USER=default
-      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 10s
@@ -33,14 +33,18 @@ services:
       clickhouse:
         condition: service_healthy
     environment:
-      - Bob__Nodes__0=https://bobnet.qubic.li
+      - Bob__Nodes__0=${BOB_URL:-https://bobnet.qubic.li}
       - ClickHouse__Host=clickhouse
       - ClickHouse__Port=8123
       - ClickHouse__Database=qubic
-      - Indexer__StartTick=0
-      - Indexer__StartFromLatest=false
+      - ClickHouse__User=${CLICKHOUSE_USER:-default}
+      - ClickHouse__Password=${CLICKHOUSE_PASSWORD:-}
+      - Indexer__StartTick=${INDEXER_START_TICK:-0}
+      - Indexer__StartFromLatest=${INDEXER_START_FROM_LATEST:-false}
       - Indexer__BatchSize=1000
       - Indexer__FlushIntervalMs=1000
+      - Seq__ServerUrl=${SEQ_URL:-}
+      - Seq__ApiKey=${SEQ_API_KEY:-}
     restart: unless-stopped
 
   analytics:
@@ -50,10 +54,15 @@ services:
       clickhouse:
         condition: service_healthy
     environment:
+      - Bob__Nodes__0=${BOB_URL:-https://bobnet.qubic.li}
       - ClickHouse__Host=clickhouse
       - ClickHouse__Port=8123
       - ClickHouse__Database=qubic
-      - Bob__Nodes__0=https://bobnet.qubic.li
+      - ClickHouse__User=${CLICKHOUSE_USER:-default}
+      - ClickHouse__Password=${CLICKHOUSE_PASSWORD:-}
+      - AdminApiKey=${ADMIN_API_KEY:-}
+      - Seq__ServerUrl=${SEQ_URL:-}
+      - Seq__ApiKey=${SEQ_API_KEY:-}
     restart: unless-stopped
 
   pruner:
@@ -66,8 +75,12 @@ services:
       - ClickHouse__Host=clickhouse
       - ClickHouse__Port=8123
       - ClickHouse__Database=qubic
-      - Pruner__DryRun=true
+      - ClickHouse__User=${CLICKHOUSE_USER:-default}
+      - ClickHouse__Password=${CLICKHOUSE_PASSWORD:-}
+      - Pruner__DryRun=${PRUNER_DRY_RUN:-true}
       - Pruner__IntervalMinutes=60
+      - Seq__ServerUrl=${SEQ_URL:-}
+      - Seq__ApiKey=${SEQ_API_KEY:-}
     restart: unless-stopped
 
   api:
@@ -80,10 +93,15 @@ services:
       - "5000:8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
+      - Bob__Nodes__0=${BOB_URL:-https://bobnet.qubic.li}
       - ClickHouse__Host=clickhouse
       - ClickHouse__Port=8123
       - ClickHouse__Database=qubic
-      - Bob__Nodes__0=https://bobnet.qubic.li
+      - ClickHouse__User=${CLICKHOUSE_USER:-default}
+      - ClickHouse__Password=${CLICKHOUSE_PASSWORD:-}
+      - AdminApiKey=${ADMIN_API_KEY:-}
+      - Seq__ServerUrl=${SEQ_URL:-}
+      - Seq__ApiKey=${SEQ_API_KEY:-}
     restart: unless-stopped
 
   frontend:
