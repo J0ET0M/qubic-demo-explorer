@@ -224,11 +224,25 @@ public class ComputorOwnerSummaryService : IDisposable
         return JsonSerializer.Deserialize<List<ComputorEntry>>(json, JsonOpts);
     }
 
+    /// <summary>
+    /// Identity → owner for the queried epoch.
+    ///
+    /// Ownership labels are sticky: once an identity is mapped, the label
+    /// holds across future epochs until fattydoge explicitly updates it.
+    /// So for any epoch we look at the most-recent mapping with
+    /// <c>row_epoch ≤ queried_epoch</c> — that way an epoch we never
+    /// directly snapshotted still gets owner attribution from the previous
+    /// known state.
+    /// </summary>
     private async Task<Dictionary<string, string>> LoadOwnershipMapAsync(uint epoch, CancellationToken ct)
     {
         var map = new Dictionary<string, string>(676, StringComparer.Ordinal);
         await using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT identity, owner FROM computor_ownership FINAL WHERE epoch = {epoch:UInt32}";
+        cmd.CommandText = @"
+            SELECT identity, argMax(owner, epoch) AS owner
+            FROM computor_ownership
+            WHERE epoch <= {epoch:UInt32}
+            GROUP BY identity";
         AddParam(cmd, "epoch", epoch);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))

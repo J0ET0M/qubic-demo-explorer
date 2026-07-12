@@ -15,16 +15,68 @@ public class AdminController : ControllerBase
 {
     private readonly ComputorFlowService _flowService;
     private readonly AnalyticsQueryService _queryService;
+    private readonly ComputorOwnershipService _ownershipService;
+    private readonly ComputorOwnerSummaryService _ownerSummaryService;
     private readonly ILogger<AdminController> _logger;
 
     public AdminController(
         ComputorFlowService flowService,
         AnalyticsQueryService queryService,
+        ComputorOwnershipService ownershipService,
+        ComputorOwnerSummaryService ownerSummaryService,
         ILogger<AdminController> logger)
     {
         _flowService = flowService;
         _queryService = queryService;
+        _ownershipService = ownershipService;
+        _ownerSummaryService = ownerSummaryService;
         _logger = logger;
+    }
+
+    // =====================================================
+    // OWNERS BACKFILL
+    // =====================================================
+
+    /// <summary>
+    /// Backfill the per-epoch owner snapshot for an inclusive range.
+    /// For each epoch we (a) re-fetch fattydoge with <c>?epoch=N</c> so the
+    /// ownership row reflects that epoch's mapping, then (b) re-aggregate the
+    /// owner summary from computor_revenue + computor_ownership + qubic
+    /// solutions. Idempotent — re-running on the same range just overwrites.
+    /// </summary>
+    /// <param name="from">Inclusive lower bound epoch.</param>
+    /// <param name="to">Inclusive upper bound epoch.</param>
+    [HttpPost("owners/backfill")]
+    public async Task<IActionResult> BackfillOwnerSnapshots(
+        [FromQuery] uint from,
+        [FromQuery] uint to,
+        CancellationToken ct = default)
+    {
+        if (to < from) (from, to) = (to, from);
+        if (to - from > 50)
+            return BadRequest("Range too large; cap is 50 epochs per request.");
+
+        var results = new List<object>();
+        for (uint e = from; e <= to; e++)
+        {
+            var ownershipRows = await _ownershipService.RefreshAsync(e, ct);
+            var summaryRows   = await _ownerSummaryService.RefreshAsync(e, ct);
+            results.Add(new { epoch = e, ownershipRows, summaryRows });
+            _logger.LogInformation(
+                "Owners backfill: epoch {Epoch} → {Owners} ownership rows, {Summary} summary rows",
+                e, ownershipRows, summaryRows);
+        }
+
+        return Ok(new { success = true, from, to, results });
+    }
+
+    /// <summary>Single-epoch shortcut for the backfill endpoint.</summary>
+    [HttpPost("owners/refresh/{epoch:int}")]
+    public async Task<IActionResult> RefreshOwnerSnapshot(uint epoch, CancellationToken ct = default)
+    {
+        var ownershipRows = await _ownershipService.RefreshAsync(epoch, ct);
+        var summaryRows   = await _ownerSummaryService.RefreshAsync(epoch, ct);
+        return Ok(new { success = true, epoch, ownershipRows, summaryRows });
     }
 
     // =====================================================

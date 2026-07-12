@@ -44,6 +44,14 @@ public static class MultiDimRevenueCalculator
     /// <summary>Epoch from which multi-dim becomes the active/paid formula (qubic v1.296.0).</summary>
     public const uint DefaultMultiDimFromEpoch = 218;
 
+    /// <summary>
+    /// Epoch from which DOGE merged-mining no longer contributes to paid revenue.
+    /// From this epoch onward the DOGE factor is forced to S (neutral) so the
+    /// multi-dim formula collapses to <c>IPC × txFactor × oracleF / S²</c>.
+    /// Bump if / when the protocol re-enables (or replaces) merged-mining.
+    /// </summary>
+    public const uint DefaultDogeDisabledFromEpoch = 220;
+
     public class Result
     {
         public required ulong[] TxScore;        // [N] accumulated asymmetric-L2 tick scores per leader
@@ -130,7 +138,13 @@ public static class MultiDimRevenueCalculator
         else
             Array.Fill(result.OracleFactor, S);
 
-        if (HasActivity(dogeScore))
+        // From DefaultDogeDisabledFromEpoch onward DOGE doesn't count toward
+        // paid revenue — force the neutral all-S factor regardless of whether
+        // shares were still submitted on-chain. Same "valve" as the pre-launch
+        // no-activity path, applied unconditionally.
+        if (epoch >= DefaultDogeDisabledFromEpoch)
+            Array.Fill(result.DogeFactor, S);
+        else if (HasActivity(dogeScore))
             RevenueV2Calculator.ComputeRevFactor(dogeScore, S, result.DogeFactor, N, quorumRank);
         else
             Array.Fill(result.DogeFactor, S);

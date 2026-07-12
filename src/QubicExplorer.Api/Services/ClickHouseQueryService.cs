@@ -161,10 +161,12 @@ public class ClickHouseQueryService : IDisposable
                 t.tick_number,
                 t.epoch,
                 t.timestamp,
-                -- Fallback subqueries are scoped to t.epoch so they partition-prune
-                -- to a single partition instead of scanning all of transactions/logs.
-                if(t.tx_count > 0,  t.tx_count,  (SELECT toUInt32(count()) FROM transactions WHERE epoch = t.epoch AND tick_number = {{tick:UInt64}})) as tx_count,
-                if(t.log_count > 0, t.log_count, (SELECT toUInt32(count()) FROM logs         WHERE epoch = t.epoch AND tick_number = {{tick:UInt64}})) as log_count,
+                -- Trust the stored counts. The cross-check keeps these accurate
+                -- (refetches any tick where counts diverge from the actual rows),
+                -- so an expensive fallback scan is no longer warranted — and the
+                -- previous correlated-subquery fallback isn't supported on CH 24.1.
+                t.tx_count  as tx_count,
+                t.log_count as log_count,
                 t.is_empty
             FROM ticks t
             WHERE t.tick_number = {{tick:UInt64}}";
@@ -5729,18 +5731,21 @@ public class ClickHouseQueryService : IDisposable
     }
 
     /// <summary>
-    /// Returns identity → owner for a given epoch, latest fetched_at wins.
-    /// Empty dictionary if the ownership table has no data for the epoch
-    /// (e.g. snapshot hasn't run yet).
+    /// Identity → owner for the queried epoch.
+    /// Ownership labels are sticky — once mapped, they hold across future
+    /// epochs until fattydoge explicitly updates them. So we read the most
+    /// recent mapping with <c>row_epoch ≤ queried_epoch</c>; an epoch we
+    /// never directly snapshotted still gets attribution from prior state.
     /// </summary>
     private async Task<Dictionary<string, string>> GetOwnershipMapAsync(uint epoch, CancellationToken ct)
     {
         var map = new Dictionary<string, string>(676, StringComparer.Ordinal);
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = @"
-            SELECT identity, owner
-            FROM computor_ownership FINAL
-            WHERE epoch = {epoch:UInt32}";
+            SELECT identity, argMax(owner, epoch) AS owner
+            FROM computor_ownership
+            WHERE epoch <= {epoch:UInt32}
+            GROUP BY identity";
         AddParam(cmd, "epoch", epoch);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);

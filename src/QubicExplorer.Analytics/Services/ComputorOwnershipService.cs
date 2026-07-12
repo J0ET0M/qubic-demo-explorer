@@ -23,7 +23,7 @@ public class ComputorOwnershipService : IDisposable
     private readonly ILogger<ComputorOwnershipService> _logger;
     private bool _disposed;
 
-    private const string SourceUrl = "https://fattydoge.top/api/qubic/revenues";
+    private const string SourceUrlBase = "https://fattydoge.top/api/qubic/revenues";
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -47,21 +47,26 @@ public class ComputorOwnershipService : IDisposable
     }
 
     /// <summary>
-    /// Pull the current ownership snapshot and persist it for the given epoch.
+    /// Pull the per-epoch ownership snapshot from fattydoge and persist it.
     /// Returns the number of (identity, owner) rows written.
     /// </summary>
+    /// <remarks>
+    /// fattydoge supports <c>?epoch=N</c>; we always pass it so a backfill of
+    /// an older epoch fetches that epoch's mapping rather than today's view.
+    /// </remarks>
     public async Task<int> RefreshAsync(uint epoch, CancellationToken ct)
     {
+        var url = $"{SourceUrlBase}?epoch={epoch}";
         List<FattydogeEntry>? entries;
         try
         {
             var client = _httpClientFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(30);
-            entries = await client.GetFromJsonAsync<List<FattydogeEntry>>(SourceUrl, JsonOpts, ct);
+            entries = await client.GetFromJsonAsync<List<FattydogeEntry>>(url, JsonOpts, ct);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "ComputorOwnership: failed to fetch from {Url}", SourceUrl);
+            _logger.LogWarning(ex, "ComputorOwnership: failed to fetch from {Url}", url);
             return 0;
         }
 
