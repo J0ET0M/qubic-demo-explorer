@@ -76,6 +76,25 @@ The explorer will be available at:
 - **API Docs (Swagger)**: http://localhost:5000/swagger (development only)
 - **ClickHouse**: http://localhost:8123 (development only)
 
+### Environment configuration (`.env`)
+
+Common per-deployment settings live in a `.env` file at the repo root. Copy
+the template and edit as needed:
+
+```bash
+cp .env.example .env
+```
+
+Currently supported keys:
+
+| Key | Default | Used by |
+|---|---|---|
+| `BOB_URL` | `https://bobnet.qubic.li` | indexer, analytics, api (all read the same URL) |
+| `USE_LOCAL_PACKAGES` | `false` | docker build (see next section) |
+
+All three server services (indexer, analytics, api) reference `${BOB_URL}`
+in `docker-compose.yml`, so a single change flips every service.
+
 ### NuGet package source
 
 By default every build restores packages from **nuget.org only**, so anyone

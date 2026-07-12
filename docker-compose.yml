@@ -35,7 +35,7 @@ services:
       clickhouse:
         condition: service_healthy
     environment:
-      - Bob__Nodes__0=https://bob02.qubic.li
+      - Bob__Nodes__0=${BOB_URL:-https://bobnet.qubic.li}
       - ClickHouse__Host=clickhouse
       - ClickHouse__Port=8123
       - ClickHouse__Database=qubic
@@ -62,7 +62,7 @@ services:
       - ClickHouse__Host=clickhouse
       - ClickHouse__Port=8123
       - ClickHouse__Database=qubic
-      - Bob__Nodes__0=https://bob02.qubic.li
+      - Bob__Nodes__0=${BOB_URL:-https://bobnet.qubic.li}
       # Optional: Seq logging (uncomment to enable)
       # - Seq__ServerUrl=http://seq:5341
       # - Seq__ApiKey=
@@ -85,7 +85,7 @@ services:
       - ClickHouse__Host=clickhouse
       - ClickHouse__Port=8123
       - ClickHouse__Database=qubic
-      - Bob__Nodes__0=https://bob02.qubic.li
+      - Bob__Nodes__0=${BOB_URL:-https://bobnet.qubic.li}
       # Optional: Seq logging (uncomment to enable)
       # - Seq__ServerUrl=http://seq:5341
       # - Seq__ApiKey=

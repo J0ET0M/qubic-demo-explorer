@@ -192,7 +192,7 @@ environment:
   - ClickHouse__Host=clickhouse
   - ClickHouse__Port=8123
   - ClickHouse__Database=qubic
-  - Bob__Nodes__0=https://bob02.qubic.li
+  - Bob__Nodes__0=https://bobnet.qubic.li
 ```
 
 ## Running
@@ -212,7 +212,7 @@ dotnet publish -c Release
 docker build -t qubic-api -f QubicExplorer.Api/Dockerfile .
 docker run -p 5000:8080 \
   -e ClickHouse__Host=clickhouse \
-  -e Bob__Nodes__0=https://bob02.qubic.li \
+  -e Bob__Nodes__0=https://bobnet.qubic.li \
   qubic-api
 ```
 

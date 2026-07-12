@@ -103,7 +103,7 @@ The main background service that orchestrates:
 
 ```yaml
 environment:
-  - Bob__Nodes__0=https://bob02.qubic.li
+  - Bob__Nodes__0=https://bobnet.qubic.li
   - ClickHouse__Host=clickhouse
   - ClickHouse__Port=8123
   - ClickHouse__Database=qubic
@@ -129,7 +129,7 @@ dotnet publish -c Release
 ```bash
 docker build -t qubic-indexer -f QubicExplorer.Indexer/Dockerfile .
 docker run \
-  -e Bob__Nodes__0=https://bob02.qubic.li \
+  -e Bob__Nodes__0=https://bobnet.qubic.li \
   -e ClickHouse__Host=clickhouse \
   qubic-indexer
 ```
