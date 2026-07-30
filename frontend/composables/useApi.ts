@@ -745,6 +745,9 @@ interface EpochStatsDto {
   transferCount: number
   quTransferred: number
   assetTransferCount: number
+  // Qubic puzzle-mining solutions submitted in the epoch
+  // (input_type=2 txs directed to the burn address).
+  solutionCount: number
 }
 
 interface EpochTransferByTypeDto {

@@ -488,6 +488,9 @@ public static class ClickHouseSchema
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS start_time DateTime64(3) DEFAULT 0 AFTER qu_transferred",
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS end_time DateTime64(3) DEFAULT 0 AFTER start_time",
         $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS asset_transfer_count UInt64 DEFAULT 0 AFTER end_time",
+        // Count of qubic puzzle-mining solution transactions
+        // (input_type = 2, to_address = burn) submitted in the epoch.
+        $"ALTER TABLE {DatabaseName}.epoch_meta ADD COLUMN IF NOT EXISTS solution_count UInt64 DEFAULT 0 AFTER asset_transfer_count",
 
         // Network stats history
         $"""

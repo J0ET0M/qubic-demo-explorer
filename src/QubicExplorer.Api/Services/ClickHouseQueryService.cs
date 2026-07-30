@@ -1298,7 +1298,8 @@ public class ClickHouseQueryService : IDisposable
                 meta.ActiveAddresses,
                 meta.TransferCount,
                 meta.QuTransferred,
-                meta.AssetTransferCount
+                meta.AssetTransferCount,
+                meta.SolutionCount
             );
         }
 
@@ -1321,7 +1322,8 @@ public class ClickHouseQueryService : IDisposable
                 COALESCE(tx.unique_senders, 0) + COALESCE(tx.unique_receivers, 0) as active_addresses,
                 COALESCE(tr.transfer_count, 0) as transfer_count,
                 COALESCE(tr.qu_transferred, 0) as qu_transferred,
-                COALESCE(asset.asset_transfer_count, 0) as asset_transfer_count
+                COALESCE(asset.asset_transfer_count, 0) as asset_transfer_count,
+                COALESCE(sol.solution_count, 0) as solution_count
             FROM epoch_meta AS em FINAL
             LEFT JOIN (
                 -- Count from ticks directly (uniqExact dedups on tick_number).
@@ -1376,6 +1378,16 @@ public class ClickHouseQueryService : IDisposable
                 WHERE epoch = {{epoch:UInt32}} AND log_type != 0
                 GROUP BY epoch
             ) asset ON em.epoch = asset.epoch
+            LEFT JOIN (
+                -- Same solution-count subquery as ComputeAndStoreEpochStatsAsync
+                -- (input_type=2 to burn) — used for the live/incomplete-epoch path.
+                SELECT epoch, count() AS solution_count
+                FROM transactions
+                WHERE epoch = {{epoch:UInt32}}
+                  AND input_type = 2
+                  AND to_address = {{burn:String}}
+                GROUP BY epoch
+            ) sol ON em.epoch = sol.epoch
             WHERE em.epoch = {{epoch:UInt32}}";
         AddParam(cmd, "epoch", epoch);
         // Range to filter out mis-labeled tick rows. For an incomplete epoch
@@ -1383,6 +1395,7 @@ public class ClickHouseQueryService : IDisposable
         // properly-labeled ticks counted, just not random ones from other epochs.
         AddParam(cmd, "minTick", meta.InitialTick);
         AddParam(cmd, "maxTick", meta.EndTick > 0 ? meta.EndTick : ulong.MaxValue);
+        AddParam(cmd, "burn", AddressLabelService.BurnAddress);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -1403,7 +1416,8 @@ public class ClickHouseQueryService : IDisposable
             ToUInt64(reader.GetValue(11)),
             ToUInt64(reader.GetValue(12)),
             ToDecimal(reader.GetValue(13)),
-            ToUInt64(reader.GetValue(14))
+            ToUInt64(reader.GetValue(14)),
+            ToUInt64(reader.GetValue(15))
         );
     }
 
@@ -3534,7 +3548,7 @@ public class ClickHouseQueryService : IDisposable
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
                    is_complete, updated_at,
                    tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred,
-                   start_time, end_time, asset_transfer_count
+                   start_time, end_time, asset_transfer_count, solution_count
             FROM epoch_meta FINAL
             WHERE epoch = {epoch:UInt32}";
         AddParam(cmd, "epoch", epoch);
@@ -3560,7 +3574,8 @@ public class ClickHouseQueryService : IDisposable
             QuTransferred: ToBigDecimal(reader.GetValue(13)),
             StartTime: NullableDateTime(reader.GetDateTime(14)),
             EndTime: NullableDateTime(reader.GetDateTime(15)),
-            AssetTransferCount: reader.GetFieldValue<ulong>(16)
+            AssetTransferCount: reader.GetFieldValue<ulong>(16),
+            SolutionCount: reader.GetFieldValue<ulong>(17)
         );
     }
 
@@ -3579,7 +3594,7 @@ public class ClickHouseQueryService : IDisposable
             SELECT epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id,
                    is_complete, updated_at,
                    tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred,
-                   start_time, end_time, asset_transfer_count
+                   start_time, end_time, asset_transfer_count, solution_count
             FROM epoch_meta FINAL
             ORDER BY epoch DESC
             LIMIT {{lim:UInt32}}";
@@ -3606,7 +3621,8 @@ public class ClickHouseQueryService : IDisposable
                 QuTransferred: ToBigDecimal(reader.GetValue(13)),
                 StartTime: NullableDateTime(reader.GetDateTime(14)),
                 EndTime: NullableDateTime(reader.GetDateTime(15)),
-                AssetTransferCount: reader.GetFieldValue<ulong>(16)
+                AssetTransferCount: reader.GetFieldValue<ulong>(16),
+                SolutionCount: reader.GetFieldValue<ulong>(17)
             ));
         }
 
@@ -3623,14 +3639,15 @@ public class ClickHouseQueryService : IDisposable
             INSERT INTO epoch_meta
             (epoch, initial_tick, end_tick, end_tick_start_log_id, end_tick_end_log_id, is_complete,
              tick_count, empty_tick_count, tx_count, total_volume, active_addresses, transfer_count, qu_transferred,
-             start_time, end_time, asset_transfer_count)
+             start_time, end_time, asset_transfer_count, solution_count)
             VALUES
             ({epoch:UInt32}, {initialTick:UInt64}, {endTick:UInt64},
              {startLogId:UInt64}, {endLogId:UInt64},
              {isComplete:UInt8},
              {tickCount:UInt64}, {emptyTickCount:UInt64}, {txCount:UInt64}, {totalVolume:Float64},
              {activeAddresses:UInt64}, {transferCount:UInt64}, {quTransferred:Float64},
-             {startTime:DateTime64(3)}, {endTime:DateTime64(3)}, {assetTransferCount:UInt64})";
+             {startTime:DateTime64(3)}, {endTime:DateTime64(3)}, {assetTransferCount:UInt64},
+             {solutionCount:UInt64})";
         AddParam(cmd, "epoch", epochMeta.Epoch);
         AddParam(cmd, "initialTick", epochMeta.InitialTick);
         AddParam(cmd, "endTick", epochMeta.EndTick);
@@ -3648,6 +3665,7 @@ public class ClickHouseQueryService : IDisposable
         AddParam(cmd, "startTime", epochMeta.StartTime ?? new DateTime(1970, 1, 1));
         AddParam(cmd, "endTime", epochMeta.EndTime ?? new DateTime(1970, 1, 1));
         AddParam(cmd, "assetTransferCount", epochMeta.AssetTransferCount);
+        AddParam(cmd, "solutionCount", epochMeta.SolutionCount);
 
         await cmd.ExecuteNonQueryAsync(ct);
         _logger.LogInformation("Upserted epoch metadata for epoch {Epoch} (initial_tick={InitialTick}, end_tick={EndTick}, complete={IsComplete})",
@@ -3719,7 +3737,8 @@ public class ClickHouseQueryService : IDisposable
                 COALESCE(tr.qu_transferred, 0),
                 COALESCE(tt.start_time, toDateTime64(0, 3)) AS start_time,
                 COALESCE(tt.end_time, toDateTime64(0, 3)) AS end_time,
-                COALESCE(asset.asset_count, 0) AS asset_transfer_count
+                COALESCE(asset.asset_count, 0) AS asset_transfer_count,
+                COALESCE(sol.solution_count, 0) AS solution_count
             FROM (SELECT 1 as _join) d
             LEFT JOIN (
                 -- Direct count from ticks, scoped to the epoch's tick range so
@@ -3759,10 +3778,22 @@ public class ClickHouseQueryService : IDisposable
                 SELECT sum(count) AS asset_count
                 FROM epoch_transfer_by_type FINAL
                 WHERE epoch = {{epoch:UInt32}} AND log_type != 0
-            ) asset ON 1=1";
+            ) asset ON 1=1
+            LEFT JOIN (
+                -- Qubic puzzle-mining solutions: input_type=2 txs targeting the
+                -- burn address (all real solutions are burn-directed; excluding
+                -- to_address filters out the rare non-mining input_type=2 traffic
+                -- like QX/QUTIL contract calls).
+                SELECT count() AS solution_count
+                FROM transactions
+                WHERE epoch = {{epoch:UInt32}}
+                  AND input_type = 2
+                  AND to_address = {{burn:String}}
+            ) sol ON 1=1";
         AddParam(cmd, "epoch", epoch);
         AddParam(cmd, "minTick", meta.InitialTick);
         AddParam(cmd, "maxTick", meta.EndTick > 0 ? meta.EndTick : ulong.MaxValue);
+        AddParam(cmd, "burn", AddressLabelService.BurnAddress);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
@@ -3786,14 +3817,15 @@ public class ClickHouseQueryService : IDisposable
             StartTime = startTime,
             EndTime = endTime,
             AssetTransferCount = ToUInt64(reader.GetValue(9)),
+            SolutionCount = ToUInt64(reader.GetValue(10)),
             UpdatedAt = DateTime.UtcNow
         };
 
         await UpsertEpochMetaAsync(updatedMeta, ct);
         _logger.LogInformation(
-            "Stored epoch {Epoch} stats: ticks={TickCount}, txs={TxCount}, volume={Volume}, addresses={Addresses}, transfers={Transfers}, start={Start}, end={End}",
+            "Stored epoch {Epoch} stats: ticks={TickCount}, txs={TxCount}, volume={Volume}, addresses={Addresses}, transfers={Transfers}, solutions={Solutions}, start={Start}, end={End}",
             epoch, updatedMeta.TickCount, updatedMeta.TxCount, updatedMeta.TotalVolume,
-            updatedMeta.ActiveAddresses, updatedMeta.TransferCount, startTime, endTime);
+            updatedMeta.ActiveAddresses, updatedMeta.TransferCount, updatedMeta.SolutionCount, startTime, endTime);
     }
 
     // =====================================================

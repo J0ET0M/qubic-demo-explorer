@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Calendar, ArrowLeftRight, Users, Blocks, TrendingUp, Coins, Gift, AlertTriangle } from 'lucide-vue-next'
+import { Calendar, ArrowLeftRight, Users, Blocks, TrendingUp, Coins, Gift, AlertTriangle, Pickaxe } from 'lucide-vue-next'
 
 const api = useApi()
 const route = useRoute()
@@ -241,6 +241,15 @@ const { formatVolume, formatDate, getLogTypeBadgeClass, formatEpochDuration } = 
           <ArrowLeftRight class="h-5 w-5 text-warning mx-auto mb-2" />
           <div class="text-2xl font-bold text-warning">{{ stats.assetTransferCount.toLocaleString() }}</div>
           <div class="text-xs text-foreground-muted uppercase mt-1">Asset Transfers</div>
+        </div>
+
+        <div
+          class="card-elevated text-center"
+          title="Qubic puzzle-mining solutions — input_type=2 transactions directed to the burn address"
+        >
+          <Pickaxe class="h-5 w-5 text-accent mx-auto mb-2" />
+          <div class="text-2xl font-bold text-accent">{{ (stats.solutionCount ?? 0).toLocaleString() }}</div>
+          <div class="text-xs text-foreground-muted uppercase mt-1">Qubic Solutions</div>
         </div>
       </div>
 

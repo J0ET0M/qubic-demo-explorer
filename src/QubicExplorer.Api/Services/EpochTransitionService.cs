@@ -20,6 +20,11 @@ public class EpochTransitionService : BackgroundService
     private uint? _lastKnownEpoch;
     private bool _hasCriticalError;
     private uint? _criticalErrorEpoch;
+    // Transient state: transition detected but Bob hasn't caught up yet (e.g.
+    // end-tick logs still being processed on Bob's side). We retry every minute
+    // until Bob is ready — separately from _criticalErrorEpoch, which is
+    // reserved for genuine failures and gets the slow 30-min backoff.
+    private uint? _pendingValidationEpoch;
 
     public EpochTransitionService(
         IServiceProvider serviceProvider,
@@ -53,8 +58,9 @@ public class EpochTransitionService : BackgroundService
                 _logger.LogError(ex, "Error in epoch transition service");
             }
 
-            // If we have a critical error, retry every 30 minutes
-            // Otherwise, check every minute
+            // Retry cadence:
+            //   critical error → 30 min (genuine failure, don't hammer Bob)
+            //   pending validation OR normal → 1 min (Bob catch-up is fast)
             var delay = _hasCriticalError
                 ? TimeSpan.FromMinutes(30)
                 : TimeSpan.FromMinutes(1);
@@ -82,6 +88,17 @@ public class EpochTransitionService : BackgroundService
             _logger.LogWarning("Retrying epoch transition validation for epoch {Epoch} (critical error state)",
                 _criticalErrorEpoch.Value);
             await ValidateEpochEndAsync(_criticalErrorEpoch.Value, queryService, ct);
+            _lastKnownEpoch = currentEpoch.Value;
+            return;
+        }
+
+        // Transient: previously detected a transition, but Bob wasn't ready.
+        // Retry every minute (via the normal loop delay) until we succeed or
+        // hit an actual critical failure.
+        if (_pendingValidationEpoch.HasValue)
+        {
+            _logger.LogInformation("Retrying pending validation for epoch {Epoch}", _pendingValidationEpoch.Value);
+            await ValidateEpochEndAsync(_pendingValidationEpoch.Value, queryService, ct);
             _lastKnownEpoch = currentEpoch.Value;
             return;
         }
@@ -117,17 +134,20 @@ public class EpochTransitionService : BackgroundService
         var epochInfo = await _bobProxy.GetEpochInfoAsync(epoch, ct);
         if (epochInfo == null)
         {
-            _logger.LogWarning("Could not get epoch info from Bob for epoch {Epoch}", epoch);
-            SetCriticalError(epoch, "Could not fetch epoch info from Bob");
+            // Transient — Bob's network hiccups. Retry in 1 min, not 30.
+            _logger.LogWarning("Could not get epoch info from Bob for epoch {Epoch}, will retry", epoch);
+            SetPendingValidation(epoch);
             return;
         }
 
-        // Check if epoch is complete (has end tick info)
+        // Bob knows about the epoch but hasn't finished processing the end-tick
+        // logs yet. This is normal for a minute or two right after transition —
+        // NOT a critical failure. Retry every minute until it lands.
         if (epochInfo.EndTickStartLogId == 0 || epochInfo.EndTickEndLogId == 0)
         {
-            _logger.LogWarning("Epoch {Epoch} doesn't have complete end tick info yet (endTickStartLogId={Start}, endTickEndLogId={End})",
+            _logger.LogInformation("Epoch {Epoch} end-tick info not ready on Bob yet (endTickStartLogId={Start}, endTickEndLogId={End}) — will retry",
                 epoch, epochInfo.EndTickStartLogId, epochInfo.EndTickEndLogId);
-            SetCriticalError(epoch, "Epoch doesn't have complete end tick info");
+            SetPendingValidation(epoch);
             return;
         }
 
@@ -192,8 +212,10 @@ public class EpochTransitionService : BackgroundService
             var endLogs = await _bobProxy.GetEndEpochLogsAsync(epoch, ct);
             if (endLogs == null || endLogs.Count == 0)
             {
-                _logger.LogCritical("CRITICAL: Could not fetch end epoch logs from Bob for epoch {Epoch}", epoch);
-                SetCriticalError(epoch, "Could not fetch end epoch logs from Bob");
+                // Transient — Bob might just not have replied properly yet.
+                // Retry every minute; only escalate to critical if it persists.
+                _logger.LogWarning("End epoch logs not returned by Bob for epoch {Epoch}, will retry", epoch);
+                SetPendingValidation(epoch);
                 return;
             }
 
@@ -396,8 +418,15 @@ public class EpochTransitionService : BackgroundService
     {
         _hasCriticalError = true;
         _criticalErrorEpoch = epoch;
+        // Escalating out of pending — this is a real problem now.
+        _pendingValidationEpoch = null;
         _logger.LogCritical("Epoch transition critical error for epoch {Epoch}: {Message}. Will retry in 30 minutes.",
             epoch, message);
+    }
+
+    private void SetPendingValidation(uint epoch)
+    {
+        _pendingValidationEpoch = epoch;
     }
 
     private void ClearCriticalError()
@@ -408,5 +437,6 @@ public class EpochTransitionService : BackgroundService
         }
         _hasCriticalError = false;
         _criticalErrorEpoch = null;
+        _pendingValidationEpoch = null;
     }
 }

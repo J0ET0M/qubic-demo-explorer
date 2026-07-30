@@ -418,7 +418,10 @@ public record EpochMetaDto(
     decimal QuTransferred = 0,
     DateTime? StartTime = null,
     DateTime? EndTime = null,
-    ulong AssetTransferCount = 0
+    ulong AssetTransferCount = 0,
+    // Qubic puzzle-mining solution transactions submitted in the epoch
+    // (input_type = 2, to_address = burn).
+    ulong SolutionCount = 0
 );
 
 // =====================================================

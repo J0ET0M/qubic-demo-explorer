@@ -15,7 +15,9 @@ public record EpochStatsDto(
     ulong ActiveAddresses,
     ulong TransferCount,
     decimal QuTransferred,
-    ulong AssetTransferCount
+    ulong AssetTransferCount,
+    // Puzzle-mining solutions submitted in the epoch (input_type=2 to burn).
+    ulong SolutionCount = 0
 );
 
 public record EpochTransferByTypeDto(
