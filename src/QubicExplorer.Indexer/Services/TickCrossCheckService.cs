@@ -59,25 +59,70 @@ public class TickCrossCheckService : BackgroundService
 
         _logger.LogInformation("Tick cross-check service started");
 
-        await using var connection = new ClickHouseConnection(_clickHouseOptions.ConnectionString);
-        await connection.OpenAsync(stoppingToken);
+        // Long-lived ClickHouse connection. On any exception in the loop we
+        // dispose + reopen — otherwise a wedged HTTP pipeline (e.g. after a
+        // truncated response mid-decompression) leaves us retrying a dead
+        // connection forever. That's what caused the "stuck until restart"
+        // behaviour: the exception was caught, but the connection wasn't.
+        ClickHouseConnection connection = await OpenConnectionAsync(stoppingToken);
+        int consecutiveFailures = 0;
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await RunCrossCheckLoopAsync(connection, stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Cross-check error, will retry in 30s");
-                await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+                try
+                {
+                    await RunCrossCheckLoopAsync(connection, stoppingToken);
+                    consecutiveFailures = 0;
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    consecutiveFailures++;
+                    _logger.LogError(ex,
+                        "Cross-check error (consecutive #{Count}); resetting ClickHouse connection and retrying in 30s",
+                        consecutiveFailures);
+
+                    // Dispose the potentially-wedged connection and open a fresh one.
+                    // Swallow dispose errors — the connection is already suspect.
+                    try { await connection.DisposeAsync(); } catch { /* ignore */ }
+                    try
+                    {
+                        connection = await OpenConnectionAsync(stoppingToken);
+                    }
+                    catch (Exception reopenEx)
+                    {
+                        _logger.LogError(reopenEx, "Failed to reopen ClickHouse connection; will retry in 30s");
+                    }
+
+                    // Escalate to CRITICAL after sustained failure so it stops
+                    // being ignored in log noise.
+                    if (consecutiveFailures == 5 || (consecutiveFailures > 5 && consecutiveFailures % 20 == 0))
+                    {
+                        _logger.LogCritical(
+                            "Cross-check has failed {Count} times in a row — investigate ClickHouse or indexer health.",
+                            consecutiveFailures);
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+                }
             }
         }
+        finally
+        {
+            try { await connection.DisposeAsync(); } catch { /* ignore */ }
+        }
+    }
+
+    private async Task<ClickHouseConnection> OpenConnectionAsync(CancellationToken ct)
+    {
+        var conn = new ClickHouseConnection(_clickHouseOptions.ConnectionString);
+        await conn.OpenAsync(ct);
+        return conn;
     }
 
     private async Task RunCrossCheckLoopAsync(ClickHouseConnection connection, CancellationToken ct)
@@ -140,11 +185,25 @@ public class TickCrossCheckService : BackgroundService
                     if (EvaluateRules(tick, state))
                     {
                         bobClient ??= await ConnectBobAsync(ct);
-                        var success = await RefetchTickAsync(bobClient, tick, ct);
-                        if (success)
+                        var outcome = await RefetchTickAsync(bobClient, tick, ct);
+                        if (outcome == RefetchOutcome.Success)
                         {
                             refetchedCount++;
                             batchRefetched.Add(tick);
+                        }
+                        else if (outcome == RefetchOutcome.BobUnavailable)
+                        {
+                            // Bob's WebSocket is dead. Every remaining tick in
+                            // this batch would produce the same failure — bail
+                            // out with a single warning, dispose the broken
+                            // client, and let the outer loop delay + retry.
+                            _logger.LogWarning(
+                                "Bob WebSocket disconnected at tick {Tick}; aborting cross-check batch and reconnecting on next pass",
+                                tick);
+                            try { bobClient?.Dispose(); } catch { /* ignore */ }
+                            bobClient = null;
+                            // Fall through to finally-block cleanup and outer 30s delay.
+                            return;
                         }
                         else
                             _logger.LogWarning("Failed to refetch tick {Tick}, skipping", tick);
@@ -322,7 +381,17 @@ public class TickCrossCheckService : BackgroundService
     ///   6. GetTransactionReceipt → executed status
     ///   7. Re-insert tick + transactions + logs via ClickHouseWriterService
     /// </summary>
-    private async Task<bool> RefetchTickAsync(BobWebSocketClient bob, ulong tickNumber, CancellationToken ct)
+    /// <summary>
+    /// Outcome of an attempted per-tick refetch.
+    ///   Success        — data written, all good.
+    ///   TickFailed     — Bob's up but this specific tick failed (missing data,
+    ///                    pending receipt, malformed response); safe to move on.
+    ///   BobUnavailable — Bob's WebSocket is dead. Don't hammer the rest of the
+    ///                    batch — every subsequent tick will fail the same way.
+    /// </summary>
+    private enum RefetchOutcome { Success, TickFailed, BobUnavailable }
+
+    private async Task<RefetchOutcome> RefetchTickAsync(BobWebSocketClient bob, ulong tickNumber, CancellationToken ct)
     {
         try
         {
@@ -335,7 +404,7 @@ public class TickCrossCheckService : BackgroundService
             if (tickResp == null)
             {
                 _logger.LogWarning("Tick {Tick}: Bob returned no data for GetTickByNumber", tickNumber);
-                return false;
+                return RefetchOutcome.TickFailed;
             }
             var epoch = (uint)tickResp.Epoch;
             var timestamp = tickResp.Timestamp > 0
@@ -399,7 +468,7 @@ public class TickCrossCheckService : BackgroundService
                     _logger.LogDebug(
                         "Tick {Tick}: receipt for {Hash} is pending, aborting refetch — will retry later",
                         tickNumber, txHash);
-                    return false;
+                    return RefetchOutcome.TickFailed;
                 }
 
                 var txLogs = bobLogs.Where(l => l.TxHash == txHash).OrderBy(l => l.LogId).ToList();
@@ -446,12 +515,18 @@ public class TickCrossCheckService : BackgroundService
                 "Refetched tick {Tick}: {TxCount} txs, {LogCount} logs",
                 tickNumber, bobTransactions.Count, bobLogs.Count);
 
-            return true;
+            return RefetchOutcome.Success;
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("WebSocket is not connected", StringComparison.OrdinalIgnoreCase))
+        {
+            // Signal the caller to stop the batch — every subsequent tick will
+            // fail with the same message otherwise.
+            return RefetchOutcome.BobUnavailable;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Error refetching tick {Tick} from Bob", tickNumber);
-            return false;
+            return RefetchOutcome.TickFailed;
         }
     }
 

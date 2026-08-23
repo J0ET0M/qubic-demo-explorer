@@ -77,17 +77,27 @@ public class OracleEventService : IDisposable
         const int MaxRowsPerPass = 500_000;
         int rowsRead = 0;
 
+        // Oracle reply commit/reveal txs are recognized by qubic core ONLY when
+        // destinationPublicKey == 0 (burn) AND inputType == 6/7. See
+        // qubic/src/qubic.cpp:1025 & :1034. Without the burn filter we'd also
+        // sweep in QX/QUTIL/etc. contract-procedure calls that happen to have
+        // procedure-index 6 or 7 in their own contract-scoped input_type space
+        // — those aren't oracle events at all.
+        const string BurnAddress = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFXIB";
+
         await using var cmd = _connection.CreateCommand();
         cmd.CommandText = $@"
             SELECT tick_number, epoch, hash, from_address, input_type, input_data, timestamp
             FROM transactions
             WHERE input_type IN ({CommitInputType}, {RevealInputType})
+              AND to_address = {{burn:String}}
               AND tick_number > {{lastTick:UInt64}}
               AND epoch <= {{currentEpoch:UInt32}}
             ORDER BY tick_number ASC, hash ASC
             LIMIT {MaxRowsPerPass}";
         AddParam(cmd, "lastTick", lastProcessed.Value);
         AddParam(cmd, "currentEpoch", currentEpoch);
+        AddParam(cmd, "burn", BurnAddress);
 
         var pending = new List<object[]>(BulkBatchSize);
         var now = DateTime.UtcNow;
@@ -132,6 +142,17 @@ public class OracleEventService : IDisposable
             {
                 computorLookup = await GetComputorIndexLookupAsync(epoch, ct);
                 computorLookupEpoch = epoch;
+
+                // If we have no computor list for this epoch, every event in
+                // it will silently vanish into `skippedNoComputor`. Warn loudly
+                // so it's obvious the fix is to import the epoch's computor
+                // list (typically via `ComputorFlowService.EnsureComputorsImportedAsync`).
+                if (computorLookup.Count == 0)
+                {
+                    _logger.LogWarning(
+                        "Oracle events: no computors mapped for epoch {Epoch} — all commit/reveal txs in this epoch will be skipped until the computor list is imported.",
+                        epoch);
+                }
             }
 
             if (!computorLookup.TryGetValue(fromAddress, out var computorIndex))
