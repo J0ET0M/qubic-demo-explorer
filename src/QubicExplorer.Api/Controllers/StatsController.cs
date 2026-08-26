@@ -912,4 +912,59 @@ public class StatsController : ControllerBase
             () => _queryService.GetTickVotesCompareAsync(epoch, indexList, ct));
         return Ok(result);
     }
+
+    // =====================================================
+    // PROPOSALS (GQMPROP + CCF)
+    // =====================================================
+
+    /// <summary>Epochs (desc) with proposal activity — used to populate the epoch selector.</summary>
+    [HttpGet("proposals/epochs")]
+    public async Task<IActionResult> GetProposalsEpochs(CancellationToken ct = default)
+    {
+        var result = await _cache.GetOrSetAsync(
+            "stats:proposals:epochs",
+            TimeSpan.FromMinutes(5),
+            async () => new ProposalsEpochsDto(await _queryService.GetProposalEpochsAsync(ct)));
+        return Ok(result);
+    }
+
+    /// <summary>List of proposals in one epoch. contract=0 both; 6 GQMPROP; 8 CCF.</summary>
+    [HttpGet("proposals/{epoch:int}")]
+    public async Task<IActionResult> GetProposalsForEpoch(
+        uint epoch, [FromQuery] int contract = 0, CancellationToken ct = default)
+    {
+        if (contract != 0 && contract != 6 && contract != 8)
+            return BadRequest("contract must be 0 (both), 6 (GQMPROP), or 8 (CCF)");
+        var ttl = await GetProposalsTtlAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:proposals:{epoch}:c{contract}",
+            ttl,
+            () => _queryService.GetProposalsForEpochAsync(epoch, contract, ct));
+        return Ok(result);
+    }
+
+    /// <summary>Full detail for one proposal, keyed by (epoch, contract, proposalTick).</summary>
+    [HttpGet("proposals/{epoch:int}/{contract:int}/{proposalTick:long}")]
+    public async Task<IActionResult> GetProposalDetail(
+        uint epoch, int contract, ulong proposalTick, CancellationToken ct = default)
+    {
+        if (contract != 6 && contract != 8)
+            return BadRequest("contract must be 6 (GQMPROP) or 8 (CCF)");
+        var ttl = await GetProposalsTtlAsync(epoch, ct);
+        var result = await _cache.GetOrSetAsync(
+            $"stats:proposals:{epoch}:c{contract}:t{proposalTick}",
+            ttl,
+            () => _queryService.GetProposalDetailAsync(epoch, contract, proposalTick, ct));
+        if (result == null) return NotFound();
+        return Ok(result);
+    }
+
+    /// <summary>1 min for current epoch (votes still flowing), 24 h for closed epochs.</summary>
+    private async Task<TimeSpan> GetProposalsTtlAsync(uint epoch, CancellationToken ct)
+    {
+        var currentEpoch = await _queryService.GetCurrentEpochAsync(ct);
+        return currentEpoch.HasValue && epoch >= currentEpoch.Value
+            ? TimeSpan.FromMinutes(1)
+            : TimeSpan.FromHours(24);
+    }
 }

@@ -8360,4 +8360,569 @@ public class ClickHouseQueryService : IDisposable
             Transfers: transfers
         );
     }
+
+    // ==========================================================================
+    // PROPOSALS (GQMPROP + CCF)
+    // ==========================================================================
+
+    private static string ContractName(int idx) => idx switch
+    {
+        6 => "GQMPROP",
+        8 => "CCF",
+        _ => $"contract#{idx}"
+    };
+
+    private static string ClassName(int cls) => cls switch
+    {
+        0x0000 => "GeneralOptions",
+        0x0100 => "Transfer",
+        0x0200 => "Variable",
+        0x0300 => "MultiVariables",
+        0x0400 => "TransferInEpoch",
+        _ => $"class#0x{cls:X4}"
+    };
+
+    /// <summary>Epochs that have any proposal activity, newest first.</summary>
+    public async Task<List<uint>> GetProposalEpochsAsync(CancellationToken ct = default)
+    {
+        var epochs = new List<uint>();
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT DISTINCT epoch FROM proposals
+            ORDER BY epoch DESC LIMIT 200";
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            epochs.Add(reader.GetFieldValue<uint>(0));
+        return epochs;
+    }
+
+    /// <summary>
+    /// Proposals in one epoch. `contractFilter` is 0 (both) or the contract index.
+    /// Results include per-proposal tally: persisted from proposal_results when the
+    /// epoch is closed; live-computed when it's the current/open epoch.
+    /// </summary>
+    public async Task<ProposalListDto> GetProposalsForEpochAsync(uint epoch, int contractFilter, CancellationToken ct = default)
+    {
+        var proposals = await LoadProposalsAsync(epoch, contractFilter, ct);
+        var currentEpoch = await GetCurrentEpochScalarAsync(ct);
+        var isClosed = currentEpoch > epoch;
+
+        // Batch-load results for closed epoch; otherwise compute live tally per proposal.
+        Dictionary<(int Contract, ulong Tick), ProposalResultDto>? persisted = null;
+        if (isClosed)
+            persisted = await LoadPersistedResultsAsync(epoch, contractFilter, ct);
+
+        var addressLabels = _labelService;
+        var ownership = await GetOwnershipMapAsync(epoch, ct);
+
+        var items = new List<ProposalSummaryDto>(proposals.Count);
+        foreach (var p in proposals)
+        {
+            ProposalResultDto? result = null;
+            if (persisted != null && persisted.TryGetValue((p.ContractIndex, p.ProposalTick), out var r))
+                result = r;
+            else
+                result = await ComputeLiveTallyAsync(epoch, p.ContractIndex, p.ProposalTick, ct);
+
+            items.Add(BuildSummary(p, result, addressLabels, ownership));
+        }
+        return new ProposalListDto(epoch, items.Count, items);
+    }
+
+    /// <summary>Full detail: proposal metadata, votes, timeline buckets, owner matrix.</summary>
+    public async Task<ProposalDetailDto?> GetProposalDetailAsync(uint epoch, int contractIndex, ulong proposalTick, CancellationToken ct = default)
+    {
+        var p = await LoadProposalByTickAsync(epoch, contractIndex, proposalTick, ct);
+        if (p == null) return null;
+
+        var addressLabels = _labelService;
+        var ownership = await GetOwnershipMapAsync(epoch, ct);
+
+        var currentEpoch = await GetCurrentEpochScalarAsync(ct);
+        ProposalResultDto? result = null;
+        if (currentEpoch > epoch)
+        {
+            var persisted = await LoadPersistedResultsAsync(epoch, contractIndex, ct);
+            persisted.TryGetValue((contractIndex, proposalTick), out result);
+        }
+        result ??= await ComputeLiveTallyAsync(epoch, contractIndex, proposalTick, ct);
+
+        var summary = BuildSummary(p, result, addressLabels, ownership);
+        var votes = await LoadVotesAsync(epoch, contractIndex, proposalTick, ownership, ct);
+        var timeline = BuildTimeline(votes);
+        var matrix = BuildOwnerMatrix(votes, ownership, result?.OptionCounts?.Length ?? 2);
+
+        return new ProposalDetailDto(summary, votes, timeline, matrix);
+    }
+
+    private record ProposalRow(
+        uint Epoch, int ContractIndex, ulong ProposalTick, int ProposalIndex,
+        int ProposalType, int ProposalClass, int OptionCount,
+        string ProposerIdentity, string Url, DateTime ProposalTime, string TxHash,
+        bool IsCancelled, int RevisionCount, ulong FirstTick, DateTime FirstTime,
+        string TransferDestination, long[] TransferAmounts, int TransferInEpochTargetEpoch,
+        ulong VariableId, long[] VariableValues,
+        long VariableScalarMin, long VariableScalarMax, long VariableScalarProposed,
+        bool IsSubscription, int SubscriptionWeeksPerPeriod,
+        ulong SubscriptionAmountPerPeriod, long SubscriptionNumberOfPeriods, long SubscriptionStartEpoch
+    );
+
+    /// <summary>
+    /// LIST view — dedupe by proposer using argMax(_, proposal_tick) so the
+    /// latest SetProposal wins. RevisionCount = number of SetProposal txs from
+    /// this proposer in this epoch (edits + eventual cancellation). FirstTick /
+    /// FirstTime describe when the proposer originally submitted.
+    /// </summary>
+    private async Task<List<ProposalRow>> LoadProposalsAsync(uint epoch, int contractFilter, CancellationToken ct)
+    {
+        var list = new List<ProposalRow>();
+        await using var cmd = _connection.CreateCommand();
+        var where = new List<string> { "epoch = {epoch:UInt32}" };
+        if (contractFilter > 0) where.Add("contract_index = {contract:UInt16}");
+        // NB: every aggregate alias must be DISTINCT from the raw column name.
+        // ClickHouse resolves SELECT-list aliases when parsing subsequent
+        // expressions, so `argMax(proposal_time, proposal_tick) AS proposal_time`
+        // becomes `argMax(argMax(...), proposal_tick)` on re-resolution →
+        // ILLEGAL_AGGREGATION. We prefix every aggregate output with `l_` in the
+        // inner subquery, then rename back to the original name in the outer
+        // projection so the C# reader still finds the expected columns.
+        cmd.CommandText = $@"
+            SELECT epoch, contract_index, proposer_identity,
+                   l_proposal_tick AS proposal_tick,
+                   l_proposal_index AS proposal_index,
+                   l_proposal_type AS proposal_type,
+                   l_proposal_class AS proposal_class,
+                   l_option_count AS option_count,
+                   l_url AS url,
+                   l_proposal_time AS proposal_time,
+                   l_tx_hash AS tx_hash,
+                   l_is_cancelled AS is_cancelled,
+                   revision_count,
+                   first_tick,
+                   first_time,
+                   l_transfer_destination AS transfer_destination,
+                   l_transfer_amounts AS transfer_amounts,
+                   l_transfer_in_epoch_target_epoch AS transfer_in_epoch_target_epoch,
+                   l_variable_id AS variable_id,
+                   l_variable_values AS variable_values,
+                   l_variable_scalar_min AS variable_scalar_min,
+                   l_variable_scalar_max AS variable_scalar_max,
+                   l_variable_scalar_proposed AS variable_scalar_proposed,
+                   l_is_subscription AS is_subscription,
+                   l_subscription_weeks_per_period AS subscription_weeks_per_period,
+                   l_subscription_amount_per_period AS subscription_amount_per_period,
+                   l_subscription_number_of_periods AS subscription_number_of_periods,
+                   l_subscription_start_epoch AS subscription_start_epoch
+            FROM (
+                SELECT epoch, contract_index, proposer_identity,
+                       max(proposal_tick) AS l_proposal_tick,
+                       argMax(proposal_index, proposal_tick) AS l_proposal_index,
+                       argMax(proposal_type, proposal_tick) AS l_proposal_type,
+                       argMax(proposal_class, proposal_tick) AS l_proposal_class,
+                       argMax(option_count, proposal_tick) AS l_option_count,
+                       argMax(url, proposal_tick) AS l_url,
+                       argMax(proposal_time, proposal_tick) AS l_proposal_time,
+                       argMax(tx_hash, proposal_tick) AS l_tx_hash,
+                       argMax(is_cancelled, proposal_tick) AS l_is_cancelled,
+                       count() AS revision_count,
+                       min(proposal_tick) AS first_tick,
+                       min(proposal_time) AS first_time,
+                       argMax(transfer_destination, proposal_tick) AS l_transfer_destination,
+                       argMax(transfer_amounts, proposal_tick) AS l_transfer_amounts,
+                       argMax(transfer_in_epoch_target_epoch, proposal_tick) AS l_transfer_in_epoch_target_epoch,
+                       argMax(variable_id, proposal_tick) AS l_variable_id,
+                       argMax(variable_values, proposal_tick) AS l_variable_values,
+                       argMax(variable_scalar_min, proposal_tick) AS l_variable_scalar_min,
+                       argMax(variable_scalar_max, proposal_tick) AS l_variable_scalar_max,
+                       argMax(variable_scalar_proposed, proposal_tick) AS l_variable_scalar_proposed,
+                       argMax(is_subscription, proposal_tick) AS l_is_subscription,
+                       argMax(subscription_weeks_per_period, proposal_tick) AS l_subscription_weeks_per_period,
+                       argMax(subscription_amount_per_period, proposal_tick) AS l_subscription_amount_per_period,
+                       argMax(subscription_number_of_periods, proposal_tick) AS l_subscription_number_of_periods,
+                       argMax(subscription_start_epoch, proposal_tick) AS l_subscription_start_epoch
+                FROM proposals FINAL
+                WHERE {string.Join(" AND ", where)}
+                GROUP BY epoch, contract_index, proposer_identity
+            )
+            ORDER BY proposal_tick ASC";
+        AddParam(cmd, "epoch", epoch);
+        if (contractFilter > 0) AddParam(cmd, "contract", (ushort)contractFilter);
+        return await ReadProposalsAsync(cmd, ct);
+    }
+
+    /// <summary>
+    /// DETAIL view — one specific SetProposal by proposal_tick. Does NOT dedupe
+    /// (that would collapse an old revision into the latest, which is not what
+    /// a permalink to a specific tick should do). RevisionCount is computed
+    /// against the same-epoch/contract/proposer siblings so the detail page can
+    /// still show "revision 2 of 4".
+    /// </summary>
+    private async Task<ProposalRow?> LoadProposalByTickAsync(uint epoch, int contractIndex, ulong proposalTick, CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            WITH p AS (
+                SELECT * FROM proposals FINAL
+                WHERE epoch = {epoch:UInt32}
+                  AND contract_index = {contract:UInt16}
+                  AND proposal_tick = {tick:UInt64}
+                LIMIT 1
+            ),
+            siblings AS (
+                SELECT count() AS revision_count,
+                       min(proposal_tick) AS first_tick,
+                       min(proposal_time) AS first_time
+                FROM proposals FINAL
+                WHERE (epoch, contract_index, proposer_identity) IN
+                      (SELECT epoch, contract_index, proposer_identity FROM p)
+            )
+            SELECT p.epoch, p.contract_index, p.proposal_tick, p.proposal_index,
+                   p.proposal_type, p.proposal_class, p.option_count,
+                   p.proposer_identity, p.url, p.proposal_time, p.tx_hash,
+                   p.is_cancelled,
+                   siblings.revision_count, siblings.first_tick, siblings.first_time,
+                   p.transfer_destination, p.transfer_amounts, p.transfer_in_epoch_target_epoch,
+                   p.variable_id, p.variable_values,
+                   p.variable_scalar_min, p.variable_scalar_max, p.variable_scalar_proposed,
+                   p.is_subscription, p.subscription_weeks_per_period,
+                   p.subscription_amount_per_period, p.subscription_number_of_periods,
+                   p.subscription_start_epoch
+            FROM p, siblings";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "contract", (ushort)contractIndex);
+        AddParam(cmd, "tick", proposalTick);
+        var rows = await ReadProposalsAsync(cmd, ct);
+        return rows.FirstOrDefault();
+    }
+
+    private static async Task<List<ProposalRow>> ReadProposalsAsync(System.Data.Common.DbCommand cmd, CancellationToken ct)
+    {
+        var list = new List<ProposalRow>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        // Both queries above project the same column order:
+        //   epoch, contract_index, proposal_tick, proposal_index,
+        //   proposal_type, proposal_class, option_count,
+        //   proposer_identity (LIST puts this in GROUP BY; DETAIL selects it),
+        //   url, proposal_time, tx_hash,
+        //   is_cancelled, revision_count, first_tick, first_time,
+        //   transfer_destination, transfer_amounts, transfer_in_epoch_target_epoch,
+        //   variable_id, variable_values,
+        //   variable_scalar_min, variable_scalar_max, variable_scalar_proposed,
+        //   is_subscription, subscription_weeks_per_period,
+        //   subscription_amount_per_period, subscription_number_of_periods,
+        //   subscription_start_epoch
+        // But the LIST query groups by proposer_identity, so its projection order is:
+        //   epoch, contract_index, proposer_identity, proposal_tick, ...
+        // We fix that by reading columns positionally per-query type below —
+        // both entrypoints call this helper with matching argument order via
+        // an explicit column list in a moment. For now: read by field name
+        // to sidestep any ordering mismatch.
+        var idxMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < reader.FieldCount; i++) idxMap[reader.GetName(i)] = i;
+
+        int Col(string name) => idxMap[name];
+
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(new ProposalRow(
+                Epoch: reader.GetFieldValue<uint>(Col("epoch")),
+                ContractIndex: reader.GetFieldValue<ushort>(Col("contract_index")),
+                ProposalTick: reader.GetFieldValue<ulong>(Col("proposal_tick")),
+                ProposalIndex: reader.GetFieldValue<ushort>(Col("proposal_index")),
+                ProposalType: reader.GetFieldValue<ushort>(Col("proposal_type")),
+                ProposalClass: reader.GetFieldValue<ushort>(Col("proposal_class")),
+                OptionCount: reader.GetFieldValue<byte>(Col("option_count")),
+                ProposerIdentity: reader.GetString(Col("proposer_identity")),
+                Url: reader.GetString(Col("url")),
+                ProposalTime: reader.GetDateTime(Col("proposal_time")),
+                TxHash: reader.GetString(Col("tx_hash")),
+                IsCancelled: reader.GetFieldValue<byte>(Col("is_cancelled")) != 0,
+                RevisionCount: (int)reader.GetFieldValue<ulong>(Col("revision_count")),
+                FirstTick: reader.GetFieldValue<ulong>(Col("first_tick")),
+                FirstTime: reader.GetDateTime(Col("first_time")),
+                TransferDestination: reader.GetString(Col("transfer_destination")),
+                TransferAmounts: ReadLongArray(reader.GetValue(Col("transfer_amounts"))),
+                TransferInEpochTargetEpoch: reader.GetFieldValue<ushort>(Col("transfer_in_epoch_target_epoch")),
+                VariableId: reader.GetFieldValue<ulong>(Col("variable_id")),
+                VariableValues: ReadLongArray(reader.GetValue(Col("variable_values"))),
+                VariableScalarMin: reader.GetFieldValue<long>(Col("variable_scalar_min")),
+                VariableScalarMax: reader.GetFieldValue<long>(Col("variable_scalar_max")),
+                VariableScalarProposed: reader.GetFieldValue<long>(Col("variable_scalar_proposed")),
+                IsSubscription: reader.GetFieldValue<byte>(Col("is_subscription")) != 0,
+                SubscriptionWeeksPerPeriod: reader.GetFieldValue<byte>(Col("subscription_weeks_per_period")),
+                SubscriptionAmountPerPeriod: reader.GetFieldValue<ulong>(Col("subscription_amount_per_period")),
+                SubscriptionNumberOfPeriods: reader.GetFieldValue<uint>(Col("subscription_number_of_periods")),
+                SubscriptionStartEpoch: reader.GetFieldValue<uint>(Col("subscription_start_epoch"))
+            ));
+        }
+        return list;
+    }
+
+    private static long[] ReadLongArray(object v)
+    {
+        if (v is long[] arr) return arr;
+        if (v is IEnumerable<object> seq) return seq.Select(Convert.ToInt64).ToArray();
+        return [];
+    }
+
+    private async Task<Dictionary<(int, ulong), ProposalResultDto>> LoadPersistedResultsAsync(uint epoch, int contractFilter, CancellationToken ct)
+    {
+        var map = new Dictionary<(int, ulong), ProposalResultDto>();
+        await using var cmd = _connection.CreateCommand();
+        var where = new List<string> { "epoch = {epoch:UInt32}" };
+        if (contractFilter > 0) where.Add("contract_index = {contract:UInt16}");
+        cmd.CommandText = $@"
+            SELECT contract_index, proposal_tick,
+                   total_authorized, total_casted, option_counts,
+                   yes_count, no_count, winning_option,
+                   threshold_met, is_committed,
+                   transfer_verified, transfer_verification_tx
+            FROM proposal_results FINAL
+            WHERE {string.Join(" AND ", where)}";
+        AddParam(cmd, "epoch", epoch);
+        if (contractFilter > 0) AddParam(cmd, "contract", (ushort)contractFilter);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var contract = reader.GetFieldValue<ushort>(0);
+            var tick = reader.GetFieldValue<ulong>(1);
+            var winning = reader.GetFieldValue<byte>(7);
+            map[(contract, tick)] = new ProposalResultDto(
+                TotalAuthorized: reader.GetFieldValue<uint>(2),
+                TotalCasted: reader.GetFieldValue<uint>(3),
+                OptionCounts: ReadUIntArrayAsLong(reader.GetValue(4)),
+                YesCount: reader.GetFieldValue<uint>(5),
+                NoCount: reader.GetFieldValue<uint>(6),
+                WinningOption: winning == 0xff ? null : winning,
+                ThresholdMet: reader.GetFieldValue<byte>(8) != 0,
+                IsCommitted: reader.GetFieldValue<byte>(9) != 0,
+                TransferVerified: reader.GetFieldValue<byte>(10) != 0,
+                TransferVerificationTx: reader.GetString(11) is var t && string.IsNullOrEmpty(t) ? null : t,
+                IsLiveTally: false
+            );
+        }
+        return map;
+    }
+
+    private static long[] ReadUIntArrayAsLong(object v)
+    {
+        if (v is uint[] u) return u.Select(x => (long)x).ToArray();
+        if (v is IEnumerable<object> seq) return seq.Select(Convert.ToInt64).ToArray();
+        return [];
+    }
+
+    /// <summary>Compute a tally on the fly from proposal_votes — used for the current (open) epoch.</summary>
+    private async Task<ProposalResultDto> ComputeLiveTallyAsync(uint epoch, int contractIndex, ulong proposalTick, CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            WITH latest AS (
+                SELECT voter_identity,
+                       argMax(option, tick_number) AS option,
+                       argMax(is_withdraw, tick_number) AS is_withdraw
+                FROM proposal_votes
+                WHERE epoch = {epoch:UInt32}
+                  AND contract_index = {contract:UInt16}
+                  AND proposal_tick = {tick:UInt64}
+                GROUP BY voter_identity
+            )
+            SELECT option, is_withdraw FROM latest";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "contract", (ushort)contractIndex);
+        AddParam(cmd, "tick", proposalTick);
+
+        var counts = new Dictionary<int, int>();
+        int totalCasted = 0;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var isWithdraw = reader.GetFieldValue<byte>(1) != 0;
+            if (isWithdraw) continue;
+            var opt = reader.GetFieldValue<byte>(0);
+            counts[opt] = counts.GetValueOrDefault(opt) + 1;
+            totalCasted++;
+        }
+
+        var maxOpt = counts.Count > 0 ? counts.Keys.Max() : -1;
+        var optArr = new long[maxOpt + 1];
+        for (int i = 0; i <= maxOpt; i++) optArr[i] = counts.GetValueOrDefault(i);
+
+        int? winning = null;
+        int winningCount = 0;
+        for (int i = 0; i < optArr.Length; i++)
+            if (optArr[i] > winningCount) { winningCount = (int)optArr[i]; winning = i; }
+
+        var thresholdMet = totalCasted >= 451;
+        var yes = optArr.ElementAtOrDefault(1);
+        var no = optArr.ElementAtOrDefault(0);
+
+        bool isCommitted;
+        if (contractIndex == 8)
+            isCommitted = thresholdMet && yes >= no && yes > 225;
+        else
+            isCommitted = thresholdMet && winning is > 0 && winningCount > 225;
+
+        return new ProposalResultDto(
+            TotalAuthorized: 676,
+            TotalCasted: totalCasted,
+            OptionCounts: optArr,
+            YesCount: yes,
+            NoCount: no,
+            WinningOption: winning,
+            ThresholdMet: thresholdMet,
+            IsCommitted: isCommitted,
+            TransferVerified: false,
+            TransferVerificationTx: null,
+            IsLiveTally: true
+        );
+    }
+
+    private async Task<List<ProposalVoteDto>> LoadVotesAsync(uint epoch, int contractIndex, ulong proposalTick,
+        Dictionary<string, string> ownership, CancellationToken ct)
+    {
+        var list = new List<ProposalVoteDto>();
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT voter_identity, computor_index, tick_number, timestamp,
+                   vote_value, is_withdraw, option, tx_hash
+            FROM proposal_votes
+            WHERE epoch = {epoch:UInt32}
+              AND contract_index = {contract:UInt16}
+              AND proposal_tick = {tick:UInt64}
+            ORDER BY tick_number ASC, voter_identity ASC";
+        AddParam(cmd, "epoch", epoch);
+        AddParam(cmd, "contract", (ushort)contractIndex);
+        AddParam(cmd, "tick", proposalTick);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var voter = reader.GetString(0);
+            int? computorIndex = reader.IsDBNull(1) ? null : reader.GetFieldValue<ushort>(1);
+            ownership.TryGetValue(voter, out var owner);
+            list.Add(new ProposalVoteDto(
+                VoterIdentity: voter,
+                ComputorIndex: computorIndex,
+                Owner: owner,
+                TickNumber: reader.GetFieldValue<ulong>(2),
+                Timestamp: reader.GetDateTime(3),
+                VoteValue: reader.GetFieldValue<long>(4),
+                IsWithdraw: reader.GetFieldValue<byte>(5) != 0,
+                Option: reader.GetFieldValue<byte>(6),
+                TxHash: reader.GetString(7)
+            ));
+        }
+        return list;
+    }
+
+    /// <summary>Latest-vote-per-voter bucketed to the hour; option counts per bucket.</summary>
+    private static List<ProposalVoteTimeBucketDto> BuildTimeline(List<ProposalVoteDto> votes)
+    {
+        // Latest vote per voter
+        var latest = votes
+            .GroupBy(v => v.VoterIdentity)
+            .Select(g => g.OrderByDescending(v => v.TickNumber).First())
+            .Where(v => !v.IsWithdraw)
+            .ToList();
+        var maxOpt = latest.Count > 0 ? latest.Max(v => v.Option) : 0;
+        return latest
+            .GroupBy(v => new DateTime(v.Timestamp.Year, v.Timestamp.Month, v.Timestamp.Day, v.Timestamp.Hour, 0, 0, DateTimeKind.Utc))
+            .OrderBy(g => g.Key)
+            .Select(g =>
+            {
+                var arr = new int[maxOpt + 1];
+                foreach (var v in g) arr[v.Option]++;
+                return new ProposalVoteTimeBucketDto(g.Key, g.Count(), arr);
+            })
+            .ToList();
+    }
+
+    private static ProposalOwnerMatrixDto BuildOwnerMatrix(List<ProposalVoteDto> votes, Dictionary<string, string> ownership, int optionCount)
+    {
+        // "Latest per voter" then bucket by owner. Voters with no owner label
+        // get grouped as their identity — otherwise anonymous computors would
+        // all merge into an unhelpful "" row.
+        var latest = votes
+            .GroupBy(v => v.VoterIdentity)
+            .Select(g => g.OrderByDescending(v => v.TickNumber).First())
+            .ToList();
+
+        // Total voter roster per owner (over the epoch) = distinct voters that appeared at all
+        var byOwner = latest
+            .GroupBy(v => v.Owner ?? v.VoterIdentity)
+            .Select(g =>
+            {
+                var arr = new int[Math.Max(2, optionCount)];
+                int withdrawn = 0;
+                foreach (var v in g)
+                {
+                    if (v.IsWithdraw) withdrawn++;
+                    else if (v.Option < arr.Length) arr[v.Option]++;
+                }
+                return new ProposalOwnerMatrixCellDto(
+                    Owner: g.Key,
+                    ComputorCount: g.Count(),
+                    OptionCounts: arr,
+                    NotVoted: 0, // we only see voters, not the roster; kept for future
+                    Withdrawn: withdrawn
+                );
+            })
+            .OrderByDescending(r => r.OptionCounts.Sum() + r.Withdrawn)
+            .ToList();
+
+        return new ProposalOwnerMatrixDto(byOwner, Math.Max(2, optionCount));
+    }
+
+    private ProposalSummaryDto BuildSummary(ProposalRow p, ProposalResultDto? result,
+        AddressLabelService labels, Dictionary<string, string> ownership)
+    {
+        ownership.TryGetValue(p.ProposerIdentity, out var proposerOwner);
+        string? destLabel = null;
+        if (!string.IsNullOrEmpty(p.TransferDestination))
+            destLabel = labels.GetLabel(p.TransferDestination);
+        return new ProposalSummaryDto(
+            Epoch: p.Epoch,
+            ContractIndex: p.ContractIndex,
+            ContractName: ContractName(p.ContractIndex),
+            ProposalTick: p.ProposalTick,
+            ProposalIndex: p.ProposalIndex == 0xffff ? -1 : p.ProposalIndex,
+            ProposalType: p.ProposalType,
+            ProposalClass: p.ProposalClass,
+            ProposalClassName: ClassName(p.ProposalClass),
+            OptionCount: p.OptionCount,
+            ProposerIdentity: p.ProposerIdentity,
+            ProposerOwner: proposerOwner,
+            Url: p.Url,
+            ProposalTime: p.ProposalTime,
+            TxHash: p.TxHash,
+            IsCancelled: p.IsCancelled,
+            RevisionCount: p.RevisionCount,
+            FirstProposalTick: p.FirstTick,
+            FirstProposalTime: p.FirstTime,
+            TransferDestination: string.IsNullOrEmpty(p.TransferDestination) ? null : p.TransferDestination,
+            TransferDestinationLabel: destLabel,
+            TransferAmounts: p.TransferAmounts,
+            TransferInEpochTargetEpoch: p.TransferInEpochTargetEpoch,
+            VariableId: p.VariableId,
+            VariableValues: p.VariableValues,
+            VariableScalarMin: p.VariableScalarMin,
+            VariableScalarMax: p.VariableScalarMax,
+            VariableScalarProposed: p.VariableScalarProposed,
+            IsSubscription: p.IsSubscription,
+            SubscriptionWeeksPerPeriod: p.SubscriptionWeeksPerPeriod,
+            SubscriptionAmountPerPeriod: p.SubscriptionAmountPerPeriod,
+            SubscriptionNumberOfPeriods: p.SubscriptionNumberOfPeriods,
+            SubscriptionStartEpoch: p.SubscriptionStartEpoch,
+            Result: result
+        );
+    }
+
+    private async Task<uint> GetCurrentEpochScalarAsync(CancellationToken ct)
+    {
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT max(epoch) FROM ticks";
+        var r = await cmd.ExecuteScalarAsync(ct);
+        return r == null || r == DBNull.Value ? 0u : Convert.ToUInt32(r);
+    }
 }

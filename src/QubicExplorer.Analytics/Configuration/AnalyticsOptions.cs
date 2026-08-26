@@ -36,6 +36,11 @@ public class AnalyticsOptions
     /// Powers the /by-owner and /owners/{epoch} endpoints.
     /// </summary>
     public bool EnableComputorOwnership { get; set; } = true;
+    /// <summary>
+    /// Ingest GQMPROP + CCF SetProposal/Vote transactions and tally results at
+    /// epoch close. Powers the /analytics/proposals page.
+    /// </summary>
+    public bool EnableProposals { get; set; } = true;
 
     /// <summary>Interval (minutes) between contract reserve snapshots.</summary>
     public int ContractReserveSnapshotIntervalMinutes { get; set; } = 10;

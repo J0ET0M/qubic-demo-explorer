@@ -1370,3 +1370,123 @@ public record OwnerDetailDto(
     double AvgRevenue,
     OwnerComputorDto[] Computors
 );
+
+// ── Proposals analytics (GQMPROP + CCF) ────────────────────────────────
+
+/// <summary>
+/// A proposal as decoded from a SetProposal transaction, plus its epoch-close tally
+/// (from proposal_results when the epoch is closed; live tally when it isn't).
+/// </summary>
+public record ProposalSummaryDto(
+    uint Epoch,
+    int ContractIndex,        // 6=GQMPROP, 8=CCF
+    string ContractName,      // "GQMPROP" | "CCF"
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString)] ulong ProposalTick,
+    int ProposalIndex,        // 0..N or 0xffff if unknown
+    int ProposalType,
+    int ProposalClass,        // 0x0000..0x0400
+    string ProposalClassName, // "GeneralOptions" | "Transfer" | ...
+    int OptionCount,
+    string ProposerIdentity,
+    string? ProposerOwner,    // enriched from computor_ownership
+    string Url,
+    DateTime ProposalTime,
+    string TxHash,
+    // Revision/lifecycle metadata — this proposal shown as its latest state,
+    // but proposers can edit and cancel their slot with subsequent SetProposal txs.
+    bool IsCancelled,         // latest state is a slot-clear (payload epoch=0)
+    int RevisionCount,        // total SetProposal txs by this proposer this epoch (>=1)
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString)] ulong FirstProposalTick,
+    DateTime FirstProposalTime,
+    // Decoded payload — only relevant fields populated per class
+    string? TransferDestination,
+    string? TransferDestinationLabel,     // human label from bundle if known
+    long[] TransferAmounts,               // in qus (CCF) or millionths (GQMPROP)
+    int TransferInEpochTargetEpoch,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString)] ulong VariableId,
+    long[] VariableValues,
+    long VariableScalarMin,
+    long VariableScalarMax,
+    long VariableScalarProposed,
+    bool IsSubscription,
+    int SubscriptionWeeksPerPeriod,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString)] ulong SubscriptionAmountPerPeriod,
+    long SubscriptionNumberOfPeriods,
+    long SubscriptionStartEpoch,
+    // Result
+    ProposalResultDto? Result
+);
+
+public record ProposalResultDto(
+    long TotalAuthorized,
+    long TotalCasted,
+    long[] OptionCounts,
+    long YesCount,
+    long NoCount,
+    int? WinningOption,       // null if no winner
+    bool ThresholdMet,
+    bool IsCommitted,
+    bool TransferVerified,
+    string? TransferVerificationTx,
+    // For open epochs the result is a "live tally", not persisted
+    bool IsLiveTally
+);
+
+public record ProposalListDto(
+    uint Epoch,
+    long TotalCount,
+    List<ProposalSummaryDto> Items
+);
+
+/// <summary>
+/// One vote row as displayed on the detail page. `TimestampBucket` is a coarse
+/// hourly bucket the frontend uses for clustering; we send the exact timestamp
+/// too so the client can re-bucket.
+/// </summary>
+public record ProposalVoteDto(
+    string VoterIdentity,
+    int? ComputorIndex,
+    string? Owner,
+    [property: JsonNumberHandling(JsonNumberHandling.WriteAsString)] ulong TickNumber,
+    DateTime Timestamp,
+    long VoteValue,
+    bool IsWithdraw,
+    int Option,
+    string TxHash
+);
+
+/// <summary>
+/// Bucketed histogram of vote arrivals for the clustering chart.
+/// </summary>
+public record ProposalVoteTimeBucketDto(
+    DateTime BucketStart,     // hour-aligned UTC
+    int TotalVotes,
+    int[] OptionCounts        // parallel to overall option indices
+);
+
+/// <summary>
+/// Owner × option matrix cell (aggregated votes).
+/// </summary>
+public record ProposalOwnerMatrixCellDto(
+    string Owner,
+    int ComputorCount,        // computors this owner controls this epoch
+    int[] OptionCounts,       // votes per option
+    int NotVoted,             // computors owned but didn't cast
+    int Withdrawn             // owned computors that voted then withdrew
+);
+
+public record ProposalOwnerMatrixDto(
+    List<ProposalOwnerMatrixCellDto> Rows,
+    int OptionCount           // for parallel columns
+);
+
+public record ProposalDetailDto(
+    ProposalSummaryDto Summary,
+    List<ProposalVoteDto> Votes,
+    List<ProposalVoteTimeBucketDto> Timeline,
+    ProposalOwnerMatrixDto OwnerMatrix
+);
+
+public record ProposalsEpochsDto(
+    List<uint> Epochs
+);

@@ -1121,6 +1121,134 @@ public static class ClickHouseSchema
         PARTITION BY epoch
         ORDER BY (epoch, query_id, computor_index)
         """,
+
+        // ==================================================================
+        // Proposals (GQMPROP + CCF)
+        // ==================================================================
+
+        // One row PER SetProposal TRANSACTION — all revisions preserved. Modeling
+        // proposals as a tx sequence is important: a proposer can submit multiple
+        // SetProposals to the same slot (edits) or clear the slot entirely by
+        // sending SetProposal with payload epoch=0 (cancellation). The list view
+        // dedupes by (epoch, contract, proposer) at query time using argMax to
+        // show the current state; the detail view can walk the full history.
+        //
+        // ORDER BY includes `proposer_identity` before `proposal_tick` so different
+        // proposers submitting in the same tick do NOT collide. Earlier versions
+        // keyed just on `proposal_tick` and silently lost proposals when two hit
+        // the same tick.
+        // Type/class encoding follows qpi_proposals.h ProposalTypes.
+        //
+        // Union-shaped payload columns are stored flat and only populated for
+        // the relevant class — everything else defaults to zero/empty:
+        //   class == 0x0100 Transfer            → transfer_destination, transfer_amounts
+        //   class == 0x0200 Variable            → variable_id, variable_values (or *_scalar_*)
+        //   class == 0x0300 MultiVariables      → variable_id (packed), variable_values
+        //   class == 0x0400 TransferInEpoch     → transfer_destination, transfer_amounts[0],
+        //                                          transfer_in_epoch_target_epoch
+        // CCF-only extension (SetProposal_input wraps ProposalDataYesNo with
+        // subscription fields):
+        //   is_subscription, subscription_weeks_per_period, subscription_amount_per_period,
+        //   subscription_number_of_periods, subscription_start_epoch
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.proposals (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            contract_index UInt16 CODEC(LZ4),         -- 6=GQMPROP, 8=CCF
+            proposal_tick UInt64 CODEC(DoubleDelta, LZ4),  -- primary key with (epoch, contract)
+            proposal_index UInt16 CODEC(LZ4),         -- contract-assigned slot; best-effort (0xffff = unknown pre-reconciliation)
+            proposal_type UInt16 CODEC(LZ4),          -- packed class|optionCount
+            proposal_class UInt16 CODEC(LZ4),         -- upper byte of type: 0x0000/0x0100/0x0200/0x0300/0x0400
+            option_count UInt8 CODEC(LZ4),            -- lower byte; 0 = scalar
+            proposer_identity String CODEC(LZ4HC),    -- 60-char identity of tx sender (part of ORDER BY key)
+            url String CODEC(LZ4HC),                  -- UTF-8, trimmed to first NUL (max 256 bytes)
+            proposal_time DateTime64(3) CODEC(Delta, LZ4),
+            tx_hash String CODEC(LZ4HC),
+
+            is_cancelled UInt8 CODEC(LZ4),            -- 1 when payload epoch=0 → proposer cleared their slot
+
+            transfer_destination String CODEC(LZ4HC),     -- 60-char identity ('' if not transfer)
+            transfer_amounts Array(Int64) CODEC(LZ4),     -- [] if not transfer; 1..4 entries
+            transfer_in_epoch_target_epoch UInt16 CODEC(LZ4),
+
+            variable_id UInt64 CODEC(LZ4),
+            variable_values Array(Int64) CODEC(LZ4),
+            variable_scalar_min Int64 CODEC(LZ4),
+            variable_scalar_max Int64 CODEC(LZ4),
+            variable_scalar_proposed Int64 CODEC(LZ4),
+
+            is_subscription UInt8 CODEC(LZ4),                     -- CCF only
+            subscription_weeks_per_period UInt8 CODEC(LZ4),
+            subscription_amount_per_period UInt64 CODEC(LZ4),
+            subscription_number_of_periods UInt32 CODEC(LZ4),
+            subscription_start_epoch UInt32 CODEC(LZ4),
+
+            raw_input_hex String CODEC(LZ4HC),                    -- for future re-decoding
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, contract_index, proposer_identity, proposal_tick)
+        """,
+
+        // One row per Vote transaction. Voter identity is the tx sender; when
+        // the sender maps to a computor in the epoch's computor set we also
+        // record the 0..675 index. proposal_index/type/tick echo the wire vote
+        // payload (ProposalSingleVoteDataV1). vote_value: 0..N-1 = option
+        // (0 = "no change"), NO_VOTE_VALUE (0x8000000000000000) = withdraw,
+        // otherwise scalar value.
+        //
+        // Multiple votes by the same voter are kept — ReplacingMergeTree does not
+        // dedupe them because tick_number is part of the ORDER BY. The results
+        // service picks the LATEST (max tick_number) per voter when tallying.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.proposal_votes (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            contract_index UInt16 CODEC(LZ4),
+            proposal_tick UInt64 CODEC(DoubleDelta, LZ4),         -- joins to proposals(proposal_tick)
+            proposal_index UInt16 CODEC(LZ4),                     -- from vote payload
+            proposal_type UInt16 CODEC(LZ4),
+            voter_identity String CODEC(LZ4HC),
+            computor_index Nullable(UInt16) CODEC(LZ4),
+            tick_number UInt64 CODEC(DoubleDelta, LZ4),
+            timestamp DateTime64(3) CODEC(Delta, LZ4),
+            vote_value Int64 CODEC(LZ4),
+            is_withdraw UInt8 CODEC(LZ4),
+            option UInt8 CODEC(LZ4),                              -- when non-scalar; 0 if withdraw/scalar
+            tx_hash String CODEC(LZ4HC),
+            created_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, contract_index, proposal_tick, voter_identity, tick_number)
+        """,
+
+        // One row per (epoch, contract_index, proposal_index) written by
+        // ProposalResultsService after the epoch closes. Tallies are computed
+        // from proposal_votes (latest vote per voter wins). `is_committed` is
+        // the C++ threshold rule: GQMPROP → total_casted>=451 AND winning>225
+        // AND winning_option>0 AND class in (Transfer, TransferInEpoch);
+        // CCF   → total_casted>=451 AND yes>=no AND yes>225.
+        // `transfer_verified` = for CCF only, we found a matching QUBIC
+        // transfer near the finalization tick.
+        $"""
+        CREATE TABLE IF NOT EXISTS {DatabaseName}.proposal_results (
+            epoch UInt32 CODEC(DoubleDelta, LZ4),
+            contract_index UInt16 CODEC(LZ4),
+            proposal_tick UInt64 CODEC(DoubleDelta, LZ4),
+            proposal_index UInt16 CODEC(LZ4),             -- from votes; 0xffff if no votes
+            total_authorized UInt32 CODEC(LZ4),           -- always 676
+            total_casted UInt32 CODEC(LZ4),
+            option_counts Array(UInt32) CODEC(LZ4),       -- indexed by option
+            yes_count UInt32 CODEC(LZ4),                  -- convenience for YesNo
+            no_count UInt32 CODEC(LZ4),
+            winning_option UInt8 CODEC(LZ4),              -- 0xff = no winner
+            threshold_met UInt8 CODEC(LZ4),
+            is_committed UInt8 CODEC(LZ4),
+            transfer_verified UInt8 CODEC(LZ4),           -- CCF: found matching tx; else 0
+            transfer_verification_tx String CODEC(LZ4HC), -- tx hash of matched transfer, if any
+            snapshotted_at DateTime64(3) DEFAULT now64(3)
+        ) ENGINE = ReplacingMergeTree(snapshotted_at)
+        PARTITION BY epoch
+        ORDER BY (epoch, contract_index, proposal_tick)
+        """,
     ];
 
     /// <summary>

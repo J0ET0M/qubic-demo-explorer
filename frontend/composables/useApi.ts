@@ -407,6 +407,16 @@ export const useApi = () => {
   const getOracleQueryDetail = (epoch: number, queryId: string | number) =>
     fetchApi<OracleQueryDetailDto>(`/api/stats/oracle/${epoch}/query/${queryId}`)
 
+  // Proposals analytics (GQMPROP + CCF)
+  const getProposalsEpochs = () =>
+    fetchApi<ProposalsEpochsDto>(`/api/stats/proposals/epochs`)
+
+  const getProposalsForEpoch = (epoch: number, contract: 0 | 6 | 8 = 0) =>
+    fetchApi<ProposalListDto>(`/api/stats/proposals/${epoch}?contract=${contract}`)
+
+  const getProposalDetail = (epoch: number, contract: 6 | 8, proposalTick: string | number) =>
+    fetchApi<ProposalDetailDto>(`/api/stats/proposals/${epoch}/${contract}/${proposalTick}`)
+
   const getOracleComputorProfile = (
     epoch: number, computorIndex: number, limit = 100, offset = 0
   ) =>
@@ -545,6 +555,9 @@ export const useApi = () => {
     getOracleQueryList,
     getOracleQueryDetail,
     getOracleComputorProfile,
+    getProposalsEpochs,
+    getProposalsForEpoch,
+    getProposalDetail,
     getMinerFlowStats,
     getComputors,
     getFlowVisualization,
@@ -1844,4 +1857,110 @@ export type {
   TaxReportTransferDto,
   TaxReportMonthDto,
   TaxReportDto,
+  ProposalsEpochsDto,
+  ProposalListDto,
+  ProposalSummaryDto,
+  ProposalResultDto,
+  ProposalDetailDto,
+  ProposalVoteDto,
+  ProposalVoteTimeBucketDto,
+  ProposalOwnerMatrixDto,
+  ProposalOwnerMatrixCellDto,
+}
+
+// ── Proposals (GQMPROP + CCF) ─────────────────────────────────────────
+interface ProposalsEpochsDto { epochs: number[] }
+
+interface ProposalResultDto {
+  totalAuthorized: number
+  totalCasted: number
+  optionCounts: number[]
+  yesCount: number
+  noCount: number
+  winningOption: number | null
+  thresholdMet: boolean
+  isCommitted: boolean
+  transferVerified: boolean
+  transferVerificationTx: string | null
+  isLiveTally: boolean
+}
+
+interface ProposalSummaryDto {
+  epoch: number
+  contractIndex: number
+  contractName: string
+  proposalTick: string    // stringified ulong
+  proposalIndex: number
+  proposalType: number
+  proposalClass: number
+  proposalClassName: string
+  optionCount: number
+  proposerIdentity: string
+  proposerOwner: string | null
+  url: string
+  proposalTime: string
+  txHash: string
+  isCancelled: boolean
+  revisionCount: number
+  firstProposalTick: string
+  firstProposalTime: string
+  transferDestination: string | null
+  transferDestinationLabel: string | null
+  transferAmounts: number[]
+  transferInEpochTargetEpoch: number
+  variableId: string
+  variableValues: number[]
+  variableScalarMin: number
+  variableScalarMax: number
+  variableScalarProposed: number
+  isSubscription: boolean
+  subscriptionWeeksPerPeriod: number
+  subscriptionAmountPerPeriod: string
+  subscriptionNumberOfPeriods: number
+  subscriptionStartEpoch: number
+  result: ProposalResultDto | null
+}
+
+interface ProposalListDto {
+  epoch: number
+  totalCount: number
+  items: ProposalSummaryDto[]
+}
+
+interface ProposalVoteDto {
+  voterIdentity: string
+  computorIndex: number | null
+  owner: string | null
+  tickNumber: string
+  timestamp: string
+  voteValue: number
+  isWithdraw: boolean
+  option: number
+  txHash: string
+}
+
+interface ProposalVoteTimeBucketDto {
+  bucketStart: string
+  totalVotes: number
+  optionCounts: number[]
+}
+
+interface ProposalOwnerMatrixCellDto {
+  owner: string
+  computorCount: number
+  optionCounts: number[]
+  notVoted: number
+  withdrawn: number
+}
+
+interface ProposalOwnerMatrixDto {
+  rows: ProposalOwnerMatrixCellDto[]
+  optionCount: number
+}
+
+interface ProposalDetailDto {
+  summary: ProposalSummaryDto
+  votes: ProposalVoteDto[]
+  timeline: ProposalVoteTimeBucketDto[]
+  ownerMatrix: ProposalOwnerMatrixDto
 }

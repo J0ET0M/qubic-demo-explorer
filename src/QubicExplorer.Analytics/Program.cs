@@ -98,6 +98,11 @@ builder.Services.AddSingleton<ComputorOwnershipService>();
 // /owners endpoints and the epoch selector.
 builder.Services.AddSingleton<ComputorOwnerSummaryService>();
 
+// Proposals ingestion + result tallying (GQMPROP + CCF). Own loop via
+// ProposalProcessingService so it can't starve the snapshot pass.
+builder.Services.AddSingleton<ProposalIndexingService>();
+builder.Services.AddSingleton<ProposalResultsService>();
+
 // Analytics feature toggles
 builder.Services.Configure<QubicExplorer.Analytics.Configuration.AnalyticsOptions>(
     builder.Configuration.GetSection(QubicExplorer.Analytics.Configuration.AnalyticsOptions.SectionName));
@@ -109,6 +114,7 @@ builder.Services.AddHostedService<ContractReserveSnapshotService>();
 // analytics snapshot pass so its (potentially large) KP-verification backlog can
 // never starve computor revenue and the other snapshot steps.
 builder.Services.AddHostedService<OracleProcessingService>();
+builder.Services.AddHostedService<ProposalProcessingService>();
 
 // Add controllers (for admin endpoints)
 builder.Services.AddControllers();
@@ -139,6 +145,27 @@ var app = builder.Build();
     }
 
     logger.LogInformation("Schema initialization complete ({Count} statements)", statements.Count);
+
+    // Version-guarded migration for the proposals tables. Runs AFTER schema init
+    // so indexer_state exists; the migration itself drops the proposal tables
+    // (only when needed) then re-runs the schema pass so they get recreated
+    // with the current shape.
+    var proposalsChOptions = new ClickHouseOptions
+    {
+        Host = chOptions.Host, Port = chOptions.Port, Database = chOptions.Database,
+        Username = chOptions.Username, Password = chOptions.Password, UseCompression = chOptions.UseCompression
+    };
+    var migrationLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ProposalsSchemaMigration");
+    await ProposalsSchemaMigration.EnsureAsync(proposalsChOptions, migrationLogger, CancellationToken.None);
+
+    // Re-run schema pass so any tables the migration dropped get recreated. This
+    // is cheap — CREATE TABLE IF NOT EXISTS is a no-op for everything else.
+    foreach (var sql in statements)
+    {
+        await using var cmd = serverConn.CreateCommand();
+        cmd.CommandText = sql;
+        await cmd.ExecuteNonQueryAsync();
+    }
 }
 
 // Connect BobWebSocketClient at startup. Don't crash if every node is unavailable —
