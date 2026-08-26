@@ -2,6 +2,7 @@ using System.Data;
 using System.IO;
 using System.Net.Http;
 using System.Net.Sockets;
+using ClickHouse.Client;
 using ClickHouse.Client.ADO;
 using ClickHouse.Client.Copy;
 using Microsoft.Extensions.Options;
@@ -337,7 +338,7 @@ public class ClickHouseWriterService : IDisposable
 
                 return; // Success - exit the retry loop
             }
-            catch (Exception ex) when (attempt < maxRetries)
+            catch (Exception ex) when (attempt < maxRetries || IsClickHouseOverloaded(ex))
             {
                 // Transport errors (Connection reset, Broken pipe) leave the connection
                 // in a bad state even if .State == Open. Drop it so the next attempt
@@ -347,10 +348,26 @@ public class ClickHouseWriterService : IDisposable
                     InvalidateConnection();
                 }
 
-                var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt)); // Exponential backoff: 2s, 4s, 8s
-                _logger.LogWarning(ex,
-                    "Failed to flush batches (attempt {Attempt}/{MaxRetries}), retrying in {Delay}s...",
-                    attempt, maxRetries, delay.TotalSeconds);
+                // CANNOT_SCHEDULE_TASK (CH thread-pool exhaustion) is not fixable
+                // by giving up — throwing here would kill IndexerWorker and stop
+                // the whole ingest pipeline. Keep waiting on that specific error
+                // (long back-off so we don't add to the pressure), but still stop
+                // after `maxRetries` for everything else.
+                TimeSpan delay;
+                if (IsClickHouseOverloaded(ex))
+                {
+                    delay = TimeSpan.FromSeconds(Math.Min(300, 30 * attempt)); // 30s, 60s, 90s… capped at 5min
+                    _logger.LogWarning(
+                        "ClickHouse overloaded (CANNOT_SCHEDULE_TASK) flushing batches — attempt {Attempt}, waiting {Delay}s and holding batch in memory",
+                        attempt, delay.TotalSeconds);
+                }
+                else
+                {
+                    delay = TimeSpan.FromSeconds(Math.Pow(2, attempt)); // 2s, 4s, 8s
+                    _logger.LogWarning(ex,
+                        "Failed to flush batches (attempt {Attempt}/{MaxRetries}), retrying in {Delay}s...",
+                        attempt, maxRetries, delay.TotalSeconds);
+                }
                 await Task.Delay(delay, cancellationToken);
             }
             catch (Exception ex)
@@ -370,6 +387,21 @@ public class ClickHouseWriterService : IDisposable
         for (var e = ex; e != null; e = e.InnerException)
         {
             if (e is HttpRequestException or IOException or SocketException) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// True when the exception indicates ClickHouse ran out of background threads
+    /// (Code 439, CANNOT_SCHEDULE_TASK). Retrying rapidly makes it worse — the
+    /// caller should back off longer and NOT give up (giving up kills the worker).
+    /// </summary>
+    private static bool IsClickHouseOverloaded(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is ClickHouseServerException chEx && chEx.ErrorCode == 439) return true;
+            if (e.Message.Contains("CANNOT_SCHEDULE_TASK", StringComparison.Ordinal)) return true;
         }
         return false;
     }

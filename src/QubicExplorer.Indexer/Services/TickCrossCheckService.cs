@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ClickHouse.Client;
 using ClickHouse.Client.ADO;
 using Microsoft.Extensions.Options;
 using Qubic.Bob;
@@ -83,9 +84,28 @@ public class TickCrossCheckService : BackgroundService
                 catch (Exception ex)
                 {
                     consecutiveFailures++;
-                    _logger.LogError(ex,
-                        "Cross-check error (consecutive #{Count}); resetting ClickHouse connection and retrying in 30s",
-                        consecutiveFailures);
+
+                    // ClickHouse under thread-pool pressure returns Code 439
+                    // (CANNOT_SCHEDULE_TASK). Retrying every 30s just piles on
+                    // more work and keeps CH pinned — back off much longer so it
+                    // can recover.
+                    var overloaded = IsClickHouseOverloaded(ex);
+                    var retryDelay = overloaded
+                        ? TimeSpan.FromMinutes(5)
+                        : TimeSpan.FromSeconds(30);
+
+                    if (overloaded)
+                    {
+                        _logger.LogWarning(
+                            "ClickHouse overloaded (CANNOT_SCHEDULE_TASK, consecutive #{Count}); backing off {Delay} to let it recover",
+                            consecutiveFailures, retryDelay);
+                    }
+                    else
+                    {
+                        _logger.LogError(ex,
+                            "Cross-check error (consecutive #{Count}); resetting ClickHouse connection and retrying in {Delay}",
+                            consecutiveFailures, retryDelay);
+                    }
 
                     // Dispose the potentially-wedged connection and open a fresh one.
                     // Swallow dispose errors — the connection is already suspect.
@@ -96,7 +116,9 @@ public class TickCrossCheckService : BackgroundService
                     }
                     catch (Exception reopenEx)
                     {
-                        _logger.LogError(reopenEx, "Failed to reopen ClickHouse connection; will retry in 30s");
+                        _logger.LogWarning(
+                            "Failed to reopen ClickHouse connection ({Reason}); will retry after backoff",
+                            reopenEx.Message);
                     }
 
                     // Escalate to CRITICAL after sustained failure so it stops
@@ -108,7 +130,7 @@ public class TickCrossCheckService : BackgroundService
                             consecutiveFailures);
                     }
 
-                    await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+                    await Task.Delay(retryDelay, stoppingToken);
                 }
             }
         }
@@ -123,6 +145,21 @@ public class TickCrossCheckService : BackgroundService
         var conn = new ClickHouseConnection(_clickHouseOptions.ConnectionString);
         await conn.OpenAsync(ct);
         return conn;
+    }
+
+    /// <summary>
+    /// True when the exception (or one of its inners) indicates ClickHouse ran out
+    /// of background threads (Code 439, CANNOT_SCHEDULE_TASK). Also matches the
+    /// message text as a safety net in case the exception type doesn't surface.
+    /// </summary>
+    private static bool IsClickHouseOverloaded(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is ClickHouseServerException chEx && chEx.ErrorCode == 439) return true;
+            if (e.Message.Contains("CANNOT_SCHEDULE_TASK", StringComparison.Ordinal)) return true;
+        }
+        return false;
     }
 
     private async Task RunCrossCheckLoopAsync(ClickHouseConnection connection, CancellationToken ct)

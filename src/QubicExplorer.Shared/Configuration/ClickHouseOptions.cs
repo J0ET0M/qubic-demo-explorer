@@ -10,10 +10,24 @@ public class ClickHouseOptions
     public string? Username { get; set; }
     public string? Password { get; set; }
 
+    /// <summary>
+    /// HTTP-level compression (gzip/deflate). Disabled by default: ClickHouse.Client's
+    /// error-handler tries to read the response body through the decompression stream,
+    /// and a truncated/misencoded error body (which CH sends when overloaded — e.g.
+    /// CANNOT_SCHEDULE_TASK) throws InvalidDataException instead of the real server
+    /// error. That masked the actual failure and repeatedly wedged long-lived
+    /// connections, requiring service restart to recover. Our queries return tiny
+    /// scalar/row results — compression wins nothing here.
+    /// </summary>
+    public bool UseCompression { get; set; } = false;
+
+    private string CompressionSuffix => $";Compression={(UseCompression ? "true" : "false")}";
+
     public string ConnectionString =>
         $"Host={Host};Port={Port};Database={Database}" +
         (string.IsNullOrEmpty(Username) ? "" : $";Username={Username}") +
-        (string.IsNullOrEmpty(Password) ? "" : $";Password={Password}");
+        (string.IsNullOrEmpty(Password) ? "" : $";Password={Password}") +
+        CompressionSuffix;
 
     /// <summary>
     /// Connection string without database — used for initial schema creation.
@@ -21,7 +35,8 @@ public class ClickHouseOptions
     public string ServerConnectionString =>
         $"Host={Host};Port={Port}" +
         (string.IsNullOrEmpty(Username) ? "" : $";Username={Username}") +
-        (string.IsNullOrEmpty(Password) ? "" : $";Password={Password}");
+        (string.IsNullOrEmpty(Password) ? "" : $";Password={Password}") +
+        CompressionSuffix;
 }
 
 public class BobOptions
