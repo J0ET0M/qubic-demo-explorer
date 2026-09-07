@@ -46,6 +46,8 @@ const updateUrl = () => {
 }
 
 watch([page, fromAddress, toAddress, selectedType, minAmount], updateUrl)
+useHead({ title: 'Transfers' })
+
 </script>
 
 <template>

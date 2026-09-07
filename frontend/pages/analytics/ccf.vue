@@ -2,7 +2,7 @@
 import { Landmark } from 'lucide-vue-next'
 import CcfTab from '~/components/analytics/CcfTab.vue'
 
-useHead({ title: 'CCF - Analytics' })
+useHead({ title: 'CCF' })
 </script>
 
 <template>

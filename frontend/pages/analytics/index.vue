@@ -2,7 +2,7 @@
 import { BarChart3, Users, UserCog, PieChart, Building2, Pickaxe, Flame, Cpu, TrendingUp, Network, Crown, Coins, Landmark, Monitor, Receipt, Database } from 'lucide-vue-next'
 import OverviewTab from '~/components/analytics/OverviewTab.vue'
 
-useHead({ title: 'Analytics - QLI Analytics' })
+useHead({ title: 'Analytics' })
 
 const subPages = [
   { label: 'Network Activity', description: 'Active addresses, transaction sizes, and network trends', path: '/analytics/network', icon: Users },

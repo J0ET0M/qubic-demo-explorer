@@ -16,6 +16,8 @@ const updatePage = async (newPage: number) => {
   page.value = newPage
   await router.push({ query: { page: newPage } })
 }
+useHead({ title: 'Ticks' })
+
 </script>
 
 <template>

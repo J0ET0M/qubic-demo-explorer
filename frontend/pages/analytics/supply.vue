@@ -2,7 +2,7 @@
 import { Coins } from 'lucide-vue-next'
 import SupplyTab from '~/components/analytics/SupplyTab.vue'
 
-useHead({ title: 'Supply Dashboard - Analytics' })
+useHead({ title: 'Supply Dashboard' })
 </script>
 
 <template>

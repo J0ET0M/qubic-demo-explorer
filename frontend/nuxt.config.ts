@@ -17,6 +17,12 @@ export default defineNuxtConfig({
   app: {
     pageTransition: { name: 'page', mode: 'out-in' },
     head: {
+      // Page-supplied titles get " · QLI Analytics" appended so browser history
+      // and tab labels always show the actual context (e.g. "Tx ABCD…WXYZ ·
+      // QLI Analytics") instead of collapsing to a single generic entry. Pages
+      // with no title fall back to the bare app name.
+      titleTemplate: (chunk?: string) =>
+        chunk && chunk !== 'QLI Analytics' ? `${chunk} · QLI Analytics` : 'QLI Analytics',
       title: 'QLI Analytics',
       htmlAttrs: {
         lang: 'en',

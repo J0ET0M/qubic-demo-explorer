@@ -22,7 +22,7 @@ const availableYears = computed(() => {
   return years
 })
 
-useHead({ title: () => `Tax report ${selectedYear.value} · ${truncateAddress(address, 6)} - Analytics` })
+useHead({ title: () => `Tax report ${selectedYear.value} · ${truncateAddress(address, 6)}` })
 
 const { data: report, pending } = await useAsyncData(
   () => `tax-${address}-${selectedYear.value}`,

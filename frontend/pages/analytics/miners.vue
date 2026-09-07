@@ -2,7 +2,7 @@
 import { Pickaxe } from 'lucide-vue-next'
 import MinerFlowsTab from '~/components/analytics/MinerFlowsTab.vue'
 
-useHead({ title: 'Miner Flows - Analytics' })
+useHead({ title: 'Miner Flows' })
 </script>
 
 <template>

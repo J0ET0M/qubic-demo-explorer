@@ -2,7 +2,7 @@
 import { Vote } from 'lucide-vue-next'
 import ProposalsTab from '~/components/analytics/ProposalsTab.vue'
 
-useHead({ title: 'On-chain Proposals - Analytics' })
+useHead({ title: 'On-chain Proposals' })
 </script>
 
 <template>

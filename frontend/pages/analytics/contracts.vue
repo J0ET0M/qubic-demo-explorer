@@ -2,7 +2,7 @@
 import { Cpu } from 'lucide-vue-next'
 import SmartContractsTab from '~/components/analytics/SmartContractsTab.vue'
 
-useHead({ title: 'Smart Contracts - Analytics' })
+useHead({ title: 'Smart Contracts' })
 </script>
 
 <template>

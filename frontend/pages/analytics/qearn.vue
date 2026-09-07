@@ -2,7 +2,7 @@
 import { Lock } from 'lucide-vue-next'
 import QearnTab from '~/components/analytics/QearnTab.vue'
 
-useHead({ title: 'Qearn - Analytics' })
+useHead({ title: 'Qearn' })
 </script>
 
 <template>

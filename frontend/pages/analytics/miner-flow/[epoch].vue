@@ -7,6 +7,8 @@ const api = useApi()
 
 // The epoch in the URL is the emission epoch (computors from this epoch received emission)
 const emissionEpoch = computed(() => Number(route.params.epoch))
+
+useHead(() => ({ title: `Miner Flow · Epoch ${emissionEpoch.value}` }))
 const maxDepth = ref(10)
 const showAllNodes = ref(false)
 

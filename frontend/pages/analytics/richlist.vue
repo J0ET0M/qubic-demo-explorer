@@ -2,7 +2,7 @@
 import { Crown } from 'lucide-vue-next'
 import RichListTab from '~/components/analytics/RichListTab.vue'
 
-useHead({ title: 'Rich List - Analytics' })
+useHead({ title: 'Rich List' })
 </script>
 
 <template>

@@ -2,7 +2,7 @@
 import { Fish, RefreshCw } from 'lucide-vue-next'
 import type { WhaleAlertDto } from '~/composables/useApi'
 
-useHead({ title: 'Whale Alerts - QLI Analytics' })
+useHead({ title: 'Whale Alerts' })
 
 const api = useApi()
 const { formatDate, getTypeClass, truncateAddress } = useFormatting()

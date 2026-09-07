@@ -8,6 +8,8 @@ const { fetchLabels, getLabel } = useAddressLabels()
 
 const epoch = Number(route.params.epoch)
 
+useHead({ title: `Epoch ${epoch}` })
+
 // Initialize tab state from URL query params
 const activeTab = ref<'transfers' | 'rewards' | 'empty-ticks'>(
   (route.query.tab as 'transfers' | 'rewards' | 'empty-ticks') || 'transfers'

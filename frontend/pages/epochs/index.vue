@@ -76,6 +76,8 @@ const avgActiveAddresses = computed(() => {
   if (!epochs.value || epochs.value.length === 0) return 0
   return Math.round(epochs.value.reduce((sum, e) => sum + e.activeAddresses, 0) / epochs.value.length)
 })
+useHead({ title: 'Epochs' })
+
 </script>
 
 <template>

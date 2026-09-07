@@ -75,6 +75,8 @@ const getTypeName = (type: number) => {
     default: return 'Unknown'
   }
 }
+useHead({ title: 'Search' })
+
 </script>
 
 <template>

@@ -2,7 +2,7 @@
 import { Monitor } from 'lucide-vue-next'
 import ComputorRevenueTab from '~/components/analytics/ComputorRevenueTab.vue'
 
-useHead({ title: 'Computor Revenue - Analytics' })
+useHead({ title: 'Computor Revenue' })
 </script>
 
 <template>

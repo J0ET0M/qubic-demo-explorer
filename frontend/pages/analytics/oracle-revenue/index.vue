@@ -2,7 +2,7 @@
 import { Database } from 'lucide-vue-next'
 import OracleRevenueTab from '~/components/analytics/OracleRevenueTab.vue'
 
-useHead({ title: 'Oracle Revenue - Analytics' })
+useHead({ title: 'Oracle Revenue' })
 </script>
 
 <template>

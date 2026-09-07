@@ -8,7 +8,7 @@ const epoch = Number(route.params.epoch)
 const contract = Number(route.params.contract) as 6 | 8
 const proposalTick = String(route.params.proposalTick)
 
-useHead({ title: `Proposal ${proposalTick} · Analytics` })
+useHead({ title: `${contract === 6 ? 'GQMPROP' : 'CCF'} Proposal · Epoch ${epoch} · Tick ${proposalTick}` })
 
 const { data, pending } = await useAsyncData(
   () => `proposal-${epoch}-${contract}-${proposalTick}`,

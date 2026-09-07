@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Star, Plus, Trash2, RefreshCw, Bell, BellOff } from 'lucide-vue-next'
 
-useHead({ title: 'Portfolio - QLI Analytics' })
+useHead({ title: 'Portfolio' })
 
 const api = useApi()
 const { addresses, addAddress, removeAddress } = usePortfolio()

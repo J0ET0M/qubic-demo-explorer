@@ -2,7 +2,7 @@
 import { Users } from 'lucide-vue-next'
 import NetworkActivityTab from '~/components/analytics/NetworkActivityTab.vue'
 
-useHead({ title: 'Network Activity - Analytics' })
+useHead({ title: 'Network Activity' })
 </script>
 
 <template>

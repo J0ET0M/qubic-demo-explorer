@@ -170,6 +170,8 @@ const toggleExecutedFilter = (value: boolean | undefined) => {
   executed.value = executed.value === value ? undefined : value
   page.value = 1
 }
+useHead({ title: 'Transactions' })
+
 </script>
 
 <template>

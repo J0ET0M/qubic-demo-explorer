@@ -36,7 +36,7 @@ const { data: detail, status } = await useAsyncData(
   { watch: [resolvedEpoch, owner] }
 )
 
-useHead(() => ({ title: `${owner.value} — Owner Analytics` }))
+useHead(() => ({ title: `${owner.value} · Owner` }))
 
 const loading = computed(() => status.value === 'pending')
 

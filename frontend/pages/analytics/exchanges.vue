@@ -2,7 +2,7 @@
 import { Building2 } from 'lucide-vue-next'
 import ExchangeFlowsTab from '~/components/analytics/ExchangeFlowsTab.vue'
 
-useHead({ title: 'Exchange Flows - Analytics' })
+useHead({ title: 'Exchange Flows' })
 </script>
 
 <template>

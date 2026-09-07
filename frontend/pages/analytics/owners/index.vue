@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Users, ArrowUpDown, Info } from 'lucide-vue-next'
 
-useHead({ title: 'Owners - Analytics' })
+useHead({ title: 'Owners' })
 
 const api = useApi()
 const router = useRouter()

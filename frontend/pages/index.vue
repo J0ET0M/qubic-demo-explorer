@@ -5,6 +5,9 @@ const api = useApi()
 const liveUpdates = useLiveUpdates()
 const { formatNumber, formatVolume } = useFormatting()
 
+// Home page uses just the app name (bare template output "QLI Analytics").
+useHead({ title: '' })
+
 const { data: stats, pending: statsLoading } = await useAsyncData(
   'stats',
   () => api.getStats()

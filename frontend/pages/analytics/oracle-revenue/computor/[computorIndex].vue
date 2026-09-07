@@ -28,7 +28,7 @@ const queryTickFromId = (queryId: string | number | bigint): number => {
 
 const { formatDateTime } = useFormatting()
 
-useHead({ title: () => `Computor #${computorIndex.value} Oracle Profile - Analytics` })
+useHead({ title: () => `Computor #${computorIndex.value} Oracle Profile` })
 
 const PAGE_SIZE = 50
 const page = ref(0)

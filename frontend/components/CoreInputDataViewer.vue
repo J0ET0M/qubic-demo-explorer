@@ -187,6 +187,27 @@ const formatFileSize = (bytes: number) => {
     <template v-else-if="parsed.typeName === 'MINING_SOLUTION'">
       <div class="space-y-0">
         <div class="detail-row">
+          <span class="detail-label">Algorithm</span>
+          <span class="detail-value">
+            <span class="font-mono">{{ parsed.algoTypeName || 'Classic' }}</span>
+            <span class="text-muted text-xs ml-2">(code {{ parsed.algoType ?? 0 }})</span>
+          </span>
+        </div>
+        <template v-if="parsed.algoTypeName === 'Bpp9000'">
+          <div class="detail-row">
+            <span class="detail-label">L parameter</span>
+            <span class="detail-value font-mono">{{ parsed.lParam }}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">K parameter</span>
+            <span class="detail-value font-mono">{{ parsed.kParam }}</span>
+          </div>
+        </template>
+        <div v-if="parsed.score != null" class="detail-row">
+          <span class="detail-label">Score</span>
+          <span class="detail-value font-mono">{{ parsed.score?.toLocaleString() }}</span>
+        </div>
+        <div class="detail-row">
           <span class="detail-label">Mining Seed</span>
           <span class="detail-value font-mono text-xs break-all">{{ parsed.miningSeed }}</span>
         </div>
@@ -194,6 +215,90 @@ const formatFileSize = (bytes: number) => {
           <span class="detail-label">Nonce</span>
           <span class="detail-value font-mono text-xs break-all">{{ parsed.nonce }}</span>
         </div>
+      </div>
+    </template>
+
+    <!-- ========================================= -->
+    <!-- ANT_COLONY_MINING_SOLUTION (type 12) -->
+    <!-- ========================================= -->
+    <template v-else-if="parsed.typeName === 'ANT_COLONY_MINING_SOLUTION'">
+      <div class="space-y-0">
+        <div class="detail-row">
+          <span class="detail-label">Parent Tick</span>
+          <span class="detail-value font-mono">{{ parsed.parentTick?.toLocaleString() }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Parent Solution Index</span>
+          <span class="detail-value font-mono">{{ parsed.parentSolutionIndexInTick }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Anchor Tick</span>
+          <span class="detail-value font-mono">{{ parsed.anchorTick?.toLocaleString() }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Claimed Score</span>
+          <span class="detail-value font-mono">{{ parsed.claimedScore?.toLocaleString() }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Nonce</span>
+          <span class="detail-value font-mono text-xs break-all">{{ parsed.nonce }}</span>
+        </div>
+      </div>
+    </template>
+
+    <!-- ========================================= -->
+    <!-- DOGE_MINING_SHARE (type 11) — same layout as legacy custom-mining-shares -->
+    <!-- ========================================= -->
+    <template v-else-if="parsed.typeName === 'DOGE_MINING_SHARE'">
+      <div class="space-y-0">
+        <div class="detail-row">
+          <span class="detail-label">Total Shares</span>
+          <span class="detail-value font-mono">{{ parsed.totalScore?.toLocaleString() }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Non-Zero Computors</span>
+          <span class="detail-value font-mono">{{ parsed.nonZeroCount }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">DataLock</span>
+          <span class="detail-value font-mono text-xs break-all">{{ parsed.dataLock }}</span>
+        </div>
+      </div>
+    </template>
+
+    <!-- ========================================= -->
+    <!-- OC_AUTH_SIGNATURE (type 13) -->
+    <!-- ========================================= -->
+    <template v-else-if="parsed.typeName === 'OC_AUTH_SIGNATURE'">
+      <div class="space-y-0">
+        <div class="detail-row">
+          <span class="detail-label">Item Count</span>
+          <span class="detail-value font-mono">{{ parsed.itemCount }}</span>
+        </div>
+      </div>
+      <div v-if="parsed.items?.length" class="mt-3 overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="text-muted text-left">
+              <th class="py-1 pr-3">#</th>
+              <th class="py-1 pr-3">Invocation ID</th>
+              <th class="py-1 pr-3">Interface</th>
+              <th class="py-1 pr-3">Epoch</th>
+              <th class="py-1 pr-3">Params Digest</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(item, i) in parsed.items" :key="i" class="border-t border-border">
+              <td class="py-1 pr-3">{{ i + 1 }}</td>
+              <td class="py-1 pr-3 font-mono">{{ item.invocationId }}</td>
+              <td class="py-1 pr-3 font-mono">{{ item.interfaceIndex }}</td>
+              <td class="py-1 pr-3">{{ item.epoch }}</td>
+              <td class="py-1 pr-3 font-mono text-[10px]">
+                {{ item.paramsDigest?.slice(0, 12) }}…{{ item.paramsDigest?.slice(-8) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </template>
 

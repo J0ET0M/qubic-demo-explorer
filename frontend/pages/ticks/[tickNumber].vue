@@ -8,6 +8,8 @@ const { formatDate } = useFormatting()
 
 const tickNumber = Number(route.params.tickNumber)
 
+useHead({ title: `Tick ${tickNumber.toLocaleString()}` })
+
 // Pagination state
 const txPage = ref(1)
 const logsPage = ref(1)

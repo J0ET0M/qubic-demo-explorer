@@ -7,7 +7,7 @@ const route = useRoute()
 const name = route.params.name as string
 const issuer = (route.query.issuer as string) || undefined
 
-useHead({ title: `${name} - Assets` })
+useHead({ title: `${name} · Asset` })
 
 const { data: asset, pending } = await useAsyncData(
   `asset-${name}-${issuer}`,

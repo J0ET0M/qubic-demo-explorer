@@ -2,7 +2,7 @@
 import { PieChart } from 'lucide-vue-next'
 import HoldersTab from '~/components/analytics/HoldersTab.vue'
 
-useHead({ title: 'Holders & Distribution - Analytics' })
+useHead({ title: 'Holders & Distribution' })
 </script>
 
 <template>

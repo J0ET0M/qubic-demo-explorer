@@ -24,7 +24,7 @@ const queryTxIndexFromId = (queryId: string | number | bigint): number => {
   try { return Number(BigInt(queryId) & 0x7FFFFFFFn) } catch { return 0 }
 }
 
-useHead({ title: () => `Oracle Query ${queryIdParam.value} - Analytics` })
+useHead({ title: () => `Oracle Query ${queryIdParam.value}` })
 
 const { data: queryDetail, pending } = await useAsyncData(
   () => `oracle-query-${epochParam.value}-${queryIdParam.value}`,

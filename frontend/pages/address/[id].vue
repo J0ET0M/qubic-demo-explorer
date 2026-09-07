@@ -11,6 +11,10 @@ const { formatVolume, formatDate, formatAmount, formatEpochDate, copyToClipboard
 
 const address = route.params.id as string
 
+useHead({
+  title: `${address.slice(0, 6)}…${address.slice(-4)} · Address`
+})
+
 const togglePortfolio = () => {
   if (isInPortfolio(address)) {
     removeFromPortfolio(address)

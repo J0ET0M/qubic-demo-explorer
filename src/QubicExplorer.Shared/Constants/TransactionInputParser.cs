@@ -12,6 +12,32 @@ namespace QubicExplorer.Shared.Constants;
 /// </summary>
 public static class TransactionInputParser
 {
+    // -------------------------------------------------------------------------
+    // Local constants for input types that are not (yet) in Qubic.Core NuGet.
+    // When these appear in a future Qubic.Core release, remove them here and
+    // reference the NuGet constants instead. See docs/updating-transaction-decoders.md.
+    // -------------------------------------------------------------------------
+
+    /// <summary>DOGE / custom-mining shares (packed 10-bit × 676 + dataLock). C++: mining/mining.h DOGE_MINING_SHARE_COUNTER_INPUT_TYPE.</summary>
+    public const ushort DogeMiningShare = 11;
+    /// <summary>Ant-colony bpp9000 mining solution. C++: mining/mining.h ANT_COLONY_MINING_SOLUTION_INPUT_TYPE.</summary>
+    public const ushort AntColonyMiningSolution = 12;
+    /// <summary>Off-chain contract auth signatures. C++: oc_core/oc_transactions.h.</summary>
+    public const ushort OcAuthSignature = 13;
+
+    /// <summary>
+    /// True when the input type is a known core-protocol tx (destination = burn
+    /// OR — in the case of mining solutions — a computor identity). Used by
+    /// the API's decode gate so mining txs get decoded regardless of destination.
+    /// Contract-scoped procedure input_types are NOT covered here (they overlap
+    /// numerically with core types — dispatch must gate on to_address separately).
+    /// </summary>
+    public static bool IsCoreProtocolType(ushort inputType) =>
+        CoreTransactionInputTypes.IsKnownType(inputType)   // 1..10
+        || inputType == DogeMiningShare
+        || inputType == AntColonyMiningSolution
+        || inputType == OcAuthSignature;
+
     /// <summary>
     /// Parse hex-encoded inputData into a typed result based on inputType.
     /// Returns null if inputData is empty/invalid or inputType is unknown.
@@ -36,8 +62,20 @@ public static class TransactionInputParser
             return null;
         }
 
-        if (data.Length < CoreTransactionInputTypes.GetMinInputSize(inputType))
-            return null;
+        // Minimum-size guard. NuGet's GetMinInputSize returns 0 for unknown types
+        // so we fall back to a local table for the input types added post-1.279.
+        var minSize = CoreTransactionInputTypes.GetMinInputSize(inputType);
+        if (minSize == 0)
+        {
+            minSize = inputType switch
+            {
+                DogeMiningShare => 880,          // 848 packed + 32 dataLock
+                AntColonyMiningSolution => 48,   // 4+4+4+4+32
+                OcAuthSignature => 4,            // 2 itemCount + 2 pad (items follow)
+                _ => 0,
+            };
+        }
+        if (data.Length < minSize) return null;
 
         return inputType switch
         {
@@ -51,6 +89,9 @@ public static class TransactionInputParser
             CoreTransactionInputTypes.CustomMiningShareCounter => ParseCustomMiningShareCounter(data),
             CoreTransactionInputTypes.ExecutionFeeReport => ParseExecutionFeeReport(data),
             CoreTransactionInputTypes.OracleUserQuery => ParseOracleUserQuery(data),
+            DogeMiningShare => ParseDogeMiningShare(data),
+            AntColonyMiningSolution => ParseAntColonyMiningSolution(data),
+            OcAuthSignature => ParseOcAuthSignature(data),
             _ => null
         };
     }
@@ -72,17 +113,45 @@ public static class TransactionInputParser
     }
 
     // =========================================================================
-    // Type 2: Mining Solution (64+ bytes)
+    // Type 2: Mining Solution (72 bytes)
+    //   0..31  miningSeed (m256i)
+    //   32..63 nonce (m256i)  — nonce[0]=algoType, nonce[1]=L, nonce[2]=K (bpp9000)
+    //   64..67 score (uint)
+    //   68..71 reserved (uint)
+    // Source: mining/mining.h
     // =========================================================================
     private static ParsedInputData ParseMiningSolution(byte[] data)
     {
         var miningSeed = ToHexString(data, 0, 32);
         var nonce = ToHexString(data, 32, 32);
-
+        var algoTypeByte = data[32];   // nonce[0]
+        var lParam = data[33];         // nonce[1] — meaningful for bpp9000 only
+        var kParam = data[34];         // nonce[2] — meaningful for bpp9000 only
+        uint? score = null;
+        if (data.Length >= 72)
+        {
+            score = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(64, 4));
+        }
         return new MiningSolutionInputData(
             MiningSeed: miningSeed,
-            Nonce: nonce);
+            Nonce: nonce,
+            AlgoType: algoTypeByte,
+            AlgoTypeName: AlgoTypeName(algoTypeByte),
+            LParam: lParam,
+            KParam: kParam,
+            Score: score);
     }
+
+    /// <summary>
+    /// Mining algorithm codes carried in MiningSolution.nonce[0].
+    /// Mirrors qubic core mining/score_common.h AlgoType enum.
+    /// </summary>
+    private static string AlgoTypeName(byte algoType) => algoType switch
+    {
+        0 => "Classic",
+        1 => "Bpp9000",
+        _ => $"Unknown({algoType})",
+    };
 
     // =========================================================================
     // Type 3: File Header (24 bytes)
@@ -181,6 +250,79 @@ public static class TransactionInputParser
             DataLock: dataLock,
             TotalScore: scores.Sum(s => (long)s),
             NonZeroCount: scores.Count(s => s > 0));
+    }
+
+    // =========================================================================
+    // Type 11: DOGE / custom-mining shares (880 bytes = 848 packed + 32 dataLock)
+    // Same wire layout as the legacy CustomMiningShareCounter (type 8) — just
+    // reassigned to a new input_type by the DOGE mining rollout.
+    // Source: mining/mining.h DOGE_MINING_SHARE_COUNTER_INPUT_TYPE
+    // =========================================================================
+    private static ParsedInputData ParseDogeMiningShare(byte[] data)
+    {
+        const int packedSize = 848;
+        var scores = Extract10BitValues(data.AsSpan(0, packedSize), LogTypes.NumberOfComputors);
+        var dataLock = ToHexString(data, packedSize, 32);
+        return new DogeMiningShareInputData(
+            Scores: scores,
+            DataLock: dataLock,
+            TotalScore: scores.Sum(s => (long)s),
+            NonZeroCount: scores.Count(s => s > 0));
+    }
+
+    // =========================================================================
+    // Type 12: Ant-colony bpp9000 mining solution (48 bytes)
+    //   0..3   parentTick (uint) — absolute tick of the parent solution reference
+    //   4..7   parentSolutionIndexInTick (uint)
+    //   8..11  anchorTick (uint) — RNG anchor
+    //   12..15 claimedScore (uint) — refunded only if node re-scores same
+    //   16..47 nonce (m256i)
+    // Source: mining/mining.h ANT_COLONY_MINING_SOLUTION_INPUT_TYPE
+    // =========================================================================
+    private static ParsedInputData ParseAntColonyMiningSolution(byte[] data)
+    {
+        return new AntColonyMiningSolutionInputData(
+            ParentTick: BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0, 4)),
+            ParentSolutionIndexInTick: BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4)),
+            AnchorTick: BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(8, 4)),
+            ClaimedScore: BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(12, 4)),
+            Nonce: ToHexString(data, 16, 32));
+    }
+
+    // =========================================================================
+    // Type 13: Off-chain contract auth signatures (4 + n × 112 bytes, n in [1..9])
+    // Header:
+    //   0..1  itemCount (u16)
+    //   2..3  padding (u16)
+    // Per item (112 bytes):
+    //   0..7   invocationId (i64)
+    //   8..9   interfaceIndex (u16)
+    //   10..11 epoch (u16)
+    //   12..15 padding (u32)
+    //   16..47 paramsDigest (m256i)
+    //   48..111 signature (64 bytes)
+    // Source: oc_core/oc_transactions.h
+    // =========================================================================
+    private static ParsedInputData ParseOcAuthSignature(byte[] data)
+    {
+        var itemCount = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(0, 2));
+        const int headerSize = 4;
+        const int itemSize = 112;
+        var items = new List<OcAuthSignatureItem>();
+        // Guard: don't over-read a truncated payload. Item count in the header
+        // may claim more items than the tx actually carries.
+        var maxItems = Math.Min((int)itemCount, (data.Length - headerSize) / itemSize);
+        for (int i = 0; i < maxItems; i++)
+        {
+            var off = headerSize + i * itemSize;
+            items.Add(new OcAuthSignatureItem(
+                InvocationId: BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(off, 8)),
+                InterfaceIndex: BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(off + 8, 2)),
+                Epoch: BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(off + 10, 2)),
+                ParamsDigest: ToHexString(data, off + 16, 32),
+                Signature: ToHexString(data, off + 48, 64)));
+        }
+        return new OcAuthSignatureInputData(ItemCount: itemCount, Items: items);
     }
 
     // =========================================================================
@@ -387,6 +529,9 @@ public static class TransactionInputParser
 [JsonDerivedType(typeof(CustomMiningShareCounterInputData), "CUSTOM_MINING_SHARE_COUNTER")]
 [JsonDerivedType(typeof(ExecutionFeeReportInputData), "EXECUTION_FEE_REPORT")]
 [JsonDerivedType(typeof(OracleUserQueryInputData), "ORACLE_USER_QUERY")]
+[JsonDerivedType(typeof(DogeMiningShareInputData), "DOGE_MINING_SHARE")]
+[JsonDerivedType(typeof(AntColonyMiningSolutionInputData), "ANT_COLONY_MINING_SOLUTION")]
+[JsonDerivedType(typeof(OcAuthSignatureInputData), "OC_AUTH_SIGNATURE")]
 public abstract record ParsedInputData
 {
     public abstract string TypeName { get; }
@@ -404,7 +549,16 @@ public record VoteCounterInputData(
 
 public record MiningSolutionInputData(
     string MiningSeed,
-    string Nonce
+    string Nonce,
+    // Post-Bpp9000 (epoch 224+) mining solutions carry the algorithm code in
+    // nonce[0]. LParam/KParam are only meaningful when AlgoTypeName == "Bpp9000".
+    byte AlgoType,
+    string AlgoTypeName,
+    byte LParam,
+    byte KParam,
+    // Present when the tx carries the full 72-byte payload (score at offset 64).
+    // Older classic mining solutions may not include it — null-safe.
+    uint? Score
 ) : ParsedInputData
 {
     public override string TypeName => "MINING_SOLUTION";
@@ -501,4 +655,44 @@ public record OracleUserQueryInputData(
 ) : ParsedInputData
 {
     public override string TypeName => "ORACLE_USER_QUERY";
+}
+
+/// <summary>Type 11 — DOGE / custom-mining shares (same layout as legacy type 8).</summary>
+public record DogeMiningShareInputData(
+    ushort[] Scores,
+    string DataLock,
+    long TotalScore,
+    int NonZeroCount
+) : ParsedInputData
+{
+    public override string TypeName => "DOGE_MINING_SHARE";
+}
+
+/// <summary>Type 12 — Ant-colony bpp9000 mining solution.</summary>
+public record AntColonyMiningSolutionInputData(
+    uint ParentTick,
+    uint ParentSolutionIndexInTick,
+    uint AnchorTick,
+    uint ClaimedScore,
+    string Nonce
+) : ParsedInputData
+{
+    public override string TypeName => "ANT_COLONY_MINING_SOLUTION";
+}
+
+public record OcAuthSignatureItem(
+    long InvocationId,
+    ushort InterfaceIndex,
+    ushort Epoch,
+    string ParamsDigest,
+    string Signature
+);
+
+/// <summary>Type 13 — off-chain contract authorization signatures.</summary>
+public record OcAuthSignatureInputData(
+    ushort ItemCount,
+    List<OcAuthSignatureItem> Items
+) : ParsedInputData
+{
+    public override string TypeName => "OC_AUTH_SIGNATURE";
 }

@@ -2,7 +2,7 @@
 import { TrendingUp } from 'lucide-vue-next'
 import TopAddressesTab from '~/components/analytics/TopAddressesTab.vue'
 
-useHead({ title: 'Top Addresses - Analytics' })
+useHead({ title: 'Top Addresses' })
 </script>
 
 <template>

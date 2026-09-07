@@ -627,9 +627,14 @@ interface ParsedInputData {
   totalVotes?: number
   totalScore?: number
   nonZeroCount?: number
-  // MiningSolution
+  // MiningSolution — post-bpp9000 (epoch 224+) carries algorithm + params in nonce[0..2]
   miningSeed?: string
   nonce?: string
+  algoType?: number
+  algoTypeName?: string
+  lParam?: number
+  kParam?: number
+  score?: number
   // FileHeader / FileTrailer
   fileSize?: number
   numberOfFragments?: number
@@ -656,6 +661,15 @@ interface ParsedInputData {
   queryDataHex?: string
   queryDataSize?: number
   parsedQueryFields?: Array<{ name: string; value: string; type: string }>
+  // AntColonyMiningSolution (type 12)
+  parentTick?: number
+  parentSolutionIndexInTick?: number
+  anchorTick?: number
+  claimedScore?: number
+  // OcAuthSignature (type 13) — reuses `items` as list of auth items
+  itemCount?: number
+  // (items[] is reused for both OracleReplyCommit and OcAuthSignature — the
+  // typeName discriminator tells the viewer which shape to expect.)
 }
 
 interface SpecialTransactionDto {

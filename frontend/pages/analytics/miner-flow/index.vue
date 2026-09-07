@@ -37,6 +37,8 @@ const navigateToEpoch = () => {
     navigateTo(`/analytics/miner-flow/${selectedEpoch.value}`)
   }
 }
+useHead({ title: 'Miner Flow Visualization' })
+
 </script>
 
 <template>

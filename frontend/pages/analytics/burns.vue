@@ -2,7 +2,7 @@
 import { Flame } from 'lucide-vue-next'
 import BurnsTab from '~/components/analytics/BurnsTab.vue'
 
-useHead({ title: 'Burns - Analytics' })
+useHead({ title: 'Burns' })
 </script>
 
 <template>

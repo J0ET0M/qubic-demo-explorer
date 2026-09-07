@@ -157,6 +157,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+// Catch ClickHouse CANNOT_SCHEDULE_TASK (Code 439) and return HTTP 503 with
+// Retry-After instead of an unhandled 500. Must come BEFORE UseRouting so it
+// wraps the whole pipeline including MVC filters.
+app.UseMiddleware<QubicExplorer.Api.Middleware.ClickHouseOverloadMiddleware>();
+
 app.UseRouting();
 
 // CORS must be after UseRouting and before UseEndpoints

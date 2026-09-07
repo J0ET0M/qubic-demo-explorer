@@ -2,7 +2,7 @@
 import { Receipt } from 'lucide-vue-next'
 import ExecutionFeesTab from '~/components/analytics/ExecutionFeesTab.vue'
 
-useHead({ title: 'Execution Fees - Analytics' })
+useHead({ title: 'Execution Fees' })
 </script>
 
 <template>

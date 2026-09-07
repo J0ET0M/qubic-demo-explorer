@@ -17,6 +17,10 @@ const { data: tx, pending, error } = await useAsyncData(
   { watch: [hash] }
 )
 
+useHead(() => ({
+  title: `Tx ${hash.value?.slice(0, 6)}…${hash.value?.slice(-4) || ''}`
+}))
+
 // Type guard to check if it's a special transaction
 const isSpecialTx = (data: TransactionDetailDto | SpecialTransactionDto | null): data is SpecialTransactionDto => {
   return data !== null && 'specialType' in data

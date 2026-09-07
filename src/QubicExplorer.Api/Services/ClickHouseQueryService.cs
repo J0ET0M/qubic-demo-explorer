@@ -462,7 +462,17 @@ public class ClickHouseQueryService : IDisposable
             var isCoreTransaction = string.Equals(tx.To, AddressLabelService.BurnAddress, StringComparison.OrdinalIgnoreCase);
             var inputTypeName = isCoreTransaction && CoreTransactionInputTypes.IsKnownType(tx.InputType)
                 ? CoreTransactionInputTypes.GetDisplayName(tx.InputType) : null;
-            var parsedInput = isCoreTransaction ? TransactionInputParser.Parse(tx.InputType, tx.InputData) : null;
+            // Mining-solution / doge-share / ant-colony txs go to a computor's
+            // identity, NOT the burn address, so the burn gate alone would skip
+            // them. Also try to decode when the destination isn't a smart
+            // contract AND the input_type is a recognised core-protocol type.
+            // (Contract-scoped procedure indices overlap numerically, so we
+            // still gate on IsSmartContract to avoid mis-decoding a contract
+            // call as a core tx.)
+            var isNonContractDest = !isCoreTransaction && !_labelService.IsSmartContract(tx.To);
+            var parsedInput = (isCoreTransaction || (isNonContractDest && TransactionInputParser.IsCoreProtocolType(tx.InputType)))
+                ? TransactionInputParser.Parse(tx.InputType, tx.InputData)
+                : null;
 
             var logs = new List<LogDto>();
             if (tx.LogIdFrom >= 0 && tx.LogIdLength > 0)
@@ -801,7 +811,13 @@ public class ClickHouseQueryService : IDisposable
         var isCoreTransaction = string.Equals(toAddr, AddressLabelService.BurnAddress, StringComparison.OrdinalIgnoreCase);
         var inputTypeName = isCoreTransaction && CoreTransactionInputTypes.IsKnownType(inputType)
             ? CoreTransactionInputTypes.GetDisplayName(inputType) : null;
-        var parsedInput = isCoreTransaction ? TransactionInputParser.Parse(inputType, inputData) : null;
+        // See list-endpoint gate for rationale — mining/doge/ant-colony txs go
+        // to a computor's identity, not the burn address, so we also decode
+        // recognised core input types when the destination isn't a smart contract.
+        var isNonContractDest = !isCoreTransaction && !_labelService.IsSmartContract(toAddr);
+        var parsedInput = (isCoreTransaction || (isNonContractDest && TransactionInputParser.IsCoreProtocolType(inputType)))
+            ? TransactionInputParser.Parse(inputType, inputData)
+            : null;
 
         return new TransactionDetailDto(
             txHash, tickNumber, epoch, fromAddr, toAddr, amount,

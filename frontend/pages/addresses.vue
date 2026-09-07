@@ -61,6 +61,8 @@ const filteredAddresses = computed(() => {
   if (!selectedType.value) return allAddresses.value
   return allAddresses.value.filter(addr => addr.type === selectedType.value)
 })
+useHead({ title: 'Known Addresses' })
+
 </script>
 
 <template>
