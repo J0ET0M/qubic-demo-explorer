@@ -490,6 +490,13 @@ const formatFileSize = (bytes: number) => {
           <span class="detail-label">Query ID</span>
           <span class="detail-value font-mono">{{ parsed.queryId }}</span>
         </div>
+        <div v-if="parsed.oracleInterfaceName" class="detail-row">
+          <span class="detail-label">Oracle Interface</span>
+          <span class="detail-value">
+            <span class="font-mono">{{ parsed.oracleInterfaceName }}</span>
+            <span class="text-foreground-muted text-sm ml-1">(inferred from reply size)</span>
+          </span>
+        </div>
         <div class="detail-row">
           <span class="detail-label">Reply Data Size</span>
           <span class="detail-value font-mono">{{ parsed.replyDataSize }} bytes</span>
@@ -497,6 +504,14 @@ const formatFileSize = (bytes: number) => {
         <div v-if="parsed.replyDataHex" class="detail-row">
           <span class="detail-label">Reply Data</span>
           <span class="detail-value font-mono text-xs break-all">{{ parsed.replyDataHex }}</span>
+        </div>
+      </div>
+
+      <div v-if="parsed.parsedReplyFields?.length" class="space-y-0 mt-2">
+        <div class="text-xs font-semibold text-foreground-muted/70 uppercase tracking-wider mb-1">Decoded Reply</div>
+        <div v-for="field in parsed.parsedReplyFields" :key="field.name" class="detail-row">
+          <span class="detail-label">{{ field.name }}</span>
+          <span class="detail-value font-mono" :class="{ 'text-xs break-all': field.type === 'hex' }">{{ field.value }}</span>
         </div>
       </div>
     </template>
@@ -564,6 +579,13 @@ const formatFileSize = (bytes: number) => {
             <template v-if="field.type === 'id'">
               <AddressDisplay :address="field.value" />
             </template>
+            <NuxtLink v-else-if="field.type === 'tick'" :to="`/ticks/${field.value}`" class="font-mono text-accent hover:underline">
+              {{ field.value }}
+            </NuxtLink>
+            <NuxtLink v-else-if="field.type === 'txHash'" :to="`/tx/${field.value}`" class="font-mono text-xs text-accent hover:underline break-all">
+              {{ field.value }}
+            </NuxtLink>
+            <span v-else-if="field.type === 'hex'" class="font-mono text-xs break-all">{{ field.value }}</span>
             <template v-else>
               <span class="font-mono">{{ field.value }}</span>
             </template>

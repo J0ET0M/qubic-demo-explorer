@@ -650,6 +650,7 @@ interface ParsedInputData {
   queryId?: number
   replyDataHex?: string
   replyDataSize?: number
+  parsedReplyFields?: Array<{ name: string; value: string; type: string }>
   // ExecutionFeeReport
   phaseNumber?: number
   numEntries?: number

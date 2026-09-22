@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json.Serialization;
 using Qubic.Core;
+using Qubic.Crypto;
 
 namespace QubicExplorer.Shared.Constants;
 
@@ -24,6 +25,8 @@ public static class TransactionInputParser
     public const ushort AntColonyMiningSolution = 12;
     /// <summary>Off-chain contract auth signatures. C++: oc_core/oc_transactions.h.</summary>
     public const ushort OcAuthSignature = 13;
+
+    private static readonly QubicCrypt Crypt = new();
 
     /// <summary>
     /// True when the input type is a known core-protocol tx (destination = burn
@@ -230,10 +233,99 @@ public static class TransactionInputParser
         var replyDataSize = data.Length - 8;
         var replyData = replyDataSize > 0 ? ToHexString(data, 8, replyDataSize) : null;
 
+        // Reveal carries no interface index; infer it from the reply size
+        var interfaceName = replyDataSize switch
+        {
+            440 => "EvmLogRead",
+            288 => "QubicLogRead",
+            _ => null
+        };
+
+        // Null when the bytes do not fit the inferred interface
+        var parsedFields = replyDataSize switch
+        {
+            440 => ParseEvmLogReadReply(data.AsSpan(8)),
+            288 => ParseQubicLogReadReply(data.AsSpan(8)),
+            _ => null
+        };
+
         return new OracleReplyRevealInputData(
             QueryId: queryId,
             ReplyDataHex: replyData,
-            ReplyDataSize: replyDataSize);
+            ReplyDataSize: replyDataSize,
+            OracleInterfaceName: parsedFields != null ? interfaceName : null,
+            ParsedReplyFields: parsedFields);
+    }
+
+    // EvmLogRead reply: code (8B) + address (32B) + topicCount (8B) + topics (4×32B) + dataLen (8B) + data (256B)
+    private static List<OracleQueryField>? ParseEvmLogReadReply(ReadOnlySpan<byte> reply)
+    {
+        var code = BinaryPrimitives.ReadUInt64LittleEndian(reply);
+        var codeName = code switch
+        {
+            0 => "SUCCESS",
+            1 => "BAD_QUERY",
+            2 => "CHAIN_UNSUPPORTED",
+            3 => "TX_NOT_FOUND",
+            4 => "TX_NOT_FINALIZED",
+            5 => "LOG_INDEX_OUT_OF_RANGE",
+            6 => "LOG_DATA_TOO_LARGE",
+            _ => null
+        };
+        var topicCount = BinaryPrimitives.ReadUInt64LittleEndian(reply.Slice(40, 8));
+        var dataLen = BinaryPrimitives.ReadUInt64LittleEndian(reply.Slice(176, 8));
+        if (codeName == null || topicCount > 4 || dataLen > 256 || reply.Slice(8, 12).ContainsAnyExcept((byte)0))
+            return null;
+
+        var fields = new List<OracleQueryField> { new("Result", $"{codeName} ({code})", "text") };
+        if (code != 0) return fields;
+
+        fields.Add(new OracleQueryField("Address", ToPrefixedHex(reply.Slice(20, 20)), "hex"));
+        for (var i = 0; i < (int)topicCount; i++)
+            fields.Add(new OracleQueryField($"Topic {i}", ToPrefixedHex(reply.Slice(48 + i * 32, 32)), "hex"));
+        fields.Add(new OracleQueryField("Data Length", dataLen.ToString(), "uint64"));
+        fields.Add(new OracleQueryField("Data", ToPrefixedHex(reply.Slice(184, (int)dataLen)), "hex"));
+
+        return fields;
+    }
+
+    // QubicLogRead reply: code (8B) + contractIndex (8B) + logType (8B) + dataLen (8B) + data (256B)
+    private static List<OracleQueryField>? ParseQubicLogReadReply(ReadOnlySpan<byte> reply)
+    {
+        var code = BinaryPrimitives.ReadUInt64LittleEndian(reply);
+        var codeName = code switch
+        {
+            0 => "SUCCESS",
+            1 => "BAD_QUERY",
+            2 => "TX_NOT_FOUND",
+            3 => "TX_NOT_EXECUTED",
+            4 => "TICK_MISMATCH",
+            5 => "LOG_NOT_FOUND",
+            6 => "LOG_DATA_TOO_LARGE",
+            _ => null
+        };
+        var dataLen = BinaryPrimitives.ReadUInt64LittleEndian(reply.Slice(24, 8));
+        if (codeName == null || dataLen > 256) return null;
+
+        var fields = new List<OracleQueryField> { new("Result", $"{codeName} ({code})", "text") };
+        if (code != 0) return fields;
+
+        var contractIndex = BinaryPrimitives.ReadUInt64LittleEndian(reply.Slice(8, 8));
+        fields.Add(new OracleQueryField("Contract Index", contractIndex.ToString(), "uint64"));
+
+        var logType = BinaryPrimitives.ReadUInt64LittleEndian(reply.Slice(16, 8));
+        var logTypeName = logType <= byte.MaxValue ? LogTypes.GetName((byte)logType) : null;
+        fields.Add(new OracleQueryField("Log Type", WithName(logTypeName, logType), "text"));
+
+        var logData = reply.Slice(32, (int)dataLen);
+        fields.Add(new OracleQueryField("Data Length", dataLen.ToString(), "uint64"));
+        fields.Add(new OracleQueryField("Data", ToPrefixedHex(logData), "hex"));
+
+        // Contract logs (types 4..7) start with contractIndex u32 + contract log type u32
+        if (logType is >= 4 and <= 7 && logData.Length >= 8)
+            fields.Add(new OracleQueryField("Contract Log Type", BinaryPrimitives.ReadUInt32LittleEndian(logData.Slice(4, 4)).ToString(), "uint32"));
+
+        return fields;
     }
 
     // =========================================================================
@@ -391,6 +483,8 @@ public static class TransactionInputParser
         {
             0 => "Price",
             1 => "Mock",
+            3 => "EvmLogRead",
+            4 => "QubicLogRead",
             _ => null
         };
 
@@ -401,6 +495,8 @@ public static class TransactionInputParser
             {
                 0 => ParsePriceQuery(data.AsSpan(8)),
                 1 => ParseMockQuery(data.AsSpan(8)),
+                3 => ParseEvmLogReadQuery(data.AsSpan(8)),
+                4 => ParseQubicLogReadQuery(data.AsSpan(8)),
                 _ => null
             };
         }
@@ -447,6 +543,52 @@ public static class TransactionInputParser
 
         var value = BinaryPrimitives.ReadUInt64LittleEndian(queryData.Slice(0, 8));
         return [new OracleQueryField("Value", value.ToString(), "uint64")];
+    }
+
+    // EvmLogRead query: chainId (8B uint64) + txHash (32B) + logIndex (8B uint64)
+    private static List<OracleQueryField> ParseEvmLogReadQuery(ReadOnlySpan<byte> queryData)
+    {
+        if (queryData.Length != 48) return [];
+
+        var chainId = BinaryPrimitives.ReadUInt64LittleEndian(queryData.Slice(0, 8));
+        var chainName = chainId switch
+        {
+            1 => "Ethereum",
+            10 => "Optimism",
+            56 => "BSC",
+            137 => "Polygon",
+            250 => "Fantom",
+            8453 => "Base",
+            43114 => "Avalanche",
+            42161 => "Arbitrum",
+            11155111 => "Sepolia",
+            _ => null
+        };
+        var logIndex = BinaryPrimitives.ReadUInt64LittleEndian(queryData.Slice(40, 8));
+
+        return
+        [
+            new OracleQueryField("Chain", WithName(chainName, chainId), "text"),
+            new OracleQueryField("Tx Hash", ToPrefixedHex(queryData.Slice(8, 32)), "hex"),
+            new OracleQueryField("Log Index", logIndex.ToString(), "uint64")
+        ];
+    }
+
+    // QubicLogRead query: tick (8B uint64) + txHash (32B digest) + logId (8B uint64)
+    private static List<OracleQueryField> ParseQubicLogReadQuery(ReadOnlySpan<byte> queryData)
+    {
+        if (queryData.Length != 48) return [];
+
+        var tick = BinaryPrimitives.ReadUInt64LittleEndian(queryData.Slice(0, 8));
+        var txId = Crypt.GetHumanReadableBytes(queryData.Slice(8, 32).ToArray());
+        var logId = BinaryPrimitives.ReadUInt64LittleEndian(queryData.Slice(40, 8));
+
+        return
+        [
+            new OracleQueryField("Tick", tick.ToString(), "tick"),
+            new OracleQueryField("Tx Hash", txId, "txHash"),
+            new OracleQueryField("Log Id", logId.ToString(), "uint64")
+        ];
     }
 
     /// <summary>
@@ -504,6 +646,12 @@ public static class TransactionInputParser
         }
         return values;
     }
+
+    private static string WithName(string? name, ulong value) =>
+        name != null ? $"{name} ({value})" : value.ToString();
+
+    private static string ToPrefixedHex(ReadOnlySpan<byte> data) =>
+        "0x" + Convert.ToHexString(data).ToLowerInvariant();
 
     private static string ToHexString(byte[] data, int offset, int length)
     {
@@ -608,7 +756,9 @@ public record OracleReplyCommitInputData(
 public record OracleReplyRevealInputData(
     ulong QueryId,
     string? ReplyDataHex,
-    int ReplyDataSize
+    int ReplyDataSize,
+    string? OracleInterfaceName,
+    List<OracleQueryField>? ParsedReplyFields
 ) : ParsedInputData
 {
     public override string TypeName => "ORACLE_REPLY_REVEAL";
