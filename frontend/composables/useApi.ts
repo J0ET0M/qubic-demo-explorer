@@ -632,8 +632,11 @@ interface ParsedInputData {
   nonce?: string
   algoType?: number
   algoTypeName?: string
-  lParam?: number
-  kParam?: number
+  // Bpp9000-specific (meaningful when algoType === 1)
+  bppMode?: number            // nonce[1] bits 4..5 — 1=START, 2=WIRING, 3=LUT
+  bppModeName?: string
+  bppChangesPerStep?: number  // nonce[1] low nibble — 1..10
+  antMutationIndex?: number   // nonce[2] — 0 for standalone bpp9000, else ant-child mutation index
   score?: number
   // FileHeader / FileTrailer
   fileSize?: number

@@ -189,18 +189,28 @@ const formatFileSize = (bytes: number) => {
         <div class="detail-row">
           <span class="detail-label">Algorithm</span>
           <span class="detail-value">
-            <span class="font-mono">{{ parsed.algoTypeName || 'Classic' }}</span>
+            <span class="font-mono">{{ parsed.algoTypeName || 'Neuraxon (reserved)' }}</span>
             <span class="text-muted text-xs ml-2">(code {{ parsed.algoType ?? 0 }})</span>
           </span>
         </div>
-        <template v-if="parsed.algoTypeName === 'Bpp9000'">
+        <template v-if="parsed.algoType === 1">
           <div class="detail-row">
-            <span class="detail-label">L parameter</span>
-            <span class="detail-value font-mono">{{ parsed.lParam }}</span>
+            <span class="detail-label">Bpp9000 mode</span>
+            <span class="detail-value">
+              <span class="font-mono">{{ parsed.bppModeName }}</span>
+              <span class="text-muted text-xs ml-2">(code {{ parsed.bppMode }})</span>
+            </span>
           </div>
           <div class="detail-row">
-            <span class="detail-label">K parameter</span>
-            <span class="detail-value font-mono">{{ parsed.kParam }}</span>
+            <span class="detail-label">Changes per step</span>
+            <span class="detail-value font-mono">{{ parsed.bppChangesPerStep }}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Ant mutation</span>
+            <span class="detail-value">
+              <span v-if="parsed.antMutationIndex === 0" class="text-muted">— (standalone bpp9000)</span>
+              <span v-else class="font-mono">#{{ parsed.antMutationIndex }}</span>
+            </span>
           </div>
         </template>
         <div v-if="parsed.score != null" class="detail-row">
@@ -223,14 +233,27 @@ const formatFileSize = (bytes: number) => {
     <!-- ========================================= -->
     <template v-else-if="parsed.typeName === 'ANT_COLONY_MINING_SOLUTION'">
       <div class="space-y-0">
-        <div class="detail-row">
-          <span class="detail-label">Parent Tick</span>
-          <span class="detail-value font-mono">{{ parsed.parentTick?.toLocaleString() }}</span>
+        <!-- ROOT_REF = (parentTick=0, parentSolutionIndexInTick=0xFFFFFFFF)
+             marks a depth-1 solution whose parent is derived from the
+             identity's own pubkey. Anything else is a shared inherited parent
+             (EP229+ shared-root model). -->
+        <div v-if="parsed.parentTick === 0 && parsed.parentSolutionIndexInTick === 0xFFFFFFFF"
+             class="detail-row">
+          <span class="detail-label">Parent</span>
+          <span class="detail-value text-purple-400 font-semibold">
+            Root (derived from identity pubkey)
+          </span>
         </div>
-        <div class="detail-row">
-          <span class="detail-label">Parent Solution Index</span>
-          <span class="detail-value font-mono">{{ parsed.parentSolutionIndexInTick }}</span>
-        </div>
+        <template v-else>
+          <div class="detail-row">
+            <span class="detail-label">Parent Tick</span>
+            <span class="detail-value font-mono">{{ parsed.parentTick?.toLocaleString() }}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Parent Solution Index</span>
+            <span class="detail-value font-mono">{{ parsed.parentSolutionIndexInTick }}</span>
+          </div>
+        </template>
         <div class="detail-row">
           <span class="detail-label">Anchor Tick</span>
           <span class="detail-value font-mono">{{ parsed.anchorTick?.toLocaleString() }}</span>

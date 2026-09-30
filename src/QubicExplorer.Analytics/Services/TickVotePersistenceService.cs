@@ -281,15 +281,10 @@ public class TickVotePersistenceService : IDisposable
         return true;
     }
 
-    private static uint Extract10Bit(byte[] data, int idx)
-    {
-        int byteOffset = idx + (idx >> 2);
-        int lastBit0 = 8 - (idx & 3) * 2;
-        int firstBit1 = 10 - lastBit0;
-        uint res = (uint)(data[byteOffset] & ((1 << lastBit0) - 1)) << firstBit1;
-        res |= (uint)(data[byteOffset + 1] >> (8 - firstBit1));
-        return res;
-    }
+    // Extract10Bit → PackedComputorData.Extract10Bit (shared).
+    // Wrapper kept for existing call sites; new code should call through the helper directly.
+    private static uint Extract10Bit(byte[] data, int idx) =>
+        QubicExplorer.Shared.Services.PackedComputorData.Extract10Bit(data, idx);
 
     public void Dispose()
     {

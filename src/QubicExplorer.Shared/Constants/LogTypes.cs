@@ -82,13 +82,28 @@ public static class LogTypes
     public const byte ContractReserveDeduction = 13;
     public const byte OracleQueryStatusChange = 14;
     public const byte OracleSubscriberMessage = 15;
+    /// <summary>
+    /// Emitted whenever an off-chain-contract invocation transitions state.
+    /// Payload = OcInvocationStatusChange { int64 invocationId; uint32 contractIndex;
+    /// uint32 interfaceIndex; uint8 status } — 17 bytes.
+    /// Introduced in core v1.306.0 (epoch 233 territory).
+    /// </summary>
+    public const byte OcInvocationStatusChange = 16;
     public const byte CustomMessage = 255;
 
-    // CustomMessage operation codes
+    // CustomMessage operation codes (magic uint64 at start of custom-message payload)
     public const ulong CustomMessageOpStartDistributeRewards = 6217575821008262227; // STA_DDIV
     public const ulong CustomMessageOpEndDistributeRewards = 6217575821008457285;   // END_DDIV
     public const ulong CustomMessageOpStartEpoch = 4850183582582395987;             // STA_EPOC
     public const ulong CustomMessageOpEndEpoch = 4850183582582591045;               // END_EPOC
+    /// <summary>
+    /// Per-solution outcome emitted by the ant-colony subsystem — one CustomMessage
+    /// log per accepted ant tx. Payload = AntSolutionLogMessage (88 bytes):
+    ///   sourcePublicKey(32) + nonce(32) + parentTick(u32) + parentSolIdxInTick(u32)
+    ///   + anchorTick(u32) + score(u32) + result(u8 ValidityResult).
+    /// ASCII "ANT_SOLU". Introduced in core v1.306.0.
+    /// </summary>
+    public const ulong CustomMessageOpAntSolution = 6146374810954124865;             // ANT_SOLU
 
     // Number of computors (for reward per share calculation)
     public const int NumberOfComputors = 676;
@@ -111,6 +126,7 @@ public static class LogTypes
         ContractReserveDeduction => "CONTRACT_RESERVE_DEDUCTION",
         OracleQueryStatusChange => "ORACLE_QUERY_STATUS_CHANGE",
         OracleSubscriberMessage => "ORACLE_SUBSCRIBER_MESSAGE",
+        OcInvocationStatusChange => "OC_INVOCATION_STATUS_CHANGE",
         CustomMessage => "CUSTOM_MESSAGE",
         _ => $"UNKNOWN_{logType}"
     };

@@ -1,5 +1,6 @@
 using ClickHouse.Client.ADO;
 using Microsoft.Extensions.Options;
+using Qubic.Core;
 using QubicExplorer.Shared.Configuration;
 
 namespace QubicExplorer.Analytics.Services;
@@ -24,7 +25,7 @@ public class OracleAggregateService : IDisposable
     private bool _disposed;
 
     private const string StateKey = "oracle_aggregates_last_epoch";
-    private const int Quorum = 451;  // 676 * 2/3 + 1
+    private const int Quorum = QubicConstants.Quorum;  // 451 = 676 * 2/3 + 1
 
     public OracleAggregateService(
         IOptions<ClickHouseOptions> options,

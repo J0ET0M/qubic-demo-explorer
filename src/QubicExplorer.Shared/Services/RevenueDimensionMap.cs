@@ -19,9 +19,9 @@ namespace QubicExplorer.Shared.Services;
 /// </summary>
 public sealed class RevenueDimensionMap
 {
-    public const int N = MultiDimRevenueCalculator.N;                       // 676
-    public const int CONTRACT_DIMS = MultiDimRevenueCalculator.CONTRACT_DIMS; // 29
-    public const int TRANSFER_DIM = MultiDimRevenueCalculator.TRANSFER_DIM;   // 705
+    public const int N = MultiDimRevenueCalculator.N;                         // 676
+    public const int CONTRACT_DIMS = MultiDimRevenueCalculator.CONTRACT_DIMS; // 31 as of v1.306.0
+    public const int TRANSFER_DIM = MultiDimRevenueCalculator.TRANSFER_DIM;   // = N + CONTRACT_DIMS
 
     public const string NullAddress = AddressLabelService.BurnAddress;
 

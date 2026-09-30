@@ -96,6 +96,7 @@ public static class BobLogTypes
     public const byte ContractReserveDeduction = 13;
     public const byte OracleQueryStatusChange = 14;
     public const byte OracleSubscriberMessage = 15;
+    public const byte OcInvocationStatusChange = 16;
     public const byte CustomMessage = 255;
 }
 
@@ -183,6 +184,7 @@ public class BobLog
             BobLogTypes.ContractReserveDeduction => "CONTRACT_RESERVE_DEDUCTION",
             BobLogTypes.OracleQueryStatusChange => "ORACLE_QUERY_STATUS_CHANGE",
             BobLogTypes.OracleSubscriberMessage => "ORACLE_SUBSCRIBER_MESSAGE",
+            BobLogTypes.OcInvocationStatusChange => "OC_INVOCATION_STATUS_CHANGE",
             BobLogTypes.CustomMessage => "CUSTOM_MESSAGE",
             _ => $"UNKNOWN_{LogType}"
         };

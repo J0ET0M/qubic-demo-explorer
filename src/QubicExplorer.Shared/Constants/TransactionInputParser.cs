@@ -118,18 +118,26 @@ public static class TransactionInputParser
     // =========================================================================
     // Type 2: Mining Solution (72 bytes)
     //   0..31  miningSeed (m256i)
-    //   32..63 nonce (m256i)  — nonce[0]=algoType, nonce[1]=L, nonce[2]=K (bpp9000)
-    //   64..67 score (uint)
+    //   32..63 nonce (m256i)
+    //             nonce[0] = AlgoType (0=Neuraxon reserved, 1=Bpp9000)
+    //             nonce[1] = Bpp9000: low nibble = changes-per-step (1..10),
+    //                                 bits 4..5 = mode (1=START, 2=WIRING, 3=LUT)
+    //             nonce[2] = Bpp9000: standalone=0, ant-child=mutation index
+    //   64..67 score (uint) — real score reported by node scorer
     //   68..71 reserved (uint)
-    // Source: mining/mining.h
+    // Source: mining/mining.h (MiningSolutionTransaction), mining/score_common.h
+    //         (AlgoType enum), mining/score_bpp9000.h (mode constants).
     // =========================================================================
     private static ParsedInputData ParseMiningSolution(byte[] data)
     {
         var miningSeed = ToHexString(data, 0, 32);
         var nonce = ToHexString(data, 32, 32);
         var algoTypeByte = data[32];   // nonce[0]
-        var lParam = data[33];         // nonce[1] — meaningful for bpp9000 only
-        var kParam = data[34];         // nonce[2] — meaningful for bpp9000 only
+        var bppNonce1 = data[33];      // nonce[1] — bpp9000 packing
+        var bppNonce2 = data[34];      // nonce[2] — bpp9000: ant mutation index (0 = standalone)
+        // Unpack bpp9000 mode + changes-per-step from nonce[1]
+        var bppChangesPerStep = (byte)(bppNonce1 & 0x0f);
+        var bppMode = (byte)((bppNonce1 >> 4) & 0x03);
         uint? score = null;
         if (data.Length >= 72)
         {
@@ -140,20 +148,38 @@ public static class TransactionInputParser
             Nonce: nonce,
             AlgoType: algoTypeByte,
             AlgoTypeName: AlgoTypeName(algoTypeByte),
-            LParam: lParam,
-            KParam: kParam,
+            BppMode: bppMode,
+            BppModeName: BppModeName(bppMode),
+            BppChangesPerStep: bppChangesPerStep,
+            AntMutationIndex: bppNonce2,
             Score: score);
     }
 
     /// <summary>
     /// Mining algorithm codes carried in MiningSolution.nonce[0].
     /// Mirrors qubic core mining/score_common.h AlgoType enum.
+    ///
+    /// Neuraxon (0) is a reserved slot that never actually executes — the
+    /// scorer's computeNeuraxonScore returns INVALID_SCORE_VALUE unconditionally.
+    /// Bpp9000 (1) is the only live algorithm.
     /// </summary>
     private static string AlgoTypeName(byte algoType) => algoType switch
     {
-        0 => "Classic",
+        0 => "Neuraxon (reserved)",
         1 => "Bpp9000",
         _ => $"Unknown({algoType})",
+    };
+
+    /// <summary>
+    /// Bpp9000 mode encoded in nonce[1] bits 4..5.
+    /// Source: mining/score_bpp9000.h BPP9000_MODE_START/WIRING/LUT.
+    /// </summary>
+    private static string BppModeName(byte mode) => mode switch
+    {
+        1 => "START",
+        2 => "WIRING",
+        3 => "LUT",
+        _ => $"Unknown({mode})",
     };
 
     // =========================================================================
@@ -625,27 +651,9 @@ public static class TransactionInputParser
     // Helpers
     // =========================================================================
 
-    /// <summary>
-    /// Extract 10-bit packed values from a byte buffer (used by vote counter and mining shares).
-    /// Matches the C++ extract10Bit() big-endian bit packing: every 4 values occupy 5 bytes,
-    /// with bits packed from MSB to LSB within each byte.
-    /// </summary>
-    private static ushort[] Extract10BitValues(ReadOnlySpan<byte> data, int count)
-    {
-        var values = new ushort[count];
-        for (var i = 0; i < count; i++)
-        {
-            // C++ layout: byte0 = data[idx + (idx >> 2)], byte1 = data[idx + (idx >> 2) + 1]
-            var byteIndex = i + (i >> 2);
-            uint byte0 = data[byteIndex];
-            uint byte1 = data[byteIndex + 1];
-            var lastBit0 = 8 - (i & 3) * 2;
-            var firstBit1 = 10 - lastBit0;
-            values[i] = (ushort)(((byte0 & ((1u << lastBit0) - 1)) << firstBit1)
-                               | (byte1 >> (8 - firstBit1)));
-        }
-        return values;
-    }
+    // Extract10BitValues → PackedComputorData.ExtractAll (shared).
+    private static ushort[] Extract10BitValues(ReadOnlySpan<byte> data, int count) =>
+        QubicExplorer.Shared.Services.PackedComputorData.ExtractAll(data, count);
 
     private static string WithName(string? name, ulong value) =>
         name != null ? $"{name} ({value})" : value.ToString();
@@ -699,14 +707,15 @@ public record MiningSolutionInputData(
     string MiningSeed,
     string Nonce,
     // Post-Bpp9000 (epoch 224+) mining solutions carry the algorithm code in
-    // nonce[0]. LParam/KParam are only meaningful when AlgoTypeName == "Bpp9000".
+    // nonce[0]. BppMode / BppChangesPerStep / AntMutationIndex are only
+    // meaningful when AlgoType == 1 (Bpp9000).
     byte AlgoType,
     string AlgoTypeName,
-    byte LParam,
-    byte KParam,
-    // Present when the tx carries the full 72-byte payload (score at offset 64).
-    // Older classic mining solutions may not include it — null-safe.
-    uint? Score
+    byte BppMode,                // nonce[1] bits 4..5 — 1=START, 2=WIRING, 3=LUT
+    string BppModeName,
+    byte BppChangesPerStep,      // nonce[1] low nibble — 1..10
+    byte AntMutationIndex,       // nonce[2] — 0 for standalone bpp9000, else ant-child mutation index
+    uint? Score                  // present when the tx carries the full 72-byte payload
 ) : ParsedInputData
 {
     public override string TypeName => "MINING_SOLUTION";

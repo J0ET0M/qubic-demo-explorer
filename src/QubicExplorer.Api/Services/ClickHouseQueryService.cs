@@ -6519,18 +6519,10 @@ public class ClickHouseQueryService : IDisposable
         return null;
     }
 
-    private static uint RevenueExtract10Bit(byte[] data, int idx)
-    {
-        int byteOffset = idx + (idx >> 2);
-        if (byteOffset + 1 >= data.Length) return 0;
-        uint byte0 = data[byteOffset];
-        uint byte1 = data[byteOffset + 1];
-        int lastBit0 = 8 - (idx & 3) * 2;
-        int firstBit1 = 10 - lastBit0;
-        uint res = (byte0 & (uint)((1 << lastBit0) - 1)) << firstBit1;
-        res |= byte1 >> (8 - firstBit1);
-        return res;
-    }
+    // RevenueExtract10Bit → PackedComputorData.Extract10Bit (shared).
+    // Wrapper kept for existing call sites inside RecomputeRevenue path.
+    private static uint RevenueExtract10Bit(byte[] data, int idx) =>
+        QubicExplorer.Shared.Services.PackedComputorData.Extract10Bit(data, idx);
 
     private static ulong RevenueGetQuorumScore(ulong[] scores)
     {
@@ -7135,7 +7127,7 @@ public class ClickHouseQueryService : IDisposable
     // =====================================================
     // ORACLE REVENUE ANALYTICS
     // =====================================================
-    private const int OracleQuorum = 451;
+    private const int OracleQuorum = QubicConstants.Quorum; // 451
 
     /// <summary>
     /// Whether raw oracle events still exist for this epoch (i.e. not yet pruned).
@@ -8769,18 +8761,23 @@ public class ClickHouseQueryService : IDisposable
         for (int i = 0; i < optArr.Length; i++)
             if (optArr[i] > winningCount) { winningCount = (int)optArr[i]; winning = i; }
 
-        var thresholdMet = totalCasted >= 451;
+        // C++ proposal thresholds — sourced from QubicConstants to stay in sync
+        // with core if either 676 (NumberOfComputors) or 451 (Quorum) is ever
+        // bumped. MajorityHalf = Quorum / 2 = 225 (proposal contract requires
+        // strictly greater than half of quorum to commit).
+        const int MajorityHalf = QubicConstants.Quorum / 2;
+        var thresholdMet = totalCasted >= QubicConstants.Quorum;
         var yes = optArr.ElementAtOrDefault(1);
         var no = optArr.ElementAtOrDefault(0);
 
         bool isCommitted;
         if (contractIndex == 8)
-            isCommitted = thresholdMet && yes >= no && yes > 225;
+            isCommitted = thresholdMet && yes >= no && yes > MajorityHalf;
         else
-            isCommitted = thresholdMet && winning is > 0 && winningCount > 225;
+            isCommitted = thresholdMet && winning is > 0 && winningCount > MajorityHalf;
 
         return new ProposalResultDto(
-            TotalAuthorized: 676,
+            TotalAuthorized: QubicConstants.NumberOfComputors,
             TotalCasted: totalCasted,
             OptionCounts: optArr,
             YesCount: yes,

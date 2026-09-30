@@ -25,6 +25,10 @@ export type FieldType =
   | 'id' // 32 bytes - public key
   | 'Asset' // 40 bytes - { issuer: id, assetName: uint64 }
   | 'assetName' // uint64 displayed as ASCII string
+  | 'bit' // 1 byte, displayed as true/false
+  | 'bytes' // raw byte blob of length `count` — displayed as 0x-prefixed hex
+  | 'ascii' // fixed-length ASCII/UTF-8 string, trimmed to first NUL (uses `count`)
+  | 'padding' // `count` bytes of alignment padding; skipped and not displayed
 
 /** Field definition for struct parsing */
 export interface FieldDef {
@@ -86,6 +90,10 @@ const TYPE_SIZES: Record<FieldType, number> = {
   id: 32,
   Asset: 40,
   assetName: 8,
+  bit: 1,
+  bytes: 0, // variable — uses field.count
+  ascii: 0, // variable — uses field.count
+  padding: 0, // variable — uses field.count
 }
 
 // =============================================================================
@@ -1038,6 +1046,434 @@ const QRWA_SCHEMA: ContractSchema = {
 // =============================================================================
 
 /** Map of contract index to schema */
+/**
+ * QRP — QReservePool (Index: 21)
+ * Reserve-pool bookkeeping across whitelisted smart contracts.
+ */
+const QRP_SCHEMA: ContractSchema = {
+  name: 'QRP',
+  index: 21,
+  procedures: {
+    1: { name: 'WithdrawReserve', fields: [
+      { name: 'revenue', type: 'uint64', description: 'Amount to withdraw' },
+    ] },
+    2: { name: 'AddAllowedSC', fields: [
+      { name: 'scIndex', type: 'uint64', description: 'Contract index to whitelist' },
+    ] },
+    3: { name: 'RemoveAllowedSC', fields: [
+      { name: 'scIndex', type: 'uint64', description: 'Contract index to remove' },
+    ] },
+    4: { name: 'SendReserve', fields: [
+      { name: 'scIndex', type: 'uint64', description: 'Destination contract index' },
+      { name: 'amount', type: 'uint64', description: 'Reserve amount to send' },
+    ] },
+  },
+}
+
+/**
+ * QTF — QThirtyFour (Index: 22)
+ * Number-pick lottery.
+ */
+const QTF_SCHEMA: ContractSchema = {
+  name: 'QTF',
+  index: 22,
+  procedures: {
+    1: { name: 'BuyTicket', fields: [
+      { name: 'randomValues', type: 'bytes', count: 4, description: '4 chosen numbers' },
+    ] },
+    2: { name: 'SetPrice', fields: [
+      { name: 'newPrice', type: 'uint64', description: 'Ticket price in qus' },
+    ] },
+    3: { name: 'SetSchedule', fields: [
+      { name: 'newSchedule', type: 'uint8', description: 'Weekday bitmask' },
+    ] },
+    4: { name: 'SetTargetJackpot', fields: [
+      { name: 'newTargetJackpot', type: 'uint64', description: 'Target jackpot in qus' },
+    ] },
+    5: { name: 'SetDrawHour', fields: [
+      { name: 'newDrawHour', type: 'uint8', description: 'UTC hour 0..23' },
+    ] },
+    // 6 = SyncJackpot has empty input
+    7: { name: 'BuyTicketsBatch', fields: [
+      { name: 'tickets', type: 'bytes', count: 1024, description: '256 tickets × 4 numbers' },
+    ] },
+    8: { name: 'BuyTicketsBySelection', fields: [
+      { name: 'numbers', type: 'bytes', count: 32, description: 'Selected numbers (padded)' },
+    ] },
+  },
+}
+
+/**
+ * QDUEL — QDuel (Index: 23)
+ * Peer-to-peer betting rooms.
+ */
+const QDUEL_SCHEMA: ContractSchema = {
+  name: 'QDUEL',
+  index: 23,
+  procedures: {
+    1: { name: 'CreateRoom', fields: [
+      { name: 'allowedPlayer', type: 'id', description: 'Zero-id = anyone' },
+      { name: 'stake', type: 'sint64' },
+      { name: 'raiseStep', type: 'sint64' },
+      { name: 'maxStake', type: 'sint64' },
+    ] },
+    2: { name: 'ConnectToRoom', fields: [
+      { name: 'roomId', type: 'id' },
+    ] },
+    3: { name: 'SetPercentFees', fields: [
+      { name: 'devFeePercentBps', type: 'uint8' },
+      { name: 'burnFeePercentBps', type: 'uint8' },
+      { name: 'shareholdersFeePercentBps', type: 'uint8' },
+      { name: '_pad', type: 'padding', count: 1 },
+      { name: 'percentScale', type: 'uint16' },
+    ] },
+    4: { name: 'SetTTLHours', fields: [
+      { name: 'ttlHours', type: 'uint8' },
+    ] },
+    // 5 = Deposit and 7 = CloseRoom have empty inputs
+    6: { name: 'Withdraw', fields: [
+      { name: 'amount', type: 'sint64' },
+    ] },
+  },
+}
+
+/**
+ * PULSE — Pulse (Index: 24)
+ * Lottery + auto-participation.
+ */
+const PULSE_SCHEMA: ContractSchema = {
+  name: 'PULSE',
+  index: 24,
+  procedures: {
+    1: { name: 'BuyTicket', fields: [
+      { name: 'digits', type: 'bytes', count: 8, description: '6 chosen digits + 2 bytes pad' },
+    ] },
+    2: { name: 'SetPrice', fields: [
+      { name: 'newPrice', type: 'uint64' },
+    ] },
+    3: { name: 'SetSchedule', fields: [
+      { name: 'newSchedule', type: 'uint8' },
+    ] },
+    4: { name: 'SetDrawHour', fields: [
+      { name: 'newDrawHour', type: 'uint8' },
+    ] },
+    5: { name: 'SetFees', fields: [
+      { name: 'devPercent', type: 'uint8' },
+      { name: 'burnPercent', type: 'uint8' },
+      { name: 'shareholdersPercent', type: 'uint8' },
+      { name: 'rlShareholdersPercent', type: 'uint8' },
+    ] },
+    6: { name: 'SetQHeartHoldLimit', fields: [
+      { name: 'newQHeartHoldLimit', type: 'uint64' },
+    ] },
+    7: { name: 'BuyRandomTickets', fields: [
+      { name: 'count', type: 'uint16' },
+    ] },
+    8: { name: 'DepositAutoParticipation', fields: [
+      { name: 'amount', type: 'sint64' },
+      { name: 'desiredTickets', type: 'sint16' },
+      { name: 'buyNow', type: 'bit' },
+      { name: '_pad', type: 'padding', count: 5 },
+    ] },
+    9: { name: 'WithdrawAutoParticipation', fields: [
+      { name: 'amount', type: 'sint64' },
+    ] },
+    10: { name: 'SetAutoConfig', fields: [
+      { name: 'desiredTickets', type: 'sint16' },
+    ] },
+    11: { name: 'SetAutoLimits', fields: [
+      { name: 'maxTicketsPerUser', type: 'uint16' },
+    ] },
+    12: { name: 'TransferShareManagementRights', fields: [
+      { name: 'numberOfShares', type: 'sint64' },
+      { name: 'newManagingContractIndex', type: 'uint16' },
+      { name: '_pad', type: 'padding', count: 6 },
+    ] },
+    13: { name: 'DepositManagedQHeart', fields: [
+      { name: 'amount', type: 'sint64' },
+    ] },
+  },
+}
+
+/**
+ * VOTTUNBRIDGE (Index: 25)
+ * Cross-chain bridge Qubic ↔ Ethereum.
+ */
+const VOTTUNBRIDGE_SCHEMA: ContractSchema = {
+  name: 'VottunBridge',
+  index: 25,
+  procedures: {
+    1: { name: 'createOrder', fields: [
+      { name: 'qubicDestination', type: 'id' },
+      { name: 'amount', type: 'uint64' },
+      { name: 'ethAddress', type: 'bytes', count: 64, description: 'EVM address (20-byte LE + zeros)' },
+      { name: 'fromQubicToEthereum', type: 'bit' },
+      { name: '_pad', type: 'padding', count: 7 },
+    ] },
+    2: { name: 'completeOrder', fields: [
+      { name: 'orderId', type: 'uint64' },
+    ] },
+    3: { name: 'refundOrder', fields: [
+      { name: 'orderId', type: 'uint64' },
+    ] },
+    4: { name: 'transferToContract', fields: [
+      { name: 'amount', type: 'uint64' },
+      { name: 'orderId', type: 'uint64' },
+    ] },
+    // 5 = addLiquidity has empty input
+    6: { name: 'createProposal', fields: [
+      { name: 'proposalType', type: 'uint8' },
+      { name: '_pad', type: 'padding', count: 7 },
+      { name: 'targetAddress', type: 'id' },
+      { name: 'oldAddress', type: 'id' },
+      { name: 'amount', type: 'uint64' },
+    ] },
+    7: { name: 'approveProposal', fields: [
+      { name: 'proposalId', type: 'uint64' },
+    ] },
+    8: { name: 'cancelProposal', fields: [
+      { name: 'proposalId', type: 'uint64' },
+    ] },
+  },
+}
+
+/**
+ * QUSINO — Qusino (Index: 26)
+ * Casino / gaming platform with STAR and QSC tokens.
+ */
+const QUSINO_SCHEMA: ContractSchema = {
+  name: 'QUSINO',
+  index: 26,
+  procedures: {
+    1: { name: 'earnSTAR', fields: [
+      { name: 'amount', type: 'uint64', description: 'STAR / 100' },
+    ] },
+    2: { name: 'transferSTAROrQSC', fields: [
+      { name: 'dest', type: 'id' },
+      { name: 'amount', type: 'uint64' },
+      { name: 'type', type: 'uint8', description: '1=STAR, 2=QSC' },
+      { name: '_pad', type: 'padding', count: 7 },
+    ] },
+    3: { name: 'submitGame', fields: [
+      { name: 'URI', type: 'ascii', count: 64, description: 'Game metadata URI' },
+    ] },
+    4: { name: 'voteInGameProposal', fields: [
+      { name: 'URI', type: 'ascii', count: 64 },
+      { name: 'gameIndex', type: 'uint64' },
+      { name: 'yesNo', type: 'uint8', description: '1=yes, 2=no' },
+      { name: '_pad', type: 'padding', count: 7 },
+    ] },
+    5: { name: 'TransferShareManagementRights', fields: [
+      { name: 'asset', type: 'Asset' },
+      { name: 'numberOfShares', type: 'sint64' },
+      { name: 'newManagingContractIndex', type: 'uint32' },
+      { name: '_pad', type: 'padding', count: 4 },
+    ] },
+    6: { name: 'depositBonus', fields: [
+      { name: 'amount', type: 'uint64' },
+    ] },
+    // 7 = dailyClaimBonus has empty input
+    8: { name: 'redemptionQSCToQubic', fields: [
+      { name: 'amount', type: 'uint64' },
+    ] },
+  },
+}
+
+/**
+ * ESCROW — Escrow (Index: 27)
+ * P2P deal / escrow contract with asset baskets.
+ */
+const ESCROW_SCHEMA: ContractSchema = {
+  name: 'ESCROW',
+  index: 27,
+  procedures: {
+    1: { name: 'CreateDeal', fields: [
+      { name: 'acceptorId', type: 'id' },
+      { name: 'offeredQU', type: 'uint64' },
+      { name: 'offeredAssetsNumber', type: 'uint64', description: 'Count of populated slots (≤4)' },
+      // 4 × AssetWithAmount = 4 × 48B = 192B. Rendered as a single opaque blob;
+      // the C# side has the same shape but explorer users rarely need field-level
+      // detail on the basket. Deferred to a nested-array iteration.
+      { name: 'offeredAssets', type: 'bytes', count: 192, description: 'Array<AssetWithAmount,4>' },
+      { name: 'requestedQU', type: 'uint64' },
+      { name: 'requestedAssetsNumber', type: 'uint64' },
+      { name: 'requestedAssets', type: 'bytes', count: 192, description: 'Array<AssetWithAmount,4>' },
+    ] },
+    2: { name: 'AcceptDeal', fields: [{ name: 'index', type: 'sint64' }] },
+    3: { name: 'MakeDealPublic', fields: [{ name: 'index', type: 'sint64' }] },
+    4: { name: 'CancelDeal', fields: [{ name: 'index', type: 'sint64' }] },
+    5: { name: 'TransferShareManagementRights', fields: [
+      { name: 'asset', type: 'Asset' },
+      { name: 'amount', type: 'sint64' },
+      { name: 'newContractIndex', type: 'uint32' },
+      { name: '_pad', type: 'padding', count: 4 },
+    ] },
+  },
+}
+
+/**
+ * WOLFPACK — GGWP (Index: 28)
+ * Clan-based staking + gov.
+ */
+const WOLFPACK_SCHEMA: ContractSchema = {
+  name: 'WOLFPACK',
+  index: 28,
+  procedures: {
+    // 1 = DepositRevenue has empty input
+    2: { name: 'AddClanMember', fields: [
+      { name: 'memberAddress', type: 'id' },
+      { name: 'rank', type: 'uint64' },
+    ] },
+    3: { name: 'RemoveClanMember', fields: [
+      { name: 'memberAddress', type: 'id' },
+    ] },
+    4: { name: 'SetClanRank', fields: [
+      { name: 'memberAddress', type: 'id' },
+      { name: 'rank', type: 'uint64' },
+    ] },
+    5: { name: 'SetAdmin', fields: [
+      { name: 'newAdmin', type: 'id' },
+    ] },
+    6: { name: 'SetExcludeAddress', fields: [
+      { name: 'slot', type: 'uint64' },
+      { name: 'address', type: 'id' },
+    ] },
+    7: { name: 'Stake', fields: [
+      { name: 'numberOfShares', type: 'uint64' },
+    ] },
+    8: { name: 'RequestUnstake', fields: [
+      { name: 'numberOfShares', type: 'uint64' },
+    ] },
+    // 9 = FinalizeUnstake, 11 = ClaimStakingRewards have empty inputs
+    10: { name: 'DepositStakingRewards', fields: [
+      { name: 'numberOfShares', type: 'uint64' },
+    ] },
+    12: { name: 'ProposeGovChange', fields: [
+      { name: 'targetType', type: 'uint8' },
+      { name: '_pad', type: 'padding', count: 7 },
+      { name: 'newAddress', type: 'id' },
+    ] },
+    13: { name: 'VoteGovChange', fields: [
+      { name: 'proposalIndex', type: 'uint64' },
+      { name: 'approve', type: 'uint8', description: '0/1' },
+      { name: '_pad', type: 'padding', count: 7 },
+    ] },
+    14: { name: 'AdminReconcileStake', fields: [
+      { name: 'staker', type: 'id' },
+      { name: 'correctAmount', type: 'uint64' },
+    ] },
+  },
+}
+
+/**
+ * QPAYHUB (Index: 29)
+ * Subscription / payment hub — construction epoch 231.
+ */
+const QPAYHUB_SCHEMA: ContractSchema = {
+  name: 'QPAYHUB',
+  index: 29,
+  procedures: {
+    1: { name: 'Pay', fields: [
+      { name: 'seller', type: 'id' },
+      { name: 'resourceId', type: 'id' },
+      { name: 'nonce', type: 'uint64' },
+    ] },
+    2: { name: 'Consume', fields: [
+      { name: 'receiptKey', type: 'id' },
+    ] },
+    // 3 = SubscribeToPriceFeed has empty input
+    4: { name: 'SetPromoRate', fields: [
+      { name: 'seller', type: 'id' },
+      { name: 'feePermille', type: 'uint64' },
+    ] },
+    5: { name: 'RemovePromoRate', fields: [
+      { name: 'seller', type: 'id' },
+    ] },
+    6: { name: 'ChangeOperator', fields: [
+      { name: 'newOperator', type: 'id' },
+    ] },
+    7: { name: 'SetAffiliate', fields: [
+      { name: 'seller', type: 'id' },
+      { name: 'affiliate', type: 'id' },
+    ] },
+    8: { name: 'RemoveAffiliate', fields: [
+      { name: 'seller', type: 'id' },
+    ] },
+    9: { name: 'ChangeAffiliateRegistrar', fields: [
+      { name: 'newRegistrar', type: 'id' },
+    ] },
+  },
+}
+
+/**
+ * QTREAT (Index: 30)
+ * Staking + raffle + ASIC-catalog + admin-multisig — construction epoch 233.
+ */
+const QTREAT_SCHEMA: ContractSchema = {
+  name: 'QTREAT',
+  index: 30,
+  procedures: {
+    // 1 = DepositDividends, 2 = DepositStakingFund, 4 = FinalizeUnstake,
+    // 5 = ClaimQtreatBonus, 11 = DepositMiningFund, 21 = CancelAdminApproval have empty inputs
+    3: { name: 'RequestUnstake', fields: [
+      { name: 'amount', type: 'uint64' },
+    ] },
+    6: { name: 'DepositQtreatTokens', fields: [
+      { name: 'amount', type: 'uint64' },
+    ] },
+    7: { name: 'DepositGeneralAsset', fields: [
+      { name: 'asset', type: 'Asset' },
+      { name: 'amount', type: 'uint64' },
+    ] },
+    8: { name: 'SetExcludeAddress', fields: [
+      { name: 'slot', type: 'uint64' },
+      { name: 'address', type: 'id' },
+    ] },
+    9: { name: 'ProposeRevoke', fields: [
+      { name: 'asset', type: 'Asset' },
+      { name: 'amount', type: 'uint64' },
+      { name: 'destination', type: 'id' },
+    ] },
+    10: { name: 'ReleaseManagedShares', fields: [
+      { name: 'asset', type: 'Asset' },
+      { name: 'amount', type: 'uint64' },
+    ] },
+    12: { name: 'LoadAsicPart', fields: [
+      { name: 'nftId', type: 'uint32' },
+      { name: 'category', type: 'uint8' },
+      { name: 'rarity', type: 'uint8' },
+      { name: '_pad', type: 'padding', count: 2 },
+    ] },
+    13: { name: 'RegisterAsic', fields: [
+      { name: 'partMotherboard', type: 'uint32' },
+      { name: 'partChip', type: 'uint32' },
+      { name: 'partPsu', type: 'uint32' },
+      { name: 'partFan', type: 'uint32' },
+    ] },
+    14: { name: 'UnregisterAsic', fields: [
+      { name: 'rigIndex', type: 'uint64' },
+    ] },
+    15: { name: 'DepositDripQdoge', fields: [
+      { name: 'amount', type: 'uint64' },
+    ] },
+    16: { name: 'SetMiningRate', fields: [
+      { name: 'ratePerEpoch', type: 'uint64' },
+    ] },
+    17: { name: 'ApproveRevoke', fields: [
+      { name: 'proposalId', type: 'uint64' },
+    ] },
+    18: { name: 'ExecuteRevoke', fields: [
+      { name: 'proposalId', type: 'uint64' },
+    ] },
+    19: { name: 'CancelRevoke', fields: [
+      { name: 'proposalId', type: 'uint64' },
+    ] },
+    20: { name: 'ApproveNewAdmin', fields: [
+      { name: 'newAdmin', type: 'id' },
+    ] },
+  },
+}
+
 const CONTRACT_SCHEMAS: Record<number, ContractSchema> = {
   1: QX_SCHEMA,
   2: QUOTTERY_SCHEMA,
@@ -1059,6 +1495,16 @@ const CONTRACT_SCHEMAS: Record<number, ContractSchema> = {
   18: QIP_SCHEMA,
   19: QRAFFLE_SCHEMA,
   20: QRWA_SCHEMA,
+  21: QRP_SCHEMA,
+  22: QTF_SCHEMA,
+  23: QDUEL_SCHEMA,
+  24: PULSE_SCHEMA,
+  25: VOTTUNBRIDGE_SCHEMA,
+  26: QUSINO_SCHEMA,
+  27: ESCROW_SCHEMA,
+  28: WOLFPACK_SCHEMA,
+  29: QPAYHUB_SCHEMA,
+  30: QTREAT_SCHEMA,
 }
 
 // =============================================================================
@@ -1211,6 +1657,33 @@ function decodeField(
       const name = decodeAssetName(rawValue)
       return { value: name, displayValue: name || '(empty)', bytesRead: 8 }
     }
+    case 'bit': {
+      const v = buffer[offset]
+      return { value: v !== 0, displayValue: v !== 0 ? 'true' : 'false', bytesRead: 1 }
+    }
+    case 'bytes': {
+      const n = field.count ?? 0
+      const bytes = buffer.slice(offset, offset + n)
+      const hex = '0x' + bytesToHex(bytes)
+      // For very long byte blobs, show truncated hex; store full value.
+      const display = hex.length > 42 ? `${hex.slice(0, 18)}…${hex.slice(-6)} (${n} bytes)` : hex
+      return { value: hex, displayValue: display, bytesRead: n }
+    }
+    case 'ascii': {
+      const n = field.count ?? 0
+      const bytes = buffer.slice(offset, offset + n)
+      // Trim at first NUL.
+      let end = bytes.indexOf(0)
+      if (end < 0) end = bytes.length
+      const s = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, end))
+      return { value: s, displayValue: s || '(empty)', bytesRead: n }
+    }
+    case 'padding': {
+      const n = field.count ?? 0
+      // Signal to the outer loop that this field should be skipped from the
+      // displayed field list. Consumer filters by type === 'padding'.
+      return { value: null, displayValue: '', bytesRead: n }
+    }
     default:
       throw new Error(`Unknown type: ${type}`)
   }
@@ -1283,13 +1756,17 @@ export function decodeContractInput(
       }
 
       const decoded = decodeField(buffer, offset, field)
-      result.fields.push({
-        name: field.name,
-        type: field.type,
-        value: decoded.value,
-        displayValue: decoded.displayValue,
-        description: field.description,
-      })
+      // Padding rows still advance the offset but don't appear in the UI —
+      // they only exist so struct field offsets stay aligned with C++.
+      if (field.type !== 'padding') {
+        result.fields.push({
+          name: field.name,
+          type: field.type,
+          value: decoded.value,
+          displayValue: decoded.displayValue,
+          description: field.description,
+        })
+      }
       offset += decoded.bytesRead
     }
 

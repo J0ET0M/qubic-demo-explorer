@@ -344,7 +344,7 @@ public class ComputorRevenueService : IDisposable
             return scores;
 
         // 2. In-progress epoch (no aggregate yet) → live estimate from raw events.
-        const int Quorum = 451; // 676 * 2/3 + 1, matches OracleAggregateService
+        const int Quorum = QubicConstants.Quorum; // 451 = 676 * 2/3 + 1
         await using (var liveCmd = _connection.CreateCommand())
         {
             liveCmd.CommandText = $@"
@@ -569,23 +569,11 @@ public class ComputorRevenueService : IDisposable
         return true;
     }
 
-    /// <summary>
-    /// Extract a 10-bit value from packed data at the given computor index.
-    /// Port of the C++ extract10Bit function from vote_counter.h / mining.h.
-    /// </summary>
-    private static uint Extract10Bit(byte[] data, int idx)
-    {
-        int byteOffset = idx + (idx >> 2);
-        if (byteOffset + 1 >= data.Length) return 0;
-
-        uint byte0 = data[byteOffset];
-        uint byte1 = data[byteOffset + 1];
-        int lastBit0 = 8 - (idx & 3) * 2;
-        int firstBit1 = 10 - lastBit0;
-        uint res = (byte0 & (uint)((1 << lastBit0) - 1)) << firstBit1;
-        res |= byte1 >> (8 - firstBit1);
-        return res;
-    }
+    // Extract10Bit + ValidatePackedPacket → PackedComputorData.* (shared).
+    // Wrappers kept for existing call sites within this file; new code should
+    // call through the helper directly.
+    private static uint Extract10Bit(byte[] data, int idx) =>
+        QubicExplorer.Shared.Services.PackedComputorData.Extract10Bit(data, idx);
 
     private static ulong GetQuorumScore(ulong[] scores)
     {

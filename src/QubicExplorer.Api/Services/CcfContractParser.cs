@@ -15,7 +15,7 @@ public static class CcfContractParser
     public const int NumberOfComputors = 676;
 
     /// <summary>Quorum threshold: 2/3 + 1 of computors.</summary>
-    public const int Quorum = NumberOfComputors * 2 / 3 + 1; // 452
+    public const int Quorum = NumberOfComputors * 2 / 3 + 1; // 451 (= QubicConstants.Quorum)
 
     /// <summary>
     /// Parse the ProposalDataT from GetProposal output.

@@ -28,18 +28,21 @@ public static class MultiDimRevenueCalculator
     public const long IPC = 1_000_000_000_000L / N; // ISSUANCE_RATE / N = 1,479,289,940
 
     /// <summary>
-    /// Production contract count at v1.296.0 — counts contractDescriptions[] in
-    /// qubic/src/contract_core/contract_def.h:390-419 (index 0 "" … 28 GGWP). The 4
+    /// Production contract count from core contract_core/contract_def.h contractDescriptions[].
+    /// Bumped whenever core adds a contract (core bumps protocol version when it does).
     /// TESTEXA-D contracts are test-only (INCLUDE_CONTRACT_TEST_EXAMPLES is commented
-    /// out in production qubic.cpp:3), so they are NOT counted. Bump if core adds a
-    /// contract (core bumps protocol version when it does).
+    /// out in production qubic.cpp) so they are NOT counted.
+    ///
+    /// History:
+    ///   v1.296.0: 29 (index 0 "" … 28 GGWP)
+    ///   v1.306.0: 31 (added 29 QPAYHUB @ epoch 231, 30 QTREAT @ epoch 233)
     /// </summary>
-    public const int CONTRACT_DIMS = 29;            // REVENUE_CONTRACT_DIMS = contractCount
+    public const int CONTRACT_DIMS = 31;            // REVENUE_CONTRACT_DIMS = contractCount
 
-    /// <summary>NUMBER_OF_COMPUTORS + contractCount + 1 = 706.</summary>
-    public const int REVENUE_TX_DIM = N + CONTRACT_DIMS + 1; // 706
-    /// <summary>The "transfer/other" dimension (last). = 705.</summary>
-    public const int TRANSFER_DIM = REVENUE_TX_DIM - 1;
+    /// <summary>NUMBER_OF_COMPUTORS + contractCount + 1.</summary>
+    public const int REVENUE_TX_DIM = N + CONTRACT_DIMS + 1; // 708
+    /// <summary>The "transfer/other" dimension (last).</summary>
+    public const int TRANSFER_DIM = REVENUE_TX_DIM - 1;      // 707
 
     /// <summary>Epoch from which multi-dim becomes the active/paid formula (qubic v1.296.0).</summary>
     public const uint DefaultMultiDimFromEpoch = 218;

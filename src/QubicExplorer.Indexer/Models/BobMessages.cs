@@ -125,6 +125,9 @@ public static class BobLogTypes
     public const byte AssetOwnershipManagingContractChange = 11;
     public const byte AssetPossessionManagingContractChange = 12;
     public const byte ContractReserveDeduction = 13;
+    public const byte OracleQueryStatusChange = 14;
+    public const byte OracleSubscriberMessage = 15;
+    public const byte OcInvocationStatusChange = 16;
     public const byte CustomMessage = 255;
 }
 
